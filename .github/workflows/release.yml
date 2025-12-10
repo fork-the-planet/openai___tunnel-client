@@ -1,0 +1,136 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"  # e.g., v1.2.3, v1.2.3-rc.1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.25.x"
+  MODULE_PATH: go.openai.org/api/tunnel-client
+  BINARY_NAME: tunnel-client
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Validate
+        run: |
+          go env
+          go mod download
+          go test ./...
+
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - goos: windows
+            goarch: arm64
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          BIN_NAME=${{ env.BINARY_NAME }}${{ matrix.ext }}
+          # Embed Git SHA and tag version (strip leading 'v') into the binary
+          LDFLAGS="-s -w -X ${{ env.MODULE_PATH }}/pkg/version.GitSHA=${GITHUB_SHA} -X ${{ env.MODULE_PATH }}/pkg/version.semanticVersion=${TAG#v}"
+          GOFLAGS="-trimpath -buildvcs=false"
+          go build $GOFLAGS -ldflags "$LDFLAGS" -o "dist/$BIN_NAME" ./cmd/client
+
+          # Package as zip with OS/Arch/Tag in name
+          ASSET_NAME=${{ env.BINARY_NAME }}-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}
+          (cd dist && zip -9 "$ASSET_NAME.zip" "$BIN_NAME")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zips-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zips-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate SHA256 checksums
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          sha256sum *.zip > SHA256SUMS.txt
+
+      # Optional signing:
+      # - name: Import GPG key
+      #   if: ${{ secrets.GPG_PRIVATE_KEY && secrets.GPG_PASSPHRASE }}
+      #   run: |
+      #     echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+      #   env:
+      #     GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      # - name: Sign checksums
+      #   if: ${{ secrets.GPG_PRIVATE_KEY && secrets.GPG_PASSPHRASE }}
+      #   working-directory: dist
+      #   env:
+      #     PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      #   run: |
+      #     echo "$PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+      #       --armor --detach-sign --output SHA256SUMS.txt.asc SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt

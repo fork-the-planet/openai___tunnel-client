@@ -1,0 +1,36 @@
+# Development & Testing
+
+This document is for contributors working on `tunnel-client`.
+
+## Build
+
+```bash
+cd api/tunnel-client
+go build -o bin/tunnel-client ./cmd/client
+```
+
+## Unit tests
+
+```bash
+go test ./...
+```
+
+## E2E tests (in-repo harness)
+
+The `e2e/` tests use in-repo test doubles under `testsupport/`:
+
+- `testsupport/mocktunnelservice`: simulates the control plane poll/response endpoints.
+- `testsupport/mockmcpserver`: a Streamable HTTP MCP server double.
+
+Run:
+
+```bash
+go test ./e2e -count=1
+```
+
+## Repo structure (high level)
+
+- `cmd/client`: CLI entrypoint
+- `pkg/*`: implementation packages
+- `e2e/`: end-to-end tests using in-repo mocks
+- `testsupport/`: test helpers and doubles

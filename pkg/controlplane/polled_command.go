@@ -1,0 +1,38 @@
+package controlplane
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+
+	"go.openai.org/api/tunnel-client/pkg/types"
+)
+
+// PolledCommand represents the unit of work returned by the control plane poll
+// API. It mirrors the control-plane contract
+// so downstream components can reason about request identity, timing, and
+// metadata without depending on raw HTTP payloads.
+type PolledCommand interface {
+	// RequestID returns the opaque identifier assigned by tunnel-service.
+	RequestID() types.RequestID
+	// Message returns the JSON-RPC request to forward to the MCP server.
+	Message() jsonrpc.Message
+	// EnqueuedAt reports when tunnel-service enqueued the request (RFC3339).
+	EnqueuedAt() time.Time
+	// PolledAt reports when tunnel-client fetched the command from the control
+	// plane. It is set by the poller and may be zero for legacy callers.
+	PolledAt() time.Time
+	// Headers exposes auxiliary fields (session identifiers, etc.) attached to
+	// the request. Implementations should avoid mutating the returned map.
+	Headers() http.Header
+	// ShardToken returns the opaque shard token associated with the command, used
+	// to route the response back to the originating control-plane shard.
+	ShardToken() string
+	// SessionID returns the optional MCP session identifier when the connector
+	// supplied it, along with a boolean indicating whether it was present.
+	SessionID() (string, bool)
+}
+
+// PolledCommandQueue carries polled commands between the control plane poller and dispatcher.
+type PolledCommandQueue chan PolledCommand

@@ -1,0 +1,316 @@
+# Enterprise Customer Onboarding: MCP Tunnels
+
+This document is designed to be shared with an enterprise customer. It explains how to:
+
+- Create and manage a **tunnel** in the OpenAI tunnel control plane.
+- Deploy the **tunnel client** inside your network to reach your internal MCP server.
+- Configure a **connector** in ChatGPT to use the **OpenAI-hosted MCP tunnel URL**.
+
+## What you’re setting up (quick mental model)
+
+You will **not** expose your MCP server publicly. Instead, an outbound-only tunnel client inside your network “pulls” work from OpenAI and forwards it to your MCP server.
+
+```mermaid
+flowchart LR
+  subgraph OpenAI
+    UI["ChatGPT Connector UI"]
+    Product["Connector runtime"]
+    TS["OpenAI-hosted MCP tunnel endpoint"]
+  end
+
+  subgraph Customer Network
+    TC["Tunnel Client"]
+    MCP["Customer MCP Server"]
+  end
+
+  UI --> Product
+  Product ==>|"POST /v1/mcp/{tunnel_id}"| TS
+  TC ==>|"GET /v1/tunnel/{tunnel_id}/poll"| TS
+  TC ==>|"POST /v1/tunnel/{tunnel_id}/response"| TS
+  TC -->|"Streamable HTTP (JSON-RPC)"| MCP
+```
+
+## Glossary
+
+- **Tunnel**: A logical identifier that binds together:
+  - a connector’s “MCP URL”, and
+  - the tunnel-client instance configured with that same identifier.
+- **Tunnel ID (`tunnel_id`)**: The identifier used in:
+  - connector URL: `/v1/mcp/{tunnel_id}`
+  - tunnel-client control plane: `/v1/tunnel/{tunnel_id}/poll` and `/v1/tunnel/{tunnel_id}/response`
+  - Format: `tunnel_` followed by 32 lowercase letters or digits.
+- **OpenAI-hosted MCP tunnel URL**: The URL you paste into the connector configuration UI. It is an OpenAI-hosted “virtual MCP server” endpoint.
+- **Tunnel Client**: A customer-run process that:
+  - long-polls OpenAI for MCP requests for its `tunnel_id`, and
+  - forwards them to your MCP server.
+
+## Key concept: two different URLs
+
+- **Connector UI uses the OpenAI-hosted MCP tunnel URL**:
+
+```text
+<OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>
+```
+
+- **Tunnel client uses the Tunnel control-plane base URL** (host root) and derives:
+
+```text
+<CONTROL_PLANE_BASE_URL>/v1/tunnel/<tunnel_id>/poll
+<CONTROL_PLANE_BASE_URL>/v1/tunnel/<tunnel_id>/response
+```
+
+## What OpenAI provides to you
+
+OpenAI will provide:
+
+- **OpenAI MCP tunnel base URL** (the base host you will use in the connector UI)
+- **Tunnel control-plane base URL** for the tunnel client
+- **Tunnel client API key** (for tunnel client authentication)
+- **Tunnel management (admin) API access** so you can create/manage tunnel IDs (if applicable for your rollout)
+
+You will provide:
+
+- **Your MCP server URL** (reachable from wherever you run the tunnel client)
+
+---
+
+## Step 1 — Create (or obtain) a tunnel ID
+
+Depending on your rollout, OpenAI may either:
+
+1. **Create a tunnel for you** and provide the resulting `tunnel_id`, or
+2. Provide access to the **Tunnel Management API** so you can create it yourself.
+
+### Tunnel Management API (admin endpoints)
+
+These endpoints manage **tunnel metadata** (they do not deploy the tunnel client for you):
+
+- **Create**: `POST /v1/tunnels`
+- **Get**: `GET /v1/tunnels/{tunnel_id}`
+- **List**: `GET /v1/tunnels?organization_id=...` *or* `workspace_id=...` *or* `tenant_id=...`
+- **Update**: `POST /v1/tunnels/{tunnel_id}`
+- **Delete**: `DELETE /v1/tunnels/{tunnel_id}`
+
+### Example: create a tunnel
+
+```bash
+curl -sS -X POST "<TUNNEL_MGMT_API_BASE_URL>/v1/tunnels" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "BigCo Prod MCP Tunnel",
+    "description": "Routes BigCo connector traffic to the on-prem MCP server",
+    "workspace_ids": ["<WORKSPACE_ID>"]
+  }'
+```
+
+The response includes the new tunnel’s `id`. Use this as your **`tunnel_id`**.
+
+---
+
+## Step 2 — Configure the connector to use the OpenAI-hosted MCP tunnel URL
+
+When creating a connector in **ChatGPT**, you’ll be asked for the **MCP Server URL**.
+
+Paste the **OpenAI-hosted MCP tunnel URL** (not your internal MCP URL):
+
+```text
+<OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>
+```
+
+### What the connector sends (for reference)
+
+Connectors send a single JSON-RPC object per request:
+
+- **Method**: `POST`
+- **Path**: `/v1/mcp/{tunnel_id}`
+- **Body**: a JSON-RPC object (example format):
+
+```json
+{ "jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{ "name":"...", "arguments":{} } }
+```
+
+Optional session header (used for MCP session continuity):
+
+- `Mcp-Session-Id: <session-id>`
+
+> You do not need to manage connector authentication headers; those are handled by the OpenAI connector runtime.
+
+---
+
+## Step 3 — Deploy the tunnel client in your environment
+
+You can run the tunnel client as a:
+
+- **host binary** (VM / server / systemd)
+- **Docker container**
+- **Kubernetes sidecar** (same Pod as MCP server) or **dedicated Deployment**
+
+### Network requirements
+
+From the tunnel client host/network:
+
+- **Outbound HTTPS** to the tunnel control plane base URL (port 443)
+- **Outbound HTTP(S)** to your MCP server URL (`MCP_SERVER_URL`)
+- No inbound ports are required for the tunnel itself
+
+### Required configuration (tunnel client)
+
+You must configure:
+
+- `CONTROL_PLANE_API_KEY`: tunnel client auth (provided by OpenAI)
+- `CONTROL_PLANE_TUNNEL_ID`: your `tunnel_id` from Step 1
+- `MCP_SERVER_URL`: your internal MCP endpoint (reachable from the tunnel client)
+
+Recommended configuration:
+
+- `CONTROL_PLANE_BASE_URL`: the control-plane host root (provided by OpenAI; defaults to `https://api.openai.com`)
+- `CONTROL_PLANE_MAX_INFLIGHT_REQUESTS`: buffer size / backpressure (default `20`)
+- `MCP_MAX_CONCURRENT_REQUESTS`: MCP parallelism (default `10`)
+- `LOG_FORMAT=json` and `LOG_LEVEL=info` for production logs
+
+Operational helpers (optional):
+
+- `HEALTH_LISTEN_ADDR` (default `:8080`)
+- `HEALTH_URL_FILE` (write resolved health URL when binding to port `0`)
+- `PID_FILE` (write pid on start, remove on stop)
+
+### Configuration examples
+
+#### Host binary
+
+```bash
+export CONTROL_PLANE_API_KEY="sk-..."
+export CONTROL_PLANE_TUNNEL_ID="<tunnel_id>"
+export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
+export CONTROL_PLANE_BASE_URL="<CONTROL_PLANE_BASE_URL>"
+
+./tunnel-client --log.level=info --log.format=json
+```
+
+#### Docker
+
+```bash
+docker run --rm \
+  -e CONTROL_PLANE_API_KEY="sk-..." \
+  -e CONTROL_PLANE_TUNNEL_ID="<tunnel_id>" \
+  -e CONTROL_PLANE_BASE_URL="<CONTROL_PLANE_BASE_URL>" \
+  -e MCP_SERVER_URL="https://mcp.internal.example.com/mcp" \
+  -e LOG_LEVEL="info" \
+  -e LOG_FORMAT="json" \
+  -e HEALTH_LISTEN_ADDR=":8080" \
+  -p 8080:8080 \
+  tunnel-client:latest
+```
+
+#### Kubernetes (sidecar pattern)
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mcp-with-tunnel
+spec:
+  containers:
+    - name: mcp-server
+      image: your-mcp-image:latest
+      ports:
+        - containerPort: 3000
+    - name: tunnel-client
+      image: tunnel-client:latest
+      env:
+        - name: CONTROL_PLANE_TUNNEL_ID
+          value: <tunnel_id>
+        - name: CONTROL_PLANE_BASE_URL
+          value: <CONTROL_PLANE_BASE_URL>
+        - name: MCP_SERVER_URL
+          value: http://127.0.0.1:3000/mcp
+        - name: CONTROL_PLANE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: api_key
+      ports:
+        - name: health
+          containerPort: 8080
+      livenessProbe:
+        httpGet: { path: /healthz, port: health }
+      readinessProbe:
+        httpGet: { path: /readyz, port: health }
+```
+
+### Health and metrics
+
+The tunnel client exposes:
+
+- `GET /healthz`
+- `GET /readyz`
+- `GET /metrics` (Prometheus)
+
+---
+
+## Step 4 — Validate end-to-end
+
+### 1) Validate the tunnel client is running
+
+```bash
+curl -fsS "http://127.0.0.1:8080/healthz"
+curl -fsS "http://127.0.0.1:8080/readyz"
+```
+
+### 2) Validate traffic reaches your MCP server
+
+In the ChatGPT connector UI:
+
+- Save the connector configuration with the OpenAI-hosted MCP tunnel URL.
+- Run a “test connection” / “test tool call” flow (if available).
+
+On your MCP server, confirm you observe:
+
+- a JSON-RPC request arriving, and
+- the corresponding response being generated.
+
+---
+
+## How the tunnel works (deeper detail)
+
+### Connector-facing endpoint: `/v1/mcp/{tunnel_id}`
+
+- The OpenAI-hosted MCP tunnel endpoint receives one JSON-RPC request.
+- It enqueues the request under your `tunnel_id`.
+- It waits (holds the HTTP request open) for the tunnel client to return the final response.
+
+### Tunnel-client control-plane endpoints: `/v1/tunnel/{tunnel_id}/poll` and `/response`
+
+- The tunnel client long-polls `/poll` for queued work.
+  - Response is `204 No Content` when no work is available.
+  - Response is `200 OK` with a list of commands when work is available.
+- The tunnel client posts results to `/response` (including:
+  - `request_id`,
+  - final JSON-RPC response payload, and
+  - selected response headers and status code from the MCP server).
+
+### Timeouts (high level)
+
+Timeouts are configurable by OpenAI. Typical behaviors:
+
+- Connector requests may time out if the MCP server does not respond in time.
+- Long-poll requests complete periodically so the tunnel client can reconnect quickly.
+
+If you expect long-running MCP calls, coordinate timeout values with OpenAI.
+
+---
+
+## Current limitations (important)
+
+- **No SSE / streaming** responses end-to-end. MCP servers should return final `application/json` responses.
+- **No progress notifications forwarded** back to the connector today.
+- The OpenAI tunnel queueing and timeout behavior is optimized for deterministic request/response flows.
+
+---
+
+## Operations & best practices
+
+- **One tunnel client per tunnel ID**: run a single active `tunnel-client` instance per `tunnel_id` unless OpenAI explicitly advises otherwise.
+- **Secrets hygiene**: treat all API keys/tokens as secrets; store in a secrets manager and rotate on your standard cadence.
+- **Logging safety**: do not enable raw HTTP logging except in tightly controlled debugging sessions, as it can expose sensitive headers/bodies.

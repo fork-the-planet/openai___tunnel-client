@@ -1,22 +1,24 @@
-# OpenSourceExample
-Example configuration for repositories that will become open-source/source-available.
+# Tunnel Client
 
-## Using the `trufflehog` Pre-Commit Hook
-This repository includes a pre-commit hook that uses the `trufflehog` tool to scan your code for secrets before each commit. This helps prevent secrets, such as API keys and passwords, from being accidentally committed to the repository.
+The tunnel client is an enterprise-hosted agent that connects your internal MCP (Model Context Protocol) server to OpenAI-hosted products over a secure, outbound-only HTTPS channel.
 
-### Prerequisites
-Install `pre-commit` by running:
-```bash
-pip3 install pre-commit
-```
-Before you can use the `trufflehog` pre-commit hook, you need to have the `trufflehog` tool installed. You can install it using the following command:
-```bash
-brew install trufflehog
-```
-Once you have both tools installed, you can run `pre-commit install` to install the pre-commit hooks in your repository:
+## Documentation
 
-### Using the Pre-Commit Hook
-Once you have the `trufflehog` tool installed and have added the patterns you want to search for (OAI keys added by default), you can use the pre-commit hook to automatically scan your code before each commit. To use the pre-commit hook, simply run the `git commit` command as you normally would. 
+- **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
+- **Architecture**: [`docs/architecture.md`](docs/architecture.md)
+- **Configuration reference**: [`docs/configuration.md`](docs/configuration.md)
+- **Deployment guides**: [`docs/deployment/overview.md`](docs/deployment/overview.md)
+- **Troubleshooting**: [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- **Development & testing**: [`docs/development.md`](docs/development.md)
+- **Roadmap / design notes**: [`docs/roadmap.md`](docs/roadmap.md)
 
-The `trufflehog` tool will automatically scan your code for secrets and reject the commit if any are found. If any secrets are found, you will be prompted to remove them before trying.
+## What it does (high level)
 
+- The client **long-polls** the OpenAI tunnel control plane over HTTPS:
+  - `GET /v1/tunnel/{tunnel_id}/poll`
+  - `POST /v1/tunnel/{tunnel_id}/response`
+- It forwards the received JSON-RPC requests to your configured MCP server over HTTP(S).
+- It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) for probes and Prometheus scraping.
+
+## License
+This project is licensed under the [Apache License 2.0](LICENSE).

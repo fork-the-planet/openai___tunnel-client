@@ -1,0 +1,64 @@
+# Onboarding Guide
+
+This guide helps you get from “zero” to a working `tunnel-client` process connected to your MCP server.
+
+## 1) Prerequisites
+
+- A reachable MCP server endpoint (Streamable HTTP MCP).
+- A tunnel control-plane API key.
+- A provisioned `tunnel_id` for your environment.
+
+## 2) Build
+
+From the repository root:
+
+```bash
+cd api/tunnel-client
+go build -o bin/tunnel-client ./cmd/client
+```
+
+## 3) Configure
+
+At minimum, you must set:
+
+- `CONTROL_PLANE_API_KEY`: control-plane authentication.
+- `CONTROL_PLANE_TUNNEL_ID`: the tunnel identifier for this deployment.
+- `MCP_SERVER_URL`: your MCP server endpoint.
+
+Example:
+
+```bash
+export CONTROL_PLANE_API_KEY="sk-..."        # preferred
+export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
+```
+
+For the full surface (flags, defaults, advanced knobs), see [`configuration.md`](configuration.md).
+
+## 4) Run
+
+```bash
+./bin/tunnel-client --log.level=info --log.format=struct-text
+```
+
+The process will:
+
+- Start polling the control plane for work.
+- Forward JSON-RPC requests to your MCP server.
+- Expose health endpoints on `HEALTH_LISTEN_ADDR` (default `:8080`).
+
+## 5) Verify
+
+In another shell:
+
+```bash
+curl -fsS "http://127.0.0.1:8080/healthz"
+curl -fsS "http://127.0.0.1:8080/readyz"
+curl -fsS "http://127.0.0.1:8080/metrics" | head
+```
+
+## 6) Next reads
+
+- **Deployments**: [`deployment/overview.md`](deployment/overview.md)
+- **Architecture**: [`architecture.md`](architecture.md)
+- **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)

@@ -1,0 +1,634 @@
+package internal
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/stretchr/testify/assert"
+	noopmetric "go.opentelemetry.io/otel/metric/noop"
+
+	"go.openai.org/api/tunnel-client/pkg/config"
+	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
+	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
+	"go.openai.org/api/tunnel-client/pkg/types"
+	"go.openai.org/api/tunnel-client/pkg/version"
+)
+
+var testMeterProvider = noopmetric.NewMeterProvider()
+
+func TestTunnelServiceClientPollSuccess(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID  = "cli-tunnel"
+		apiKey    = "test-api-key"
+		requestID = "dc7427fd-eeab-4128-a3a6-aee876de182c"
+		createdAt = "2025-10-29T23:08:09.405811Z"
+		limit     = 5
+	)
+
+	const jsonrpcPayload = `
+{
+  "commands":
+        [
+          {
+                "request_id": "dc7427fd-eeab-4128-a3a6-aee876de182c",
+                "shard_token": "shard-123",
+                "jsonrpc": {
+                  "jsonrpc": "2.0",
+                  "id": 0,
+                  "method": "initialize",
+		  "params": {
+			"protocolVersion": "2025-06-18",
+			"capabilities": {
+			  "sampling": {},
+			  "elicitation": {},
+			  "roots": {
+				"listChanged": true
+			  }
+			},
+			"clientInfo": {
+			  "name": "inspector-client",
+			  "version": "0.17.2"
+			}
+		  }
+		},
+		"created_at": "2025-10-29T23:08:09.405811Z",
+		"meta": {}
+	  }
+	]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantPath := "/v1/tunnel/" + url.PathEscape(tunnelID) + "/poll"
+		assert.Equal(t, wantPath, r.URL.Path, "unexpected path")
+		assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"), "unexpected limit")
+		assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"), "unexpected Authorization header")
+		assert.Empty(t, r.Header.Get("X-Tunnel-ID"), "X-Tunnel-ID header should be omitted")
+		assert.Equal(t, "application/json", r.Header.Get("Accept"), "unexpected Accept header")
+		assert.Equal(t, version.UserAgent, r.Header.Get("User-Agent"), "unexpected User-Agent header")
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(jsonrpcPayload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	commands, _, err := client.Poll(ctx, limit)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	if !assert.Len(t, commands, 1, "expected 1 command") {
+		return
+	}
+
+	cmd := commands[0]
+	assert.Equal(t, requestID, cmd.RequestID().String(), "unexpected request ID")
+	assert.Equal(t, "shard-123", cmd.ShardToken(), "unexpected shard token")
+
+	msg := cmd.Message()
+	req, ok := msg.(*jsonrpc.Request)
+	if assert.True(t, ok, "expected JSON-RPC request message") {
+		assert.Equal(t, "initialize", req.Method, "unexpected method")
+		var params map[string]any
+		if assert.NoError(t, json.Unmarshal(req.Params, &params), "unmarshal params") {
+			assert.NotEmpty(t, params, "params should not be empty")
+		}
+	}
+
+	wantEnqueuedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if !assert.NoError(t, err, "parse enqueuedAt") {
+		return
+	}
+	assert.Truef(t, cmd.EnqueuedAt().Equal(wantEnqueuedAt), "unexpected enqueued_at: got %s want %s", cmd.EnqueuedAt().Format(time.RFC3339Nano), wantEnqueuedAt.Format(time.RFC3339Nano))
+
+}
+
+func TestTunnelServiceClientPollSkipsInvalidCommands(t *testing.T) {
+	t.Parallel()
+
+	const payload = `
+{
+  "commands":
+	[
+          {
+                "request_id": "",
+                "shard_token": "shard-missing-id",
+                "jsonrpc": {
+                  "method": "invalid"
+                }
+          },
+          {
+                "request_id": "valid",
+                "shard_token": "shard-valid",
+                "jsonrpc": {
+                  "jsonrpc": "2.0",
+                  "id": 1,
+		  "method": "ping"
+		},
+		"enqueued_at": "2024-01-01T00:00:00Z"
+	  }
+	]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	commands, _, err := client.Poll(context.Background(), 2)
+	if assert.NoError(t, err, "Poll failed") {
+		if assert.Len(t, commands, 1, "expected 1 valid command") {
+			assert.Equal(t, "valid", commands[0].RequestID().String(), "unexpected command ID")
+		}
+	}
+}
+
+func TestTunnelServiceClientPollWithNonPositiveLimit(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, "https://example.com"),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	cmds, _, pollErr := client.Poll(context.Background(), 0)
+	assert.NoError(t, pollErr, "Poll should not error")
+	assert.Nil(t, cmds, "expected nil result for non-positive limit")
+}
+
+func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID   = "cli-tunnel"
+		apiKey     = "test-api-key"
+		requestID  = "req-123"
+		shardToken = "shard-post-success"
+	)
+
+	var (
+		seenMethod string
+		seenPath   string
+		seenBody   []byte
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+
+		assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"), "unexpected Authorization header")
+		assert.Empty(t, r.Header.Get("X-Tunnel-ID"), "X-Tunnel-ID header should be omitted")
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"), "unexpected Content-Type header")
+		assert.Equal(t, version.UserAgent, r.Header.Get("User-Agent"), "unexpected User-Agent header")
+
+		var err error
+		seenBody, err = io.ReadAll(r.Body)
+		assert.NoError(t, err, "read request body")
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	id, err := jsonrpc.MakeID("1")
+	if !assert.NoError(t, err, "MakeID failed") {
+		return
+	}
+
+	response := &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), shardToken)
+
+	headers := http.Header{
+		"Mcp-Session-Id": {"abc123"},
+	}
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID(requestID),
+		types.NewTunnelResponse(response, http.StatusOK, headers),
+	)
+	if !assert.NoError(t, err, "PostResponse failed") {
+		return
+	}
+
+	assert.Equal(t, http.MethodPost, seenMethod, "unexpected HTTP method")
+	assert.Equal(t, "/v1/tunnel/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
+
+	var payload struct {
+		RequestID   string          `json:"request_id"`
+		RPCResp     json.RawMessage `json:"rpc_resp"`
+		RespHeaders http.Header     `json:"resp_headers"`
+		RespCode    int             `json:"resp_code"`
+		RespType    string          `json:"resp_type"`
+	}
+
+	if assert.NoError(t, json.Unmarshal(seenBody, &payload), "unmarshal request payload") {
+		assert.Equal(t, requestID, payload.RequestID, "unexpected request_id")
+		assert.JSONEq(t, `{"jsonrpc":"2.0","id":"1","result":{"ok":true}}`, string(payload.RPCResp), "unexpected rpc_resp")
+		assert.Equal(t, headers, payload.RespHeaders, "unexpected resp_headers")
+		assert.Equal(t, http.StatusOK, payload.RespCode, "unexpected resp_code")
+		assert.Equal(t, string(wiretypes.ResponsePayloadJSONRPC), payload.RespType, "unexpected resp_type")
+	}
+}
+
+func TestTunnelServiceClientPostResponsePropagatesClientRequestID(t *testing.T) {
+	t.Parallel()
+
+	const (
+		controlPlaneRequestID = "ctl-req-123"
+		tunnelID              = "cli-tunnel"
+		apiKey                = "test-api-key"
+		requestID             = "req-123"
+		shardToken            = "shard-client-request"
+	)
+
+	var seenClientRequestID string
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenClientRequestID = r.Header.Get("X-Client-Request-Id")
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	id, err := jsonrpc.MakeID("1")
+	if !assert.NoError(t, err, "MakeID failed") {
+		return
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), shardToken)
+	ctx = tunnelctx.ContextWithControlPlaneCommandRequestID(ctx, types.ControlPlaneRequestID(controlPlaneRequestID))
+	response := &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID(requestID),
+		types.NewTunnelResponse(response, http.StatusOK, nil),
+	)
+	if !assert.NoError(t, err, "PostResponse failed") {
+		return
+	}
+
+	assert.Equal(t, controlPlaneRequestID, seenClientRequestID, "expected X-Client-Request-Id header to propagate")
+}
+
+func TestTunnelServiceClientPostResponsePropagatesShardToken(t *testing.T) {
+	t.Parallel()
+
+	const (
+		shardToken = "shard-xyz"
+		tunnelID   = "cli-tunnel"
+		apiKey     = "test-api-key"
+		requestID  = "req-123"
+	)
+
+	var seenShardToken string
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenShardToken = r.Header.Get("X-Tunnel-Shard-Token")
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	id, err := jsonrpc.MakeID("1")
+	if !assert.NoError(t, err, "MakeID failed") {
+		return
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), shardToken)
+	response := &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID(requestID),
+		types.NewTunnelResponse(response, http.StatusOK, nil),
+	)
+	if !assert.NoError(t, err, "PostResponse failed") {
+		return
+	}
+
+	assert.Equal(t, shardToken, seenShardToken, "expected X-Tunnel-Shard-Token header to propagate")
+}
+
+func TestTunnelServiceClientPostResponseRequiresShardToken(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("request should not be sent without shard token")
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	id, err := jsonrpc.MakeID("missing-shard")
+	if !assert.NoError(t, err, "MakeID failed") {
+		return
+	}
+
+	response := &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	_, err = client.PostResponse(
+		context.Background(),
+		types.RequestID("req-missing-shard"),
+		types.NewTunnelResponse(response, http.StatusOK, nil),
+	)
+	assert.Error(t, err, "PostResponse should require a shard token")
+}
+
+func TestTunnelServiceClientPostResponseTreatsNotFoundAsSuccess(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	response := &jsonrpc.Response{
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-404")
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID("request-404"),
+		types.NewTunnelResponse(response, http.StatusOK, nil),
+	)
+	assert.NoError(t, err, "PostResponse should treat 404 as success")
+}
+
+func TestTunnelServiceClientPostResponseSurfacingNonSuccess(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-502")
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID("request-502"),
+		types.NewTunnelResponse(&jsonrpc.Response{
+			Result: json.RawMessage(`{"ok":true}`),
+		}, http.StatusOK, nil),
+	)
+	assert.Error(t, err, "PostResponse should propagate non-200/404 errors")
+	assert.ErrorContains(t, err, "unexpected status 502")
+}
+
+func TestTunnelServiceClientPostResponseNotificationAck(t *testing.T) {
+	t.Parallel()
+
+	var seenBody []byte
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		seenBody, err = io.ReadAll(r.Body)
+		assert.NoError(t, err, "read request body")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-notif")
+
+	_, err = client.PostResponse(
+		ctx,
+		types.RequestID("notif-req"),
+		types.NewNotificationAck(http.StatusOK, nil),
+	)
+	assert.NoError(t, err, "PostResponse should allow notification acknowledgements")
+
+	var payload map[string]any
+	if assert.NoError(t, json.Unmarshal(seenBody, &payload), "unmarshal request payload") {
+		assert.Equal(t, "notif-req", payload["request_id"])
+		_, hasResponse := payload["rpc_resp"]
+		assert.False(t, hasResponse, "rpc_resp should be omitted for notification acks")
+		assert.Equal(t, string(wiretypes.ResponsePayloadNotifyAck), payload["resp_type"])
+		assert.Equal(t, float64(http.StatusOK), payload["resp_code"])
+	}
+}
+
+func TestTunnelServiceClientExtraHeadersAreSent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "true", r.Header.Get("extra-header"), "expected extra header to be sent")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:      mustParseURL(t, server.URL),
+		TunnelID:     types.TunnelID(tunnelID),
+		APIKey:       apiKey,
+		ExtraHeaders: map[string]string{"extra-header": "true"},
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, _, err = client.Poll(context.Background(), 1)
+	assert.NoError(t, err, "Poll should succeed with extra headers enabled")
+}
+
+type warnCaptureHandler struct {
+	seenOverride bool
+	header       string
+}
+
+func (h *warnCaptureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *warnCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn && r.Message == "control-plane extra header overrides existing header" {
+		h.seenOverride = true
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "header" {
+				h.header = a.Value.String()
+			}
+			return true
+		})
+	}
+	return nil
+}
+
+func (h *warnCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *warnCaptureHandler) WithGroup(string) slog.Handler        { return h }
+
+func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Default Accept header should be overridden by extra header.
+		if got := r.Header.Get("Accept"); got != "application/problem+json" {
+			t.Fatalf("expected overridden Accept header, got %q", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	handler := &warnCaptureHandler{}
+	logger := slog.New(handler)
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:      mustParseURL(t, server.URL),
+		TunnelID:     types.TunnelID(tunnelID),
+		APIKey:       apiKey,
+		ExtraHeaders: map[string]string{"Accept": "application/problem+json"},
+	}, logger, &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, _, err = client.Poll(context.Background(), 1)
+	assert.NoError(t, err, "Poll should succeed with extra headers enabled")
+	assert.True(t, handler.seenOverride, "expected warning when extra header overrides existing header")
+	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
+}
+
+func newDiscardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func newHTTPTestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			t.Skipf("skipping test: unable to bind listener: %v", err)
+		}
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse URL %q: %v", raw, err)
+	}
+	return parsed
+}
