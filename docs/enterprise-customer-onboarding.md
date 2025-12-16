@@ -50,6 +50,7 @@ flowchart LR
 
 ```text
 <OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>
+OPENAI_MCP_TUNNEL_BASE_URL = https://tunnel-service.gateway.unified-0.internal.api.openai.org
 ```
 
 - **Tunnel client uses the Tunnel control-plane base URL** (host root) and derives:
