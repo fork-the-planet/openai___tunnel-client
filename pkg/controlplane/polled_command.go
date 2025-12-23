@@ -16,8 +16,6 @@ import (
 type PolledCommand interface {
 	// RequestID returns the opaque identifier assigned by tunnel-service.
 	RequestID() types.RequestID
-	// Message returns the JSON-RPC request to forward to the MCP server.
-	Message() jsonrpc.Message
 	// EnqueuedAt reports when tunnel-service enqueued the request (RFC3339).
 	EnqueuedAt() time.Time
 	// PolledAt reports when tunnel-client fetched the command from the control
@@ -32,6 +30,20 @@ type PolledCommand interface {
 	// SessionID returns the optional MCP session identifier when the connector
 	// supplied it, along with a boolean indicating whether it was present.
 	SessionID() (string, bool)
+}
+
+// JsonRpcCommand augments PolledCommand with access to the JSON-RPC message.
+type JsonRpcCommand interface {
+	PolledCommand
+	// Message returns the JSON-RPC request to forward to the MCP server.
+	Message() jsonrpc.Message
+}
+
+// OauthDiscoveryCommand is a marker interface for OAuth discovery commands.
+// It currently does not add any methods beyond PolledCommand but exists for
+// type differentiation and future extension.
+type OauthDiscoveryCommand interface {
+	PolledCommand
 }
 
 // PolledCommandQueue carries polled commands between the control plane poller and dispatcher.

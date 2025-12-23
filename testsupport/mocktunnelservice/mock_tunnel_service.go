@@ -281,7 +281,7 @@ func NewCommand(requestID string, jsonrpc json.RawMessage, headers http.Header) 
 	command := map[string]any{
 		"request_id":  requestID,
 		"jsonrpc":     jsonrpc,
-		"created_at":  time.Now().UTC().Format(time.RFC3339Nano),
+		"created_at":  time.Now().UTC().Format(time.RFC3339),
 		"shard_token": requestID,
 	}
 	if hdrs := cloneHeader(headers); hdrs != nil {
@@ -802,7 +802,7 @@ func (m *MockTunnelService) defaultSessionCommandMutator() CommandMutator {
 		if storage == nil {
 			return payload
 		}
-		var envelope wiretypes.RawPolledCommand
+		var envelope wiretypes.RawJSONRPCPolledCommand
 		if err := json.Unmarshal(payload, &envelope); err != nil {
 			m.failf("session mutator decode command payload: %v", err)
 		}

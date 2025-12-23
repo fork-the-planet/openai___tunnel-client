@@ -287,11 +287,15 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 		t.Fatalf("expected a single initialize command, got %d", len(firstEnvelope.Commands))
 	}
 	initCommand := firstEnvelope.Commands[0]
+	var initRaw wiretypes.RawJSONRPCPolledCommand
+	if err := json.Unmarshal(initCommand, &initRaw); err != nil {
+		t.Fatalf("decode initialize raw command: %v", err)
+	}
 	var initRPC struct {
 		Method string `json:"method"`
 		ID     any    `json:"id"`
 	}
-	if err := json.Unmarshal(initCommand.JSONRPC, &initRPC); err != nil {
+	if err := json.Unmarshal(initRaw.JSONRPC, &initRPC); err != nil {
 		t.Fatalf("decode initialize command: %v", err)
 	}
 	if initRPC.Method != "initialize" {
@@ -300,7 +304,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 
 	sessionID := "session-from-server"
 	initResponsePayload := map[string]any{
-		"request_id": initCommand.RequestID,
+		"request_id": initRaw.RequestID,
 		"resp_code":  http.StatusOK,
 		"resp_type":  string(wiretypes.ResponsePayloadJSONRPC),
 		"rpc_resp": map[string]any{
@@ -350,17 +354,21 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 		t.Fatalf("expected notifications/initialized command, got %d", len(secondEnvelope.Commands))
 	}
 	notifyCommand := secondEnvelope.Commands[0]
+	var notifyRaw wiretypes.RawJSONRPCPolledCommand
+	if err := json.Unmarshal(notifyCommand, &notifyRaw); err != nil {
+		t.Fatalf("decode notification raw command: %v", err)
+	}
 	var notifyRPC struct {
 		Method string `json:"method"`
 	}
-	if err := json.Unmarshal(notifyCommand.JSONRPC, &notifyRPC); err != nil {
+	if err := json.Unmarshal(notifyRaw.JSONRPC, &notifyRPC); err != nil {
 		t.Fatalf("decode notification command: %v", err)
 	}
 	if notifyRPC.Method != "notifications/initialized" {
 		t.Fatalf("unexpected method %q for notifications/initialized command", notifyRPC.Method)
 	}
 	ackPayload := map[string]any{
-		"request_id": notifyCommand.RequestID,
+		"request_id": notifyRaw.RequestID,
 		"resp_code":  http.StatusNoContent,
 		"resp_type":  string(wiretypes.ResponsePayloadNotifyAck),
 	}
@@ -710,9 +718,12 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 	if len(commandEnvelope.Commands) != 1 {
 		t.Fatalf("expected single command, got %d", len(commandEnvelope.Commands))
 	}
-	headers := commandEnvelope.Commands[0].Headers
-	if headers.Get("Mcp-Session-Id") != "session-xyz" {
-		t.Fatalf("command headers missing session id: %v", headers)
+	var secondRaw wiretypes.RawJSONRPCPolledCommand
+	if err := json.Unmarshal(commandEnvelope.Commands[0], &secondRaw); err != nil {
+		t.Fatalf("decode second raw command: %v", err)
+	}
+	if secondRaw.Headers.Get("Mcp-Session-Id") != "session-xyz" {
+		t.Fatalf("command headers missing session id: %v", secondRaw.Headers)
 	}
 
 	finalResponsePayload := map[string]any{

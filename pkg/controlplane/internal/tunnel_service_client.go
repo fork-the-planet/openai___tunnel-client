@@ -20,7 +20,6 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/config"
 	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
-	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	tcmetrics "go.openai.org/api/tunnel-client/pkg/metrics"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
@@ -268,121 +267,75 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, fmt.Errorf("controlplane client: decode poll response: %w", err)
 	}
-	commands := envelope.Commands
+	rawCommands := envelope.Commands
 
-	if len(commands) == 0 {
+	// If there are no commands, return early.
+	if len(rawCommands) == 0 {
 		return nil, nil
 	}
 
-	if len(commands) > limited {
-		commands = commands[:limited]
+	// If the server returned more commands than our configured limit, drop the extras
+	// and emit a warning with details for observability.
+	total := len(rawCommands)
+	dropped := 0
+	if total > limited {
+		dropped = total - limited
+		rawCommands = rawCommands[:limited]
 	}
 
 	logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
-	out := make([]PolledCommand, 0, len(commands))
-	for _, raw := range commands {
-		cmd, err := convertRawCommand(raw, polledAt)
-		if err != nil {
-			logger.WarnContext(ctx, "control-plane command dropped: invalid payload", slog.String(tclog.FieldRequestID, raw.RequestID), slog.String("error", err.Error()))
+	if dropped > 0 {
+		logger.WarnContext(ctx, "control-plane commands dropped due to limit",
+			slog.Int("dropped", dropped),
+			slog.Int("limit", limited),
+			slog.Int("total", total),
+		)
+	}
+	out := make([]PolledCommand, 0, len(rawCommands))
+	for _, raw := range rawCommands {
+		// Peek discriminator for forward-compat. Missing or empty means JSON-RPC.
+		var probe struct {
+			CommandType wiretypes.CommandType `json:"command_type"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			logger.WarnContext(ctx, "control-plane command dropped: invalid payload", slog.String("error", err.Error()))
 			continue
 		}
-		out = append(out, cmd)
+
+		switch probe.CommandType {
+		case "", wiretypes.CommandTypeJSONRPC:
+			var rpc wiretypes.RawJSONRPCPolledCommand
+			if err := json.Unmarshal(raw, &rpc); err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid jsonrpc payload", slog.String("error", err.Error()))
+				continue
+			}
+			cmd, err := convertRawCommand(rpc, polledAt)
+			if err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid jsonrpc payload", slog.String(tclog.FieldRequestID, rpc.RequestID), slog.String("error", err.Error()))
+				continue
+			}
+			out = append(out, cmd)
+		case wiretypes.CommandTypeOAuthDiscovery:
+			var od wiretypes.RawOauthDiscoveryPolledCommand
+			if err := json.Unmarshal(raw, &od); err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid oauth_discovery payload", slog.String("error", err.Error()))
+				continue
+			}
+			cmd, err := convertRawOauthDiscoveryCommand(od, polledAt)
+			if err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid oauth_discovery payload", slog.String(tclog.FieldRequestID, od.RequestID), slog.String("error", err.Error()))
+				continue
+			}
+			out = append(out, cmd)
+		default:
+			// Unknown command type – drop with warning for forward compatibility.
+			logger.WarnContext(ctx, "control-plane command dropped: unknown command_type", slog.String("command_type", string(probe.CommandType)))
+			continue
+		}
 	}
 
 	return out, nil
 }
 
-type polledCommand struct {
-	requestID  types.RequestID
-	message    jsonrpc.Message
-	enqueued   time.Time
-	polledAt   time.Time
-	headers    http.Header
-	sessionID  *string
-	shardToken string
-}
-
-func convertRawCommand(raw wiretypes.RawPolledCommand, polledAt time.Time) (*polledCommand, error) {
-	if raw.RequestID == "" {
-		return nil, errors.New("missing request_id")
-	}
-	if raw.ShardToken == "" {
-		return nil, errors.New("missing shard_token")
-	}
-	// Ensure JSON is non-empty; empty object is acceptable.
-	if len(raw.JSONRPC) == 0 {
-		return nil, errors.New("missing jsonrpc payload")
-	}
-
-	msg, err := jsonrpc.DecodeMessage(raw.JSONRPC)
-	if err != nil {
-		return nil, fmt.Errorf("invalid jsonrpc payload: %w", err)
-	}
-
-	timestamp := raw.CreatedAt
-
-	enqueuedAt := time.Time{}
-	if timestamp != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, timestamp)
-		if err != nil {
-			parsed, err = time.Parse(time.RFC3339, timestamp)
-			if err != nil {
-				return nil, fmt.Errorf("invalid enqueued_at: %w", err)
-			}
-		}
-		enqueuedAt = parsed
-	}
-	headers := make(http.Header)
-	// this will put headers in canonical form
-	if raw.Headers != nil {
-		for key, values := range raw.Headers {
-			for _, value := range values {
-				headers.Add(key, value)
-			}
-		}
-	}
-
-	return &polledCommand{
-		requestID:  types.RequestID(raw.RequestID),
-		message:    msg,
-		enqueued:   enqueuedAt,
-		polledAt:   polledAt,
-		headers:    headers,
-		shardToken: raw.ShardToken,
-		sessionID:  mcpclient.SessionIDFromHeaders(headers),
-	}, nil
-}
-
-func (c *polledCommand) RequestID() types.RequestID {
-	return c.requestID
-}
-
-func (c *polledCommand) Message() jsonrpc.Message {
-	return c.message
-}
-
-func (c *polledCommand) EnqueuedAt() time.Time {
-	return c.enqueued
-}
-
-func (c *polledCommand) PolledAt() time.Time {
-	return c.polledAt
-}
-
-func (c *polledCommand) Headers() http.Header {
-	if c.headers == nil {
-		return nil
-	}
-	return c.headers
-}
-
-func (c *polledCommand) ShardToken() string {
-	return c.shardToken
-}
-
-func (c *polledCommand) SessionID() (string, bool) {
-	if c.sessionID == nil {
-		return "", false
-	}
-	return *c.sessionID, true
-}
+// parsing and conversion helpers and command types were moved into
+// command_parser.go and command_types.go to keep this file focused on HTTP logic.

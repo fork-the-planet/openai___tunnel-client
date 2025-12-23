@@ -104,16 +104,29 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Differentiate by command type.
+	// JSON-RPC commands are forwarded to the MCP server.
+	// OAuth Discovery commands are currently not supported by the dispatcher.
+	rpcCmd, ok := cmd.(controlplane.JsonRpcCommand)
+	if !ok {
+		if _, ok := cmd.(controlplane.OauthDiscoveryCommand); ok {
+			logger.WarnContext(ctx, "polled command was an OAuth discovery command; dispatcher does not support it yet")
+			return fmt.Errorf("unsupported command type oauth_discovery")
+		}
+		logger.ErrorContext(ctx, "polled command was not a JSON-RPC command")
+		return fmt.Errorf("unexpected command type %T", cmd)
+	}
+	req, ok := rpcCmd.Message().(*jsonrpc.Request)
+	if !ok {
+		logger.ErrorContext(ctx, "polled command payload was not a JSON-RPC request", slog.String("type", fmt.Sprintf("%T", rpcCmd.Message())))
+		return fmt.Errorf("unexpected command type %T", rpcCmd.Message())
+	}
+
+	// Establish MCP connection only for JSON-RPC commands.
 	conn, err := p.transport.Connect(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "failed to connect to MCP transport", slog.String("error", err.Error()))
 		return fmt.Errorf("connect: %w", err)
-	}
-
-	req, ok := cmd.Message().(*jsonrpc.Request)
-	if !ok {
-		logger.ErrorContext(ctx, "polled command payload was not a JSON-RPC request", slog.String("type", fmt.Sprintf("%T", cmd.Message())))
-		return fmt.Errorf("unexpected command type %T", cmd.Message())
 	}
 
 	isNotification := !req.ID.IsValid()
@@ -161,7 +174,7 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 		return nil
 	}
 
-	p.forwardResponses(ctx, conn, logger, cmd, statusCode, respHeader, requestKindAttrs, latencyRecorded)
+	p.forwardResponses(ctx, conn, logger, rpcCmd, statusCode, respHeader, requestKindAttrs, latencyRecorded)
 	logger.InfoContext(ctx, "dispatcher forwarded command to MCP server")
 
 	return nil
@@ -169,7 +182,7 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 
 // forwardResponses streams MCP responses for the request to the control plane
 // while respecting the configured TTL window.
-func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.ForwardingConnection, logger *slog.Logger, cmd controlplane.PolledCommand, responseCode int, responseHeaders http.Header, metricAttrs []attribute.KeyValue, latencyRecorded *latencyFlags) {
+func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.ForwardingConnection, logger *slog.Logger, cmd controlplane.JsonRpcCommand, responseCode int, responseHeaders http.Header, metricAttrs []attribute.KeyValue, latencyRecorded *latencyFlags) {
 	ttlCtx := ctx
 	cancel := func() {}
 	if p.connectionMaxTTL > 0 {

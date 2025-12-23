@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jpillora/backoff"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
@@ -30,7 +29,6 @@ const (
 // implementation details.
 type PolledCommand interface {
 	RequestID() types.RequestID
-	Message() jsonrpc.Message
 	EnqueuedAt() time.Time
 	PolledAt() time.Time
 	Headers() http.Header

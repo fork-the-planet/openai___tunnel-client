@@ -35,7 +35,7 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 		tunnelID  = "cli-tunnel"
 		apiKey    = "test-api-key"
 		requestID = "dc7427fd-eeab-4128-a3a6-aee876de182c"
-		createdAt = "2025-10-29T23:08:09.405811Z"
+		createdAt = "2025-10-29T23:08:09Z"
 		limit     = 5
 	)
 
@@ -64,11 +64,11 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 			  "version": "0.17.2"
 			}
 		  }
-		},
-		"created_at": "2025-10-29T23:08:09.405811Z",
-		"meta": {}
-	  }
-	]
+        },
+        "created_at": "2025-10-29T23:08:09Z",
+        "meta": {}
+      }
+    ]
 }
 `
 
@@ -110,7 +110,12 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 	assert.Equal(t, requestID, cmd.RequestID().String(), "unexpected request ID")
 	assert.Equal(t, "shard-123", cmd.ShardToken(), "unexpected shard token")
 
-	msg := cmd.Message()
+	type hasMessage interface{ Message() jsonrpc.Message }
+	rpcCmd, ok := cmd.(hasMessage)
+	if !assert.True(t, ok, "expected JsonRpcCommand") {
+		return
+	}
+	msg := rpcCmd.Message()
 	req, ok := msg.(*jsonrpc.Request)
 	if assert.True(t, ok, "expected JSON-RPC request message") {
 		assert.Equal(t, "initialize", req.Method, "unexpected method")
@@ -120,11 +125,11 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 		}
 	}
 
-	wantEnqueuedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	wantEnqueuedAt, err := time.Parse(time.RFC3339, createdAt)
 	if !assert.NoError(t, err, "parse enqueuedAt") {
 		return
 	}
-	assert.Truef(t, cmd.EnqueuedAt().Equal(wantEnqueuedAt), "unexpected enqueued_at: got %s want %s", cmd.EnqueuedAt().Format(time.RFC3339Nano), wantEnqueuedAt.Format(time.RFC3339Nano))
+	assert.Truef(t, cmd.EnqueuedAt().Equal(wantEnqueuedAt), "unexpected enqueued_at: got %s want %s", cmd.EnqueuedAt().Format(time.RFC3339), wantEnqueuedAt.Format(time.RFC3339))
 
 }
 
@@ -601,6 +606,127 @@ func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
 	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
 }
 
+func TestTunnelServiceClientWarnsWhenDroppingCommandsByLimit(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	// Prepare a poll payload with 3 commands while we'll request limit=1.
+	const body = `{
+  "commands": [
+    {
+      "request_id": "cmd-1",
+      "shard_token": "sh-1",
+      "jsonrpc": {"jsonrpc":"2.0","id":1,"method":"initialize"},
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {"X": ["y"]}
+    },
+    {
+      "request_id": "cmd-2",
+      "shard_token": "sh-2",
+      "jsonrpc": {"jsonrpc":"2.0","id":2,"method":"noop"},
+      "created_at": "2025-10-29T23:08:10Z",
+      "headers": {"X": ["y"]}
+    },
+    {
+      "request_id": "cmd-3",
+      "shard_token": "sh-3",
+      "jsonrpc": {"jsonrpc":"2.0","id":3,"method":"noop"},
+      "created_at": "2025-10-29T23:08:11Z",
+      "headers": {"X": ["y"]}
+    }
+  ]
+}`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+
+	// Capture warnings
+	var cap dropWarnCapture
+	logger := slog.New(&dropWarnHandler{cap: &cap})
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, logger, &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmds, _, err := client.Poll(ctx, 1)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	// Only one command should be returned due to limit.
+	assert.Len(t, cmds, 1)
+
+	assert.True(t, cap.seen, "expected warning when commands are dropped by limit")
+	assert.Equal(t, 2, cap.dropped)
+	assert.Equal(t, 1, cap.limit)
+	assert.Equal(t, 3, cap.total)
+}
+
+type dropWarnHandler struct {
+	cap *dropWarnCapture
+}
+
+func (h *dropWarnHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return true
+}
+
+func (h *dropWarnHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn && r.Message == "control-plane commands dropped due to limit" {
+		h.cap.seen = true
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "dropped":
+				if v, ok := a.Value.Any().(int); ok {
+					h.cap.dropped = v
+				} else if a.Value.Kind() == slog.KindInt64 {
+					h.cap.dropped = int(a.Value.Int64())
+				}
+			case "limit":
+				if v, ok := a.Value.Any().(int); ok {
+					h.cap.limit = v
+				} else if a.Value.Kind() == slog.KindInt64 {
+					h.cap.limit = int(a.Value.Int64())
+				}
+			case "total":
+				if v, ok := a.Value.Any().(int); ok {
+					h.cap.total = v
+				} else if a.Value.Kind() == slog.KindInt64 {
+					h.cap.total = int(a.Value.Int64())
+				}
+			}
+			return true
+		})
+	}
+	return nil
+}
+
+func (h *dropWarnHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *dropWarnHandler) WithGroup(name string) slog.Handler       { return h }
+
+type dropWarnCapture struct {
+	seen    bool
+	dropped int
+	limit   int
+	total   int
+}
+
 func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -631,4 +757,173 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatalf("parse URL %q: %v", raw, err)
 	}
 	return parsed
+}
+
+func TestTunnelServiceClientPollWithExplicitCommandTypeJSONRPC(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID  = "cli-tunnel"
+		apiKey    = "test-api-key"
+		requestID = "cmd-jsonrpc-explicit"
+		limit     = 3
+	)
+
+	const payload = `
+{
+  "commands": [
+    {
+      "command_type": "jsonrpc",
+      "request_id": "cmd-jsonrpc-explicit",
+      "shard_token": "shard-explicit",
+      "jsonrpc": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize"
+      },
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {"X-Test": ["true"]}
+    }
+  ]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	cmds, _, err := client.Poll(context.Background(), limit)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	if !assert.Len(t, cmds, 1, "expected exactly one command") {
+		return
+	}
+	assert.Equal(t, requestID, cmds[0].RequestID().String())
+	assert.Equal(t, "shard-explicit", cmds[0].ShardToken())
+}
+
+func TestTunnelServiceClientPollSkipsUnknownCommandType(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID  = "cli-tunnel"
+		apiKey    = "test-api-key"
+		requestID = "cmd-known"
+		limit     = 5
+	)
+
+	const payload = `
+{
+  "commands": [
+    {
+      "command_type": "totally_unknown",
+      "request_id": "cmd-unknown",
+      "shard_token": "shard-unknown",
+      "jsonrpc": {"jsonrpc": "2.0", "id": 1, "method": "noop"},
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {}
+    },
+    {
+      "request_id": "cmd-known",
+      "shard_token": "shard-known",
+      "jsonrpc": {"jsonrpc": "2.0", "id": 2, "method": "initialize"},
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {}
+    }
+  ]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	cmds, _, err := client.Poll(context.Background(), limit)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	if !assert.Len(t, cmds, 1, "expected only the known JSON-RPC command to be processed") {
+		return
+	}
+	assert.Equal(t, requestID, cmds[0].RequestID().String())
+	assert.Equal(t, "shard-known", cmds[0].ShardToken())
+}
+
+func TestTunnelServiceClientPollReturnsOauthDiscoveryCommand(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID  = "cli-tunnel"
+		apiKey    = "test-api-key"
+		requestID = "cmd-oauth"
+		limit     = 1
+	)
+
+	const payload = `
+{
+  "commands": [
+    {
+      "command_type": "oauth_discovery",
+      "request_id": "cmd-oauth",
+      "shard_token": "shard-oauth",
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {"X-Test": ["true"]}
+    }
+  ]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	cmds, _, err := client.Poll(context.Background(), limit)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	if !assert.Len(t, cmds, 1, "expected exactly one command") {
+		return
+	}
+
+	cmd := cmds[0]
+	assert.Equal(t, requestID, cmd.RequestID().String())
+	assert.Equal(t, "shard-oauth", cmd.ShardToken())
+
+	type hasMessage interface{ Message() jsonrpc.Message }
+	_, ok := cmd.(hasMessage)
+	assert.False(t, ok, "oauth discovery command should not expose Message()")
 }
