@@ -291,6 +291,21 @@ func NewCommand(requestID string, jsonrpc json.RawMessage, headers http.Header) 
 	return json.RawMessage(data)
 }
 
+// NewOAuthDiscoveryCommand builds a raw tunnel command payload for OAuth discovery.
+func NewOAuthDiscoveryCommand(requestID string, headers http.Header) json.RawMessage {
+	command := map[string]any{
+		"command_type": "oauth_discovery",
+		"request_id":   requestID,
+		"created_at":   time.Now().UTC().Format(time.RFC3339),
+		"shard_token":  requestID,
+	}
+	if hdrs := cloneHeader(headers); hdrs != nil {
+		command["headers"] = hdrs
+	}
+	data, _ := json.Marshal(command)
+	return json.RawMessage(data)
+}
+
 // Start launches the underlying httptest.Server and registers cleanup with t.
 func (m *MockTunnelService) Start(t testing.TB) {
 	t.Helper()

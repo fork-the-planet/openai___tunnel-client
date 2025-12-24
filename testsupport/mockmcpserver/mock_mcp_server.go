@@ -76,10 +76,22 @@ func WithKeepalivePings() Option {
 	}
 }
 
-// WithOAuth enables the well-known OAuth protected resource metadata endpoint.
-func WithOAuth() Option {
+// WithOAuthDiscoveryResources enables the well-known OAuth protected resource metadata endpoint.
+func WithOAuthDiscoveryResources() Option {
 	return func(m *MockMCPServer) {
 		m.enableOAuth = true
+	}
+}
+
+// WithOAuthProtection enables OAuth discovery endpoints and protects the MCP server with
+// auth.RequireBearerToken using a static in-memory API key set.
+func WithOAuthProtection() Option {
+	return func(m *MockMCPServer) {
+		m.enableOAuth = true
+		m.protectOAuth = true
+		if m.apiKeys == nil {
+			m.apiKeys = defaultAPIKeys()
+		}
 	}
 }
 
@@ -93,7 +105,9 @@ type MockMCPServer struct {
 	baseURL    *url.URL
 	closeOnce  sync.Once
 
-	enableOAuth bool
+	enableOAuth  bool
+	protectOAuth bool
+	apiKeys      map[string]*APIKey
 
 	injectKeepalivePings bool
 
@@ -121,6 +135,13 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		return
 	}
 
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		m.mu.Unlock()
+		t.Skipf("mock MCP server listener unavailable: %v", err)
+		return
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{Name: "mock-mcp-server", Version: "1.0.0"}, nil)
 	tools := m.uniqueToolsLocked()
 	for _, toolName := range tools {
@@ -132,7 +153,16 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		mcp.AddTool(server, tool, m.toolHandler(toolName))
 	}
 
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
+	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
+	var protectedHandler http.Handler = streamableHandler
+	if m.protectOAuth {
+		metadataURL := fmt.Sprintf("http://%s%s", listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
+		protectedHandler = auth.RequireBearerToken(m.tokenVerifier(), &auth.RequireBearerTokenOptions{
+			Scopes:              []string{"read", "write"},
+			ResourceMetadataURL: metadataURL,
+		})(streamableHandler)
+	}
+
 	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if m.enableOAuth && req.URL.Path == wellKnownOAuthProtectedResourcePath {
 			m.serveProtectedResourceMetadata(w, req)
@@ -159,15 +189,8 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		if m.injectKeepalivePings && req.Method == http.MethodGet && acceptsEventStream(req) {
 			w = &keepalivePingWriter{ResponseWriter: w}
 		}
-		handler.ServeHTTP(w, req)
+		protectedHandler.ServeHTTP(w, req)
 	})
-
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		m.mu.Unlock()
-		t.Skipf("mock MCP server listener unavailable: %v", err)
-		return
-	}
 	httpServer := &httptest.Server{
 		Listener: listener,
 		Config:   &http.Server{Handler: httpHandler},
@@ -551,5 +574,60 @@ func (m *MockMCPServer) buildProtectedResourceMetadata(base *url.URL) *oauthex.P
 	return &oauthex.ProtectedResourceMetadata{
 		Resource:        copyURL.String(),
 		ScopesSupported: []string{"read", "write"},
+	}
+}
+
+// APIKey is a static API key record for auth verification in tests.
+type APIKey struct {
+	Key    string
+	UserID string
+	Scopes []string
+}
+
+func defaultAPIKeys() map[string]*APIKey {
+	return map[string]*APIKey{
+		"sk-1234567890abcdef": {
+			Key:    "sk-1234567890abcdef",
+			UserID: "user1",
+			Scopes: []string{"read", "write"},
+		},
+		"sk-abcdef1234567890": {
+			Key:    "sk-abcdef1234567890",
+			UserID: "user2",
+			Scopes: []string{"read"},
+		},
+	}
+}
+
+func cloneAPIKeys(src map[string]*APIKey) map[string]*APIKey {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]*APIKey, len(src))
+	for k, v := range src {
+		if v == nil {
+			continue
+		}
+		keyCopy := *v
+		copyScopes := make([]string, len(v.Scopes))
+		copy(copyScopes, v.Scopes)
+		keyCopy.Scopes = copyScopes
+		out[k] = &keyCopy
+	}
+	return out
+}
+
+func (m *MockMCPServer) tokenVerifier() auth.TokenVerifier {
+	keys := cloneAPIKeys(m.apiKeys)
+	return func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+		key, ok := keys[token]
+		if !ok || key == nil {
+			return nil, auth.ErrInvalidToken
+		}
+		return &auth.TokenInfo{
+			UserID:     key.UserID,
+			Scopes:     append([]string{}, key.Scopes...),
+			Expiration: time.Now().Add(time.Hour),
+		}, nil
 	}
 }

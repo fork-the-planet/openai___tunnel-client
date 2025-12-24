@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
@@ -27,6 +28,14 @@ import (
 )
 
 var testMeterProvider = noopmetric.NewMeterProvider()
+
+func encodeResponse(t *testing.T, resp *jsonrpc.Response) json.RawMessage {
+	t.Helper()
+
+	encoded, err := jsonrpc.EncodeMessage(resp)
+	assert.NoError(t, err, "encode jsonrpc response")
+	return json.RawMessage(encoded)
+}
 
 func TestTunnelServiceClientPollSuccess(t *testing.T) {
 	t.Parallel()
@@ -251,6 +260,7 @@ func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
 		ID:     id,
 		Result: json.RawMessage(`{"ok":true}`),
 	}
+	rawResponse := encodeResponse(t, response)
 
 	ctx := tunnelctx.ContextWithShardToken(context.Background(), shardToken)
 
@@ -261,7 +271,7 @@ func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
 	_, err = client.PostResponse(
 		ctx,
 		types.RequestID(requestID),
-		types.NewTunnelResponse(response, http.StatusOK, headers),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, headers),
 	)
 	if !assert.NoError(t, err, "PostResponse failed") {
 		return
@@ -285,6 +295,65 @@ func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
 		assert.Equal(t, http.StatusOK, payload.RespCode, "unexpected resp_code")
 		assert.Equal(t, string(wiretypes.ResponsePayloadJSONRPC), payload.RespType, "unexpected resp_type")
 	}
+}
+
+func TestTunnelServiceClientPostResponseOAuthDiscovery(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID   = "cli-tunnel"
+		apiKey     = "test-api-key"
+		requestID  = "req-oauth"
+		shardToken = "shard-oauth"
+	)
+
+	var (
+		seenMethod string
+		seenPath   string
+		seenBody   []byte
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		seenBody = body
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err, "NewTunnelServiceClient failed")
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), shardToken)
+	resp := types.NewOAuthDiscoveryResponse(json.RawMessage(`{"resource":"https://example.com"}`), http.StatusOK, http.Header{
+		"Content-Type": []string{"application/json"},
+	})
+
+	_, err = client.PostResponse(ctx, types.RequestID(requestID), resp)
+	require.NoError(t, err, "PostResponse failed")
+
+	require.Equal(t, http.MethodPost, seenMethod, "unexpected HTTP method")
+	require.Equal(t, "/v1/tunnel/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
+
+	var payload struct {
+		RequestID   string          `json:"request_id"`
+		RPCResp     json.RawMessage `json:"resp_json"`
+		RespHeaders http.Header     `json:"resp_headers"`
+		RespCode    int             `json:"resp_code"`
+		RespType    string          `json:"resp_type"`
+	}
+
+	require.NoError(t, json.Unmarshal(seenBody, &payload), "unmarshal request payload")
+	require.Equal(t, requestID, payload.RequestID, "unexpected request_id")
+	require.JSONEq(t, `{"resource":"https://example.com"}`, string(payload.RPCResp), "unexpected payload")
+	require.Equal(t, http.StatusOK, payload.RespCode, "unexpected resp_code")
+	require.Equal(t, string(wiretypes.ResponsePayloadOAuth), payload.RespType, "unexpected resp_type")
+	require.Equal(t, http.Header{"Content-Type": []string{"application/json"}}, payload.RespHeaders)
 }
 
 func TestTunnelServiceClientPostResponsePropagatesClientRequestID(t *testing.T) {
@@ -326,11 +395,12 @@ func TestTunnelServiceClientPostResponsePropagatesClientRequestID(t *testing.T) 
 		ID:     id,
 		Result: json.RawMessage(`{"ok":true}`),
 	}
+	rawResponse := encodeResponse(t, response)
 
 	_, err = client.PostResponse(
 		ctx,
 		types.RequestID(requestID),
-		types.NewTunnelResponse(response, http.StatusOK, nil),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, nil),
 	)
 	if !assert.NoError(t, err, "PostResponse failed") {
 		return
@@ -376,11 +446,12 @@ func TestTunnelServiceClientPostResponsePropagatesShardToken(t *testing.T) {
 		ID:     id,
 		Result: json.RawMessage(`{"ok":true}`),
 	}
+	rawResponse := encodeResponse(t, response)
 
 	_, err = client.PostResponse(
 		ctx,
 		types.RequestID(requestID),
-		types.NewTunnelResponse(response, http.StatusOK, nil),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, nil),
 	)
 	if !assert.NoError(t, err, "PostResponse failed") {
 		return
@@ -414,11 +485,12 @@ func TestTunnelServiceClientPostResponseRequiresShardToken(t *testing.T) {
 		ID:     id,
 		Result: json.RawMessage(`{"ok":true}`),
 	}
+	rawResponse := encodeResponse(t, response)
 
 	_, err = client.PostResponse(
 		context.Background(),
 		types.RequestID("req-missing-shard"),
-		types.NewTunnelResponse(response, http.StatusOK, nil),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, nil),
 	)
 	assert.Error(t, err, "PostResponse should require a shard token")
 }
@@ -442,13 +514,14 @@ func TestTunnelServiceClientPostResponseTreatsNotFoundAsSuccess(t *testing.T) {
 	response := &jsonrpc.Response{
 		Result: json.RawMessage(`{"ok":true}`),
 	}
+	rawResponse := encodeResponse(t, response)
 
 	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-404")
 
 	_, err = client.PostResponse(
 		ctx,
 		types.RequestID("request-404"),
-		types.NewTunnelResponse(response, http.StatusOK, nil),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, nil),
 	)
 	assert.NoError(t, err, "PostResponse should treat 404 as success")
 }
@@ -470,13 +543,14 @@ func TestTunnelServiceClientPostResponseSurfacingNonSuccess(t *testing.T) {
 	}
 
 	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-502")
+	rawResponse := encodeResponse(t, &jsonrpc.Response{
+		Result: json.RawMessage(`{"ok":true}`),
+	})
 
 	_, err = client.PostResponse(
 		ctx,
 		types.RequestID("request-502"),
-		types.NewTunnelResponse(&jsonrpc.Response{
-			Result: json.RawMessage(`{"ok":true}`),
-		}, http.StatusOK, nil),
+		types.NewTunnelResponse(rawResponse, http.StatusOK, nil),
 	)
 	assert.Error(t, err, "PostResponse should propagate non-200/404 errors")
 	assert.ErrorContains(t, err, "unexpected status 502")

@@ -1,15 +1,15 @@
 package types
 
 import (
+	"encoding/json"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTunnelResponseValidateJSONRPC(t *testing.T) {
 	t.Run("valid response", func(t *testing.T) {
-		tr := NewTunnelResponse(&jsonrpc.Response{}, 200, nil)
+		tr := NewTunnelResponse(json.RawMessage(`{"jsonrpc":"2.0","id":"1","result":{}}`), 200, nil)
 		require.NoError(t, tr.Validate())
 	})
 
@@ -31,10 +31,24 @@ func TestTunnelResponseValidateNotificationAck(t *testing.T) {
 	t.Run("ack with payload", func(t *testing.T) {
 		tr := &TunnelResponse{
 			responseType: ResponseTypeNotificationAcknowledgment,
-			response:     &jsonrpc.Response{},
+			response:     json.RawMessage(`{}`),
 		}
 		err := tr.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "must not include a jsonrpc response")
+	})
+}
+
+func TestTunnelResponseValidateOAuthDiscovery(t *testing.T) {
+	t.Run("valid discovery response", func(t *testing.T) {
+		tr := NewOAuthDiscoveryResponse(json.RawMessage(`{"resource":"https://example.com"}`), 200, nil)
+		require.NoError(t, tr.Validate())
+	})
+
+	t.Run("missing payload", func(t *testing.T) {
+		tr := &TunnelResponse{responseType: ResponseTypeOAuthDiscovery}
+		err := tr.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "oauth discovery response is required")
 	})
 }

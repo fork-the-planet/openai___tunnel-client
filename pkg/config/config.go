@@ -103,6 +103,22 @@ type MCPConfig struct {
 	OAuthResourceMetadataURLs []*url.URL
 }
 
+// BootstrapOAuthResourceMetadataURLs populates OAuthResourceMetadataURLs using
+// the configured ServerURL when the slice is empty.
+func (c *MCPConfig) BootstrapOAuthResourceMetadataURLs() error {
+	if c == nil {
+		return errors.New("mcp config: nil receiver")
+	}
+	if len(c.OAuthResourceMetadataURLs) > 0 {
+		return nil
+	}
+	if c.ServerURL == nil {
+		return errors.New("mcp config: server URL is required to derive oauth metadata URLs")
+	}
+	c.OAuthResourceMetadataURLs = buildResourceMetadataURLs(c.ServerURL)
+	return nil
+}
+
 // Load builds a Config by combining CLI flag arguments with environment variables.
 //
 // Flags take precedence over environment variables. Environment variables take

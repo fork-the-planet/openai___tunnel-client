@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -29,10 +30,7 @@ func TestQueueListenerProcessesCommands(t *testing.T) {
 		finished: make(chan types.RequestID, commandCount),
 	}
 
-	mcpConfig := &config.MCPConfig{
-		ConnectionMaxTTL:      time.Second,
-		MaxConcurrentRequests: 2,
-	}
+	mcpConfig := newTestMCPConfigQueue(t, 2)
 
 	reader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -78,10 +76,7 @@ func TestQueueListenerWaitBlocksUntilTasksComplete(t *testing.T) {
 		finished: make(chan types.RequestID, 1),
 	}
 
-	mcpConfig := &config.MCPConfig{
-		ConnectionMaxTTL:      time.Second,
-		MaxConcurrentRequests: 1,
-	}
+	mcpConfig := newTestMCPConfigQueue(t, 1)
 
 	meterProvider := newManualMeterProvider(t)
 
@@ -137,10 +132,7 @@ func TestQueueListenerRecordsWorkerOccupancyMetrics(t *testing.T) {
 		finished: make(chan types.RequestID, 1),
 	}
 
-	mcpConfig := &config.MCPConfig{
-		ConnectionMaxTTL:      time.Second,
-		MaxConcurrentRequests: 2,
-	}
+	mcpConfig := newTestMCPConfigQueue(t, 2)
 
 	meterProvider, reader := newManualMeterProviderWithReader(t)
 
@@ -173,6 +165,22 @@ func TestQueueListenerRecordsWorkerOccupancyMetrics(t *testing.T) {
 
 	listener.Wait()
 	processor.requireCalls(t, 1)
+}
+
+func newTestMCPConfigQueue(t *testing.T, maxConcurrent int) *config.MCPConfig {
+	t.Helper()
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+	serverURL, err := url.Parse("https://example.com/mcp")
+	require.NoError(t, err)
+	cfg := &config.MCPConfig{
+		ServerURL:             serverURL,
+		ConnectionMaxTTL:      time.Second,
+		MaxConcurrentRequests: maxConcurrent,
+	}
+	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
+	return cfg
 }
 
 type stubProcessor struct {

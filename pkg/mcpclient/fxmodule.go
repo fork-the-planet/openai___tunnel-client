@@ -40,6 +40,7 @@ type clientOutputs struct {
 	Client              *mcp.Client
 	Transport           mcp.Transport
 	ForwardingTransport ForwardingTransport
+	HTTPClient          *http.Client `name:"mcp_client"`
 }
 
 type runnerParams struct {
@@ -62,12 +63,10 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "tunnel-client", Version: version.Version}, nil)
 
-	httpTransport := buildMcpHTTPTransport(p.Logger, p.Logging, p.MeterProvider)
+	httpClient := &http.Client{Transport: buildMcpHTTPTransport(p.Logger, p.Logging, p.MeterProvider)}
 	var mcpTransport mcp.Transport = &mcp.StreamableClientTransport{
-		Endpoint: p.Config.ServerURL.String(),
-		HTTPClient: &http.Client{
-			Transport: httpTransport,
-		},
+		Endpoint:   p.Config.ServerURL.String(),
+		HTTPClient: httpClient,
 	}
 
 	if p.Logging.HTTPRawUnsafe && p.Logging.Level <= slog.LevelDebug {
@@ -82,6 +81,7 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 		Client:              mcpClient,
 		Transport:           mcpTransport,
 		ForwardingTransport: NewForwardingTransport(mcpTransport),
+		HTTPClient:          httpClient,
 	}, nil
 }
 

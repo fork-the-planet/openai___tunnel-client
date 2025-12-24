@@ -2,18 +2,19 @@ package dispatcherinternal
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
@@ -23,64 +24,87 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
+const (
+	defaultOAuthDiscoveryTimeout = 5 * time.Second
+)
+
 // Processor forwards polled control plane commands to the downstream MCP server.
 type Processor interface {
 	Process(ctx context.Context, cmd controlplane.PolledCommand) error
 }
 
-type mcpProcessor struct {
-	logger           *slog.Logger
-	transport        mcpclient.ForwardingTransport
-	tunnelResponder  controlplane.Responder
-	connectionMaxTTL time.Duration
-	metrics          *processorMetrics
-	tunnelID         types.TunnelID
+type processorParams struct {
+	fx.In
+
+	Logger          *slog.Logger
+	Transport       mcpclient.ForwardingTransport
+	TunnelResponder controlplane.Responder
+	MCPConfig       *config.MCPConfig
+	OAuthHTTPClient *http.Client `name:"mcp_client"`
+	ControlPlaneCfg *config.ControlPlaneConfig
+	MeterProvider   *sdkmetric.MeterProvider
 }
 
-type forwardedNotification struct {
-	Kind   string          `json:"kind"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params,omitempty"`
+type mcpProcessor struct {
+	logger            *slog.Logger
+	transport         mcpclient.ForwardingTransport
+	tunnelResponder   controlplane.Responder
+	connectionMaxTTL  time.Duration
+	metrics           *processorMetrics
+	tunnelID          types.TunnelID
+	oauthHTTPClient   *http.Client
+	oauthMetadataURLs []*url.URL
 }
 
 // NewProcessor constructs a Processor that uses the provided transport.
-func NewProcessor(logger *slog.Logger, transport mcpclient.ForwardingTransport, tunnelResponder controlplane.Responder, mcpConfig *config.MCPConfig, controlPlaneCfg *config.ControlPlaneConfig, meterProvider *sdkmetric.MeterProvider) (Processor, error) {
-	if logger == nil {
+func NewProcessor(p processorParams) (Processor, error) {
+	if p.Logger == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil logger")
 	}
-	if transport == nil {
+	if p.Transport == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil transport")
 	}
-	if tunnelResponder == nil {
+	if p.TunnelResponder == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil responder")
 	}
-	if mcpConfig == nil {
+	if p.MCPConfig == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil MCP config")
 	}
-	if mcpConfig.ConnectionMaxTTL <= 0 {
+	if p.MCPConfig.ConnectionMaxTTL <= 0 {
 		return nil, fmt.Errorf("dispatcher processor: non-positive MCP connection TTL")
 	}
-	if controlPlaneCfg == nil {
+	if p.ControlPlaneCfg == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil control-plane config")
 	}
-	if meterProvider == nil {
+	if p.MeterProvider == nil {
 		return nil, fmt.Errorf("dispatcher processor: nil meter provider")
 	}
-	baseLogger := logger.With(tclog.FieldComponent, tclog.ComponentDispatcher)
+	if p.OAuthHTTPClient == nil {
+		return nil, fmt.Errorf("dispatcher processor: nil oauth http client")
+	}
 
-	meter := meterProvider.Meter("dispatcher")
+	baseLogger := p.Logger.With(tclog.FieldComponent, tclog.ComponentDispatcher)
+
+	meter := p.MeterProvider.Meter("dispatcher")
 	processorMetrics, err := newProcessorMetrics(meter)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher processor: %w", err)
 	}
 
+	metadataURLs := p.MCPConfig.OAuthResourceMetadataURLs
+	if len(metadataURLs) == 0 {
+		return nil, fmt.Errorf("dispatcher processor: missing OAuth resource metadata URLs")
+	}
+
 	return &mcpProcessor{
-		logger:           baseLogger,
-		transport:        transport,
-		tunnelResponder:  tunnelResponder,
-		connectionMaxTTL: mcpConfig.ConnectionMaxTTL,
-		metrics:          processorMetrics,
-		tunnelID:         controlPlaneCfg.TunnelID,
+		logger:            baseLogger,
+		transport:         p.Transport,
+		tunnelResponder:   p.TunnelResponder,
+		connectionMaxTTL:  p.MCPConfig.ConnectionMaxTTL,
+		metrics:           processorMetrics,
+		tunnelID:          p.ControlPlaneCfg.TunnelID,
+		oauthHTTPClient:   p.OAuthHTTPClient,
+		oauthMetadataURLs: metadataURLs,
 	}, nil
 }
 
@@ -142,9 +166,38 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 
 	statusCode, respHeader, err := conn.Write(ctx, cmd.Headers(), req)
-	if err != nil {
-		logger.ErrorContext(ctx, "failed to forward command to MCP server", slog.String("error", err.Error()))
-		return fmt.Errorf("write: %w", err)
+	if err != nil || statusCode >= http.StatusBadRequest {
+		status := statusCode
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
+		if encodeErr != nil {
+			logger.ErrorContext(ctx, "failed to encode MCP error response", slog.String("error", encodeErr.Error()))
+			return fmt.Errorf("encode error response: %w", encodeErr)
+		}
+
+		if respHeader == nil {
+			respHeader = http.Header{}
+		}
+		if respHeader.Get("Content-Type") == "" {
+			respHeader = respHeader.Clone()
+			respHeader.Set("Content-Type", "application/json")
+		}
+
+		tunnelResponse := types.NewTunnelResponse(encodedError, status, respHeader)
+		if tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, requestID, tunnelResponse); postErr != nil {
+			attrs := []any{slog.String("error", postErr.Error())}
+			if tsRequestID != "" {
+				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+			}
+			logger.ErrorContext(ctx, "failed to post error response to control plane", attrs...)
+			return postErr
+		}
+
+		p.metrics.recordCommandLatencies(ctx, p.tunnelID, status, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+		logger.WarnContext(ctx, "dispatcher received error from MCP server", slog.Int("status_code", status))
+		return nil
 	}
 
 	if _, ok := tunnelctx.SessionIDFromContext(ctx); !ok {
@@ -181,9 +234,40 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	return nil
 }
 
-func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger *slog.Logger, _ controlplane.OauthDiscoveryCommand) error {
-	logger.WarnContext(ctx, "polled command was an OAuth discovery command; dispatcher does not support it yet")
-	return fmt.Errorf("unsupported command type oauth_discovery")
+func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger *slog.Logger, cmd controlplane.OauthDiscoveryCommand) error {
+	if len(p.oauthMetadataURLs) == 0 {
+		return fmt.Errorf("dispatcher processor: missing oauth metadata URLs")
+	}
+
+	resp, err := fetchOAuthMetadata(ctx, p.oauthHTTPClient, p.oauthMetadataURLs, logger)
+	if err != nil {
+		logger.ErrorContext(ctx, "failed to fetch oauth discovery metadata", slog.String("error", err.Error()))
+		return err
+	}
+
+	tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), resp)
+	if postErr != nil {
+		attrs := []any{slog.String("error", postErr.Error())}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		if errors.Is(postErr, context.DeadlineExceeded) || errors.Is(postErr, context.Canceled) {
+			logger.WarnContext(ctx, "context canceled while posting oauth discovery response", attrs...)
+		} else {
+			logger.ErrorContext(ctx, "failed to post oauth discovery response to control plane", attrs...)
+		}
+		return postErr
+	}
+
+	latencyRecorded := &latencyFlags{}
+	metricAttrs := []attribute.KeyValue{
+		attribute.String("request_kind", "oauth_discovery"),
+	}
+	p.metrics.recordCommandLatencies(ctx, p.tunnelID, resp.ResponseCode(), metricAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+
+	logger.InfoContext(ctx, "dispatcher delivered oauth discovery response to control plane",
+		slog.Int("status_code", resp.ResponseCode()))
+	return nil
 }
 
 // forwardResponses streams MCP responses for the request to the control plane
@@ -250,6 +334,12 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 
 		logger.DebugContext(ctx, "dispatcher received response from MCP server", attrsToArgs(messageSummaryAttrs(response))...)
 
+		encodedResponse, err := jsonrpc.EncodeMessage(response)
+		if err != nil || len(encodedResponse) == 0 {
+			logger.ErrorContext(ctx, "failed to encode response from MCP server", slog.String("error", err.Error()))
+			return
+		}
+
 		// per https://modelcontextprotocol.io/specification/2025-06-18/basic ,
 		// Responses MUST include the same ID as the request they correspond to.
 		// Notifications MUST NOT include an ID.
@@ -269,11 +359,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			responseHeaders.Set("Content-Type", "application/json")
 		}
 
-		tunnelResponse := types.NewTunnelResponse(response, responseCode, responseHeaders)
-		if tunnelResponse.JSONRPC() == nil {
-			logger.ErrorContext(ctx, "tunnel response missing JSON-RPC payload")
-			return
-		}
+		tunnelResponse := types.NewTunnelResponse(encodedResponse, responseCode, responseHeaders)
 
 		if tsRequestID, err := p.tunnelResponder.PostResponse(ttlCtx, cmd.RequestID(), tunnelResponse); err != nil {
 			attrs := []any{slog.String("error", err.Error())}
@@ -332,6 +418,30 @@ func attrsToArgs(attrs []slog.Attr) []any {
 		args[i] = attr
 	}
 	return args
+}
+
+func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error) ([]byte, error) {
+	if req == nil {
+		return nil, fmt.Errorf("nil request provided to build error response")
+	}
+	if statusCode == 0 {
+		statusCode = http.StatusInternalServerError
+	}
+	message := http.StatusText(statusCode)
+	if message == "" {
+		message = "mcp transport error"
+	}
+	if cause != nil {
+		message = fmt.Sprintf("%s: %v", message, cause)
+	}
+	resp := &jsonrpc.Response{
+		ID: req.ID,
+		Error: &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: message,
+		},
+	}
+	return jsonrpc.EncodeMessage(resp)
 }
 
 func requestKindAttributes(req *jsonrpc.Request) []attribute.KeyValue {

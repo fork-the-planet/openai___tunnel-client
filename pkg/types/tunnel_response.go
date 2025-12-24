@@ -1,10 +1,10 @@
 package types
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
-
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
 // ResponseType enumerates the kinds of responses that can be returned to the
@@ -18,12 +18,15 @@ const (
 	// ResponseTypeNotificationAcknowledgment indicates the payload acknowledges a
 	// notification that produced no JSON-RPC response body.
 	ResponseTypeNotificationAcknowledgment
+	// ResponseTypeOAuthDiscovery indicates the payload contains OAuth discovery
+	// metadata fetched from the MCP server.
+	ResponseTypeOAuthDiscovery
 )
 
 // TunnelResponse bundles the MCP response metadata (status code + headers) with
 // either a JSON-RPC response message or a notification acknowledgement.
 type TunnelResponse struct {
-	response     *jsonrpc.Response
+	response     json.RawMessage
 	headers      http.Header
 	responseCode int
 	responseType ResponseType
@@ -32,12 +35,23 @@ type TunnelResponse struct {
 // NewTunnelResponse constructs a TunnelResponse, defensively copying the
 // provided headers map so callers can mutate their copy without affecting the
 // payload delivered to tunnel-service.
-func NewTunnelResponse(response *jsonrpc.Response, code int, headers http.Header) *TunnelResponse {
+func NewTunnelResponse(response json.RawMessage, code int, headers http.Header) *TunnelResponse {
 	return &TunnelResponse{
 		response:     response,
 		headers:      cloneHeaders(headers),
 		responseCode: code,
 		responseType: ResponseTypeJSONRPCResponse,
+	}
+}
+
+// NewOAuthDiscoveryResponse constructs a TunnelResponse representing OAuth
+// metadata fetched from the MCP server.
+func NewOAuthDiscoveryResponse(response json.RawMessage, code int, headers http.Header) *TunnelResponse {
+	return &TunnelResponse{
+		response:     response,
+		headers:      cloneHeaders(headers),
+		responseCode: code,
+		responseType: ResponseTypeOAuthDiscovery,
 	}
 }
 
@@ -51,37 +65,25 @@ func NewNotificationAck(code int, headers http.Header) *TunnelResponse {
 	}
 }
 
-// JSONRPC returns the underlying JSON-RPC response message.
-func (t *TunnelResponse) JSONRPC() *jsonrpc.Response {
-	if t == nil {
-		return nil
-	}
+// Payload returns the raw JSON payload for the response.
+func (t *TunnelResponse) Payload() json.RawMessage {
 	return t.response
 }
 
 // Type returns the response type enum.
 func (t *TunnelResponse) Type() ResponseType {
-	if t == nil {
-		return ResponseTypeJSONRPCResponse
-	}
 	return t.responseType
 }
 
 // ResponseCode returns the HTTP status code observed when forwarding the
 // request to the MCP server.
 func (t *TunnelResponse) ResponseCode() int {
-	if t == nil {
-		return 0
-	}
 	return t.responseCode
 }
 
 // Headers returns a defensive copy of the response headers map.
 func (t *TunnelResponse) Headers() http.Header {
-	if t == nil || t.headers == nil {
-		return nil
-	}
-	return t.headers.Clone()
+	return cloneHeaders(t.headers)
 }
 
 // Validate returns an error if the response is structurally invalid.
@@ -89,11 +91,22 @@ func (t *TunnelResponse) Validate() error {
 	if t == nil {
 		return errors.New("tunnel response is nil")
 	}
-	if t.responseType == ResponseTypeNotificationAcknowledgment && t.response != nil {
-		return errors.New("notification acknowledgments must not include a jsonrpc response")
-	}
-	if t.responseType != ResponseTypeNotificationAcknowledgment && t.response == nil {
-		return errors.New("jsonrpc response is required")
+
+	switch t.responseType {
+	case ResponseTypeNotificationAcknowledgment:
+		if len(t.response) > 0 {
+			return errors.New("notification acknowledgments must not include a jsonrpc response")
+		}
+	case ResponseTypeOAuthDiscovery:
+		if len(t.response) == 0 {
+			return errors.New("oauth discovery response is required")
+		}
+	case ResponseTypeJSONRPCResponse:
+		if len(t.response) == 0 {
+			return errors.New("jsonrpc response is required")
+		}
+	default:
+		return fmt.Errorf("unknown response type %d", t.responseType)
 	}
 	return nil
 }

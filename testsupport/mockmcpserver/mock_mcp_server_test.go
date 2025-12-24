@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	t.Parallel()
 
 	server := NewMockMCPServer(
-		WithOAuth(),
+		WithOAuthDiscoveryResources(),
 		WithCalls(
 			Call{
 				Tool:   "ping",
@@ -207,4 +208,88 @@ func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	if err := server.WaitForRequests(ctx, 1); err != nil {
 		t.Fatalf("wait for requests: %v", err)
 	}
+}
+
+func TestMockMCPServerOAuthProtection(t *testing.T) {
+	t.Parallel()
+
+	server := NewMockMCPServer(
+		WithOAuthProtection(),
+		WithCalls(
+			Call{
+				Tool:   "ping",
+				Result: json.RawMessage(`{"ok":true}`),
+			},
+		),
+	)
+	server.Start(t)
+
+	baseURL := server.BaseURL()
+	if baseURL == nil {
+		t.Fatal("mock MCP server did not expose a base URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Unauthorized initialize should return 401 with WWW-Authenticate header.
+	initPayload := `{"jsonrpc":"2.0","id":"init-unauth","method":"initialize","params":{"protocolVersion":"2025-06-18"}}`
+	resp, err := http.Post(baseURL.String(), "application/json", strings.NewReader(initPayload))
+	if err != nil {
+		t.Fatalf("POST initialize without auth: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized init status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+	if authz := resp.Header.Get("WWW-Authenticate"); authz == "" || !strings.Contains(authz, wellKnownOAuthProtectedResourcePath) {
+		t.Fatalf("WWW-Authenticate header missing metadata URL: %q", authz)
+	}
+
+	// Metadata remains public.
+	metadataURL := baseURL.ResolveReference(&url.URL{Path: wellKnownOAuthProtectedResourcePath})
+	metadataResp, err := http.Get(metadataURL.String())
+	if err != nil {
+		t.Fatalf("GET metadata: %v", err)
+	}
+	defer func() {
+		_ = metadataResp.Body.Close()
+	}()
+	if metadataResp.StatusCode != http.StatusOK {
+		t.Fatalf("metadata status = %d, want %d", metadataResp.StatusCode, http.StatusOK)
+	}
+
+	// Authorized client can initialize and call tools.
+	authClient := &http.Client{
+		Transport: roundTripperWithBearer{token: "sk-1234567890abcdef", base: http.DefaultTransport},
+		Timeout:   3 * time.Second,
+	}
+	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   baseURL.String(),
+		HTTPClient: authClient,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client with auth: %v", err)
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ping"}); err != nil {
+		t.Fatalf("call ping with auth: %v", err)
+	}
+	if err := server.WaitForRequests(ctx, 1); err != nil {
+		t.Fatalf("wait for requests: %v", err)
+	}
+}
+
+type roundTripperWithBearer struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (r roundTripperWithBearer) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+r.token)
+	return r.base.RoundTrip(clone)
 }

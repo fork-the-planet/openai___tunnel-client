@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/require"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -25,6 +26,7 @@ func TestNewMcpClient_DefaultTransport(t *testing.T) {
 		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
 		MeterProvider: sdkmetric.NewMeterProvider(),
 	}
+	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 
 	outputs, err := newMcpClient(params)
 	if err != nil {
@@ -59,6 +61,7 @@ func TestNewMcpClient_LoggingTransport(t *testing.T) {
 		Logger:        logger,
 		MeterProvider: sdkmetric.NewMeterProvider(),
 	}
+	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 
 	outputs, err := newMcpClient(params)
 	if err != nil {
@@ -116,6 +119,7 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
 		MeterProvider: sdkmetric.NewMeterProvider(),
 	}
+	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 
 	outputs, err := newMcpClient(params)
 	if err != nil {

@@ -258,6 +258,9 @@ func (h *Harness) startClient(t testing.TB) {
 	}
 	cfg.ControlPlane.BaseURL = ctrlURL
 	cfg.MCP.ServerURL = mcpURL
+	if err := cfg.MCP.BootstrapOAuthResourceMetadataURLs(); err != nil {
+		t.Fatalf("bootstrap MCP OAuth metadata URLs: %v", err)
+	}
 	logWriter := h.logWriter
 	if logWriter == nil {
 		logWriter = io.Discard

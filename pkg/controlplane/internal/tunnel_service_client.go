@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
@@ -137,28 +136,20 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 		return "", fmt.Errorf("controlplane responder: %w", err)
 	}
 
-	rpcPayload := response.JSONRPC()
-
-	var rawResponse json.RawMessage
-	if rpcPayload != nil {
-		encoded, err := jsonrpc.EncodeMessage(rpcPayload)
-		if err != nil {
-			return "", fmt.Errorf("controlplane responder: encode jsonrpc response: %w", err)
-		}
-		rawResponse = json.RawMessage(encoded)
-	}
-
 	payload := wiretypes.TunnelResponsePayload{
 		RequestID:       requestID.String(),
 		ResponseHeaders: response.Headers(),
 		ResponseCode:    response.ResponseCode(),
 		ResponseType:    wiretypes.ResponsePayloadJSONRPC,
 	}
-	if len(rawResponse) > 0 {
+	if rawResponse := response.Payload(); len(rawResponse) > 0 {
 		payload.JSONResponse = rawResponse
 	}
-	if response.Type() == types.ResponseTypeNotificationAcknowledgment {
+	switch response.Type() {
+	case types.ResponseTypeNotificationAcknowledgment:
 		payload.ResponseType = wiretypes.ResponsePayloadNotifyAck
+	case types.ResponseTypeOAuthDiscovery:
+		payload.ResponseType = wiretypes.ResponsePayloadOAuth
 	}
 
 	body, err := json.Marshal(payload)

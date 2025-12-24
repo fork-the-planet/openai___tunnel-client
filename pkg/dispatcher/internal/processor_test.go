@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +27,21 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
+
+func decodeJSONRPCResponse(t *testing.T, raw json.RawMessage) *jsonrpc.Response {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+
+	msg, err := jsonrpc.DecodeMessage(raw)
+	require.NoError(t, err, "decode jsonrpc response")
+
+	resp, ok := msg.(*jsonrpc.Response)
+	require.True(t, ok, "expected JSON-RPC response message")
+
+	return resp
+}
 
 func TestProcessorForwardResponses(t *testing.T) {
 	t.Parallel()
@@ -59,9 +76,15 @@ func TestProcessorForwardResponses(t *testing.T) {
 	processorLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	forwardingTransport := mcpclient.NewForwardingTransport(clientTransport)
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(processorLogger, forwardingTransport, responder, &config.MCPConfig{
-		ConnectionMaxTTL: 2 * time.Second,
-	}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          processorLogger,
+		Transport:       forwardingTransport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, 2*time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	params := mcp.InitializeParams{
@@ -96,7 +119,7 @@ func TestProcessorForwardResponses(t *testing.T) {
 
 	got := responder.waitForResponse(t)
 	require.Equal(t, command.id, got.requestID)
-	resp := got.response.JSONRPC()
+	resp := decodeJSONRPCResponse(t, got.response.Payload())
 	require.NotNil(t, resp, "expected JSON-RPC response payload")
 	require.Nil(t, resp.Error)
 
@@ -165,9 +188,15 @@ func TestProcessorStreamableNotificationsBeforeResponse(t *testing.T) {
 	processorLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	forwardingTransport := mcpclient.NewForwardingTransport(clientTransport)
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(processorLogger, forwardingTransport, responder, &config.MCPConfig{
-		ConnectionMaxTTL: 5 * time.Second,
-	}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          processorLogger,
+		Transport:       forwardingTransport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, 5*time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	params := mcp.InitializeParams{
@@ -202,7 +231,7 @@ func TestProcessorStreamableNotificationsBeforeResponse(t *testing.T) {
 
 	got := responder.waitForResponse(t)
 	require.Equal(t, command.id, got.requestID)
-	resp := got.response.JSONRPC()
+	resp := decodeJSONRPCResponse(t, got.response.Payload())
 	require.NotNil(t, resp, "expected JSON-RPC response payload")
 	require.Nil(t, resp.Error)
 
@@ -243,9 +272,15 @@ func TestProcessorAcknowledgesNotifications(t *testing.T) {
 	processorLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	forwardingTransport := mcpclient.NewForwardingTransport(clientTransport)
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(processorLogger, forwardingTransport, responder, &config.MCPConfig{
-		ConnectionMaxTTL: 2 * time.Second,
-	}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          processorLogger,
+		Transport:       forwardingTransport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, 2*time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	req := &jsonrpc.Request{
@@ -265,7 +300,7 @@ func TestProcessorAcknowledgesNotifications(t *testing.T) {
 
 	got := responder.waitForResponse(t)
 	require.Equal(t, command.id, got.requestID)
-	require.Nil(t, got.response.JSONRPC(), "notification acknowledgements must not carry JSON-RPC payloads")
+	require.Empty(t, got.response.Payload(), "notification acknowledgements must not carry JSON-RPC payloads")
 	require.Equal(t, types.ResponseTypeNotificationAcknowledgment, got.response.Type(), "notification acknowledgements must set the ack response type")
 }
 
@@ -314,7 +349,15 @@ func TestProcessorLogsIncludeRequestAndSessionID(t *testing.T) {
 				},
 			}
 			meterProvider := newTestMeterProvider(t)
-			processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+			processor, err := NewProcessor(processorParams{
+				Logger:          logger,
+				Transport:       transport,
+				TunnelResponder: responder,
+				MCPConfig:       newTestMCPConfig(t, time.Second),
+				OAuthHTTPClient: &http.Client{},
+				ControlPlaneCfg: newTestControlPlaneConfig(t),
+				MeterProvider:   meterProvider,
+			})
 			require.NoError(t, err)
 
 			id, err := jsonrpc.MakeID("session-log")
@@ -365,7 +408,15 @@ func TestProcessorOverridesContentTypeHeader(t *testing.T) {
 	}
 
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	cmd := &fakePolledCommand{
@@ -384,9 +435,61 @@ func TestProcessorOverridesContentTypeHeader(t *testing.T) {
 	require.Equal(t, cmd.id, resp.requestID)
 	require.Equal(t, "application/json", resp.response.Headers().Get("Content-Type"))
 
-	jsonResp := resp.response.JSONRPC()
+	jsonResp := decodeJSONRPCResponse(t, resp.response.Payload())
 	require.NotNil(t, jsonResp)
 	require.Equal(t, id, jsonResp.ID)
+}
+
+func TestProcessorReturnsErrorResponseOnWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	id, err := jsonrpc.MakeID("unauthorized-call")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{
+		conn: &stubForwardingConnection{
+			statusCode: http.StatusUnauthorized,
+			writeErr:   fmt.Errorf("unauthorized"),
+		},
+	}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("unauthorized-request"),
+		message:    &jsonrpc.Request{ID: id, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-unauthorized",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, processor.Process(ctx, cmd))
+
+	resp := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, resp.requestID)
+	require.Equal(t, http.StatusUnauthorized, resp.response.ResponseCode())
+	require.Equal(t, "application/json", resp.response.Headers().Get("Content-Type"))
+
+	rpcResp := decodeJSONRPCResponse(t, resp.response.Payload())
+	require.NotNil(t, rpcResp)
+	require.NotNil(t, rpcResp.Error)
+	require.Contains(t, rpcResp.Error.Error(), "unauthorized")
 }
 
 func TestProcessorPropagatesControlPlaneCommandRequestID(t *testing.T) {
@@ -406,7 +509,15 @@ func TestProcessorPropagatesControlPlaneCommandRequestID(t *testing.T) {
 	}}
 
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -455,7 +566,15 @@ func TestProcessorRecordsEndToEndLatency(t *testing.T) {
 		},
 	}
 
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, controlPlaneCfg, meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: controlPlaneCfg,
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	enqueuedAt := time.Now().Add(-750 * time.Millisecond)
@@ -522,7 +641,15 @@ func TestProcessorRecordsNotificationLatency(t *testing.T) {
 		},
 	}
 
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, controlPlaneCfg, meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: controlPlaneCfg,
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	enqueuedAt := time.Now().Add(-500 * time.Millisecond)
@@ -582,7 +709,15 @@ func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
 	responder := newRecordingResponder()
 	transport := &failingForwardingTransport{err: errors.New("connect failed")}
 
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	cmd := &fakePolledCommand{
@@ -618,7 +753,15 @@ func TestProcessorRequiresShardToken(t *testing.T) {
 	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
 
 	meterProvider := newTestMeterProvider(t)
-	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
 	require.NoError(t, err)
 
 	cmd := &fakePolledCommand{
@@ -631,6 +774,60 @@ func TestProcessorRequiresShardToken(t *testing.T) {
 	err = processor.Process(context.Background(), cmd)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing shard token")
+}
+
+func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"resource":"https://example.com","scopes_supported":["read"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+	meterProvider := newTestMeterProvider(t)
+
+	cfg := &config.MCPConfig{
+		ServerURL:             serverURL,
+		ConnectionMaxTTL:      2 * time.Second,
+		MaxConcurrentRequests: 1,
+	}
+	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       cfg,
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakeOauthDiscoveryCommand{
+		id:         types.RequestID("oauth-1"),
+		enqueuedAt: time.Now().Add(-time.Second),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-oauth",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.NoError(t, err)
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeOAuthDiscovery, got.response.Type())
+	require.Equal(t, http.StatusOK, got.response.ResponseCode())
+	require.NotEmpty(t, got.response.Payload())
+	require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
 }
 
 type recordingResponder struct {
@@ -691,6 +888,25 @@ func newTestControlPlaneConfig(t *testing.T) *config.ControlPlaneConfig {
 	}
 }
 
+func newTestMCPConfig(t *testing.T, ttl time.Duration) *config.MCPConfig {
+	t.Helper()
+
+	serverURL, err := url.Parse("https://example.com/mcp")
+	require.NoError(t, err)
+
+	if ttl <= 0 {
+		ttl = time.Second
+	}
+
+	cfg := &config.MCPConfig{
+		ServerURL:             serverURL,
+		ConnectionMaxTTL:      ttl,
+		MaxConcurrentRequests: 2,
+	}
+	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
+	return cfg
+}
+
 func findHistogram(rm metricdata.ResourceMetrics, name string) (metricdata.Histogram[float64], bool) {
 	for _, scope := range rm.ScopeMetrics {
 		for _, m := range scope.Metrics {
@@ -741,10 +957,12 @@ func (s *failingForwardingTransport) Connect(context.Context) (mcpclient.Forward
 type stubForwardingConnection struct {
 	responseHeaders http.Header
 	response        jsonrpc.Message
+	statusCode      int
+	writeErr        error
 }
 
 func (c *stubForwardingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
-	return 0, c.responseHeaders, nil
+	return c.statusCode, c.responseHeaders, c.writeErr
 }
 
 func (c *stubForwardingConnection) Read(context.Context) (jsonrpc.Message, error) {
@@ -798,3 +1016,18 @@ func (f *fakePolledCommand) SessionID() (string, bool) {
 	}
 	return *f.sessionID, true
 }
+
+type fakeOauthDiscoveryCommand struct {
+	id         types.RequestID
+	enqueuedAt time.Time
+	polledAt   time.Time
+	headers    http.Header
+	shardToken string
+}
+
+func (f *fakeOauthDiscoveryCommand) RequestID() types.RequestID { return f.id }
+func (f *fakeOauthDiscoveryCommand) EnqueuedAt() time.Time      { return f.enqueuedAt }
+func (f *fakeOauthDiscoveryCommand) PolledAt() time.Time        { return f.polledAt }
+func (f *fakeOauthDiscoveryCommand) Headers() http.Header       { return f.headers }
+func (f *fakeOauthDiscoveryCommand) ShardToken() string         { return f.shardToken }
+func (f *fakeOauthDiscoveryCommand) SessionID() (string, bool)  { return "", false }
