@@ -66,8 +66,8 @@ func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
 				if resp.ResponseCode != http.StatusOK {
 					target.Fatalf("tool call response code mismatch: %d", resp.ResponseCode)
 				}
-				if len(resp.JSONRPCResponse) == 0 {
-					target.Fatalf("tool call missing rpc_resp payload")
+				if len(resp.JSONResponse) == 0 {
+					target.Fatalf("tool call missing resp_json payload")
 				}
 			},
 		},
@@ -129,7 +129,7 @@ func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
 			StructuredContent map[string]any `json:"structuredContent"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal(toolResponse.JSONRPCResponse, &rpcPayload); err != nil {
+	if err := json.Unmarshal(toolResponse.JSONResponse, &rpcPayload); err != nil {
 		t.Fatalf("decode tool response payload: %v", err)
 	}
 	msg, _ := rpcPayload.Result.StructuredContent["message"].(string)

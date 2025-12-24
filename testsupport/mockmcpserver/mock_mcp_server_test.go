@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 func TestMockMCPServerUsage(t *testing.T) {
@@ -127,5 +129,82 @@ func TestMockMCPServerUsage(t *testing.T) {
 	}
 	if reqs[0].Tool != "ping" || reqs[1].Tool != "stream" {
 		t.Fatalf("unexpected request order: %+v", reqs)
+	}
+}
+
+func TestMockMCPServerOAuthMetadata(t *testing.T) {
+	t.Parallel()
+
+	server := NewMockMCPServer(
+		WithOAuth(),
+		WithCalls(
+			Call{
+				Tool:   "ping",
+				Result: json.RawMessage(`{"ok":true}`),
+			},
+		),
+	)
+	server.Start(t)
+
+	baseURL := server.BaseURL()
+	if baseURL == nil {
+		t.Fatal("mock MCP server did not expose a base URL")
+	}
+	metadataURL := baseURL.ResolveReference(&url.URL{Path: wellKnownOAuthProtectedResourcePath})
+
+	resp, err := http.Get(metadataURL.String())
+	if err != nil {
+		t.Fatalf("GET metadata: %v", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metadata status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var metadata oauthex.ProtectedResourceMetadata
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if metadata.Resource != baseURL.String() {
+		t.Fatalf("metadata resource = %q, want %q", metadata.Resource, baseURL.String())
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+
+	optionsReq, err := http.NewRequest(http.MethodOptions, metadataURL.String(), nil)
+	if err != nil {
+		t.Fatalf("create OPTIONS request: %v", err)
+	}
+	optionsResp, err := http.DefaultClient.Do(optionsReq)
+	if err != nil {
+		t.Fatalf("OPTIONS metadata: %v", err)
+	}
+	defer func() {
+		_ = optionsResp.Body.Close()
+	}()
+	if optionsResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("OPTIONS metadata status = %d, want %d", optionsResp.StatusCode, http.StatusNoContent)
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: baseURL.String()}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ping"}); err != nil {
+		t.Fatalf("call ping: %v", err)
+	}
+	if err := server.WaitForRequests(ctx, 1); err != nil {
+		t.Fatalf("wait for requests: %v", err)
 	}
 }

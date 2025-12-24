@@ -73,7 +73,7 @@ type ExpectedResponse struct {
 // ReceivedResponse captures a single payload posted to the mock tunnel-service.
 type ReceivedResponse struct {
 	RequestID       string
-	JSONRPCResponse json.RawMessage
+	JSONResponse    json.RawMessage
 	ResponseHeaders http.Header
 	ResponseCode    int
 	ResponseType    string
@@ -446,7 +446,7 @@ func (m *MockTunnelService) ReceivedResponses(filter ResponseMatchFilter) []Rece
 		}
 		out = append(out, ReceivedResponse{
 			RequestID:       resp.RequestID,
-			JSONRPCResponse: cloneJSON(resp.JSONRPCResponse),
+			JSONResponse:    cloneJSON(resp.JSONResponse),
 			ResponseHeaders: cloneHeader(resp.ResponseHeaders),
 			ResponseCode:    resp.ResponseCode,
 			ResponseType:    resp.ResponseType,
@@ -569,7 +569,7 @@ func (m *MockTunnelService) handleResponse(w http.ResponseWriter, r *http.Reques
 	}
 	record := ReceivedResponse{
 		RequestID:       payload.RequestID,
-		JSONRPCResponse: cloneJSON(payload.JSONRPCResponse),
+		JSONResponse:    cloneJSON(payload.JSONResponse),
 		ResponseHeaders: cloneHeader(payload.ResponseHeaders),
 		ResponseCode:    payload.ResponseCode,
 		ResponseType:    string(payload.ResponseType),
@@ -747,8 +747,8 @@ func assertInitializationResponse(tb testing.TB, resp ReceivedResponse) {
 	if resp.ResponseCode < 200 || resp.ResponseCode >= 300 {
 		failAssertion(tb, "initialize response returned status %d", resp.ResponseCode)
 	}
-	if len(resp.JSONRPCResponse) == 0 {
-		failAssertion(tb, "initialize response missing rpc_resp payload")
+	if len(resp.JSONResponse) == 0 {
+		failAssertion(tb, "initialize response missing resp_json payload")
 	}
 	if resp.ResponseHeaders.Get(sessionHeaderKey) == "" {
 		failAssertion(tb, "initialize response missing %s header", sessionHeaderKey)
@@ -764,7 +764,7 @@ func assertInitializationResponse(tb testing.TB, resp ReceivedResponse) {
 		} `json:"result"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.Unmarshal(resp.JSONRPCResponse, &envelope); err != nil {
+	if err := json.Unmarshal(resp.JSONResponse, &envelope); err != nil {
 		failAssertion(tb, "initialize response invalid JSON-RPC: %v", err)
 		return
 	}
@@ -792,8 +792,8 @@ func assertInitializedNotificationResponse(tb testing.TB, resp ReceivedResponse)
 	if resp.ResponseCode < 200 || resp.ResponseCode >= 300 {
 		failAssertion(tb, "notifications/initialized ack returned status %d", resp.ResponseCode)
 	}
-	if len(resp.JSONRPCResponse) != 0 {
-		failAssertion(tb, "notifications/initialized ack should not include rpc_resp payload")
+	if len(resp.JSONResponse) != 0 {
+		failAssertion(tb, "notifications/initialized ack should not include resp_json payload")
 	}
 }
 

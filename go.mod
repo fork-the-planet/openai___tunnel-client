@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/invopop/jsonschema v0.13.0
 	github.com/jpillora/backoff v1.0.0
-	github.com/modelcontextprotocol/go-sdk v1.1.1-0.20251114014823-9ef2b2742ea1
+	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/panjf2000/ants/v2 v2.11.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/pflag v1.0.6

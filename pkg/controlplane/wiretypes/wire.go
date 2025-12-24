@@ -22,13 +22,14 @@ type ResponsePayloadType string
 const (
 	ResponsePayloadJSONRPC   ResponsePayloadType = "jsonrpc_response"
 	ResponsePayloadNotifyAck ResponsePayloadType = "notify_ack"
+	ResponsePayloadOAuth     ResponsePayloadType = "oauth_discovery_response"
 )
 
 // TunnelResponsePayload mirrors the body posted to POST /v1/tunnel/{tunnel_id}/response when
 // delivering MCP results back to tunnel-service.
 type TunnelResponsePayload struct {
 	RequestID       string              `json:"request_id"`
-	JSONRPCResponse json.RawMessage     `json:"rpc_resp,omitempty"`
+	JSONResponse    json.RawMessage     `json:"resp_json,omitempty"`
 	ResponseHeaders http.Header         `json:"resp_headers,omitempty"`
 	ResponseCode    int                 `json:"resp_code,omitempty"`
 	ResponseType    ResponsePayloadType `json:"resp_type,omitempty"`

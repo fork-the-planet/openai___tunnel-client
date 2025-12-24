@@ -272,7 +272,7 @@ func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
 
 	var payload struct {
 		RequestID   string          `json:"request_id"`
-		RPCResp     json.RawMessage `json:"rpc_resp"`
+		RPCResp     json.RawMessage `json:"resp_json"`
 		RespHeaders http.Header     `json:"resp_headers"`
 		RespCode    int             `json:"resp_code"`
 		RespType    string          `json:"resp_type"`

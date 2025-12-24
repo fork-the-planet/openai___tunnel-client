@@ -59,8 +59,8 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 						if resp.ResponseCode != http.StatusAccepted {
 							tb.Fatalf("expected 202 for notification, got %d", resp.ResponseCode)
 						}
-						if len(resp.JSONRPCResponse) != 0 {
-							tb.Fatalf("notification ack should not include rpc_resp, got %s", string(resp.JSONRPCResponse))
+						if len(resp.JSONResponse) != 0 {
+							tb.Fatalf("notification ack should not include resp_json, got %s", string(resp.JSONResponse))
 						}
 					},
 				},
@@ -115,7 +115,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 
 	payload := map[string]any{
 		"request_id": "cmd-1",
-		"rpc_resp": map[string]any{
+		"resp_json": map[string]any{
 			"jsonrpc": "2.0",
 			"id":      1,
 			"result":  map[string]any{"ok": true},
@@ -195,7 +195,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 	}
 	unmatchedPayload := map[string]any{
 		"request_id": "unexpected-1",
-		"rpc_resp": map[string]any{
+		"resp_json": map[string]any{
 			"jsonrpc": "2.0",
 			"id":      99,
 			"result":  map[string]any{"ok": false},
@@ -236,7 +236,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 	if !responses[0].MatchedCommand || !responses[1].MatchedCommand {
 		t.Fatalf("expected first two responses to match commands: %+v", responses[:2])
 	}
-	if responses[1].ResponseCode != http.StatusAccepted || len(responses[1].JSONRPCResponse) != 0 {
+	if responses[1].ResponseCode != http.StatusAccepted || len(responses[1].JSONResponse) != 0 {
 		t.Fatalf("unexpected notification response: %+v", responses[1])
 	}
 	if responses[2].MatchedCommand {
@@ -307,7 +307,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 		"request_id": initRaw.RequestID,
 		"resp_code":  http.StatusOK,
 		"resp_type":  string(wiretypes.ResponsePayloadJSONRPC),
-		"rpc_resp": map[string]any{
+		"resp_json": map[string]any{
 			"jsonrpc": "2.0",
 			"id":      initRPC.ID,
 			"result": map[string]any{
@@ -554,7 +554,7 @@ func TestMockTunnelServiceBlocksUntilResponseBeforeDeliveringNextCommand(t *test
 			"request_id": requestID,
 			"resp_code":  http.StatusOK,
 			"resp_type":  "jsonrpc_response",
-			"rpc_resp": map[string]any{
+			"resp_json": map[string]any{
 				"jsonrpc": "2.0",
 				"id":      id,
 				"result":  map[string]any{"ok": true},
@@ -671,7 +671,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 		"request_id": "cmd-1",
 		"resp_code":  http.StatusOK,
 		"resp_type":  "jsonrpc_response",
-		"rpc_resp": map[string]any{
+		"resp_json": map[string]any{
 			"jsonrpc": "2.0",
 			"id":      1,
 			"result":  map[string]any{"ok": true},
@@ -730,7 +730,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 		"request_id": "cmd-2",
 		"resp_code":  http.StatusOK,
 		"resp_type":  "jsonrpc_response",
-		"rpc_resp": map[string]any{
+		"resp_json": map[string]any{
 			"jsonrpc": "2.0",
 			"id":      2,
 			"result":  map[string]any{"ok": true},

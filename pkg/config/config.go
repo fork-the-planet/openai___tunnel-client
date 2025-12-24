@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,15 +28,16 @@ const (
 )
 
 const (
-	defaultControlPlaneBaseURL                = "https://api.openai.com"
-	defaultControlPlaneMaxInFlight            = 20
-	maxControlPlaneMaxInFlight                = 10000
-	defaultControlPlanePollTimeout            = 30 * time.Second
-	defaultLogLevel                           = "info"
-	defaultLogFormat                LogFormat = LogFormatUnset
-	defaultHealthListenAddr                   = ":8080"
-	defaultMCPConnectionMaxTTL                = 10 * time.Minute
-	defaultMCPMaxConcurrentRequests           = 10
+	defaultControlPlaneBaseURL                    = "https://api.openai.com"
+	defaultControlPlaneMaxInFlight                = 20
+	maxControlPlaneMaxInFlight                    = 10000
+	defaultControlPlanePollTimeout                = 30 * time.Second
+	defaultLogLevel                               = "info"
+	defaultLogFormat                    LogFormat = LogFormatUnset
+	defaultHealthListenAddr                       = ":8080"
+	defaultMCPConnectionMaxTTL                    = 10 * time.Minute
+	defaultMCPMaxConcurrentRequests               = 10
+	wellKnownOAuthProtectedResourcePath           = "/.well-known/oauth-protected-resource"
 )
 
 const _ = uint(maxControlPlaneMaxInFlight - defaultControlPlaneMaxInFlight)
@@ -96,6 +98,9 @@ type MCPConfig struct {
 	ServerURL             *url.URL
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
+	// OAuthResourceMetadataURLs lists candidate OAuth protected resource metadata
+	// endpoints derived from ServerURL following RFC 9728 discovery rules.
+	OAuthResourceMetadataURLs []*url.URL
 }
 
 // Load builds a Config by combining CLI flag arguments with environment variables.
@@ -581,9 +586,10 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 	}
 
 	return MCPConfig{
-		ServerURL:             serverURL,
-		ConnectionMaxTTL:      ttl,
-		MaxConcurrentRequests: maxConcurrent,
+		ServerURL:                 serverURL,
+		ConnectionMaxTTL:          ttl,
+		MaxConcurrentRequests:     maxConcurrent,
+		OAuthResourceMetadataURLs: buildResourceMetadataURLs(serverURL),
 	}, nil
 }
 
@@ -638,4 +644,29 @@ func parseURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("must include scheme and host")
 	}
 	return parsed, nil
+}
+
+// buildResourceMetadataURLs constructs the ordered list of candidate OAuth
+// protected resource metadata endpoints derived from the MCP server URL. It
+// follows RFC 9728 discovery rules by prioritizing the path-specific well-known
+// URI, then the root well-known URI.
+func buildResourceMetadataURLs(serverURL *url.URL) []*url.URL {
+	base := &url.URL{
+		Scheme: serverURL.Scheme,
+		Host:   serverURL.Host,
+		Path:   wellKnownOAuthProtectedResourcePath,
+	}
+
+	urls := make([]*url.URL, 0, 2)
+
+	pathSuffix := strings.Trim(serverURL.EscapedPath(), "/")
+	if pathSuffix != "" {
+		withPath := *base
+		withPath.Path = path.Join(base.Path, pathSuffix)
+		urls = append(urls, &withPath)
+	}
+
+	urls = append(urls, base)
+
+	return urls
 }

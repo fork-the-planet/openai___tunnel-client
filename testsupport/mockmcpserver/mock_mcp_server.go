@@ -18,10 +18,14 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 type headerContextKey struct{}
+
+const wellKnownOAuthProtectedResourcePath = "/.well-known/oauth-protected-resource"
 
 // Call defines a scripted tool invocation.
 type Call struct {
@@ -72,6 +76,13 @@ func WithKeepalivePings() Option {
 	}
 }
 
+// WithOAuth enables the well-known OAuth protected resource metadata endpoint.
+func WithOAuth() Option {
+	return func(m *MockMCPServer) {
+		m.enableOAuth = true
+	}
+}
+
 type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
@@ -82,7 +93,11 @@ type MockMCPServer struct {
 	baseURL    *url.URL
 	closeOnce  sync.Once
 
+	enableOAuth bool
+
 	injectKeepalivePings bool
+
+	oauthMetadata *oauthex.ProtectedResourceMetadata
 
 	tb atomic.Value // testing.TB
 }
@@ -119,6 +134,10 @@ func (m *MockMCPServer) Start(t testing.TB) {
 
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
 	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if m.enableOAuth && req.URL.Path == wellKnownOAuthProtectedResourcePath {
+			m.serveProtectedResourceMetadata(w, req)
+			return
+		}
 		if req.Method == http.MethodPost {
 			body, err := io.ReadAll(req.Body)
 			if err != nil {
@@ -165,6 +184,11 @@ func (m *MockMCPServer) Start(t testing.TB) {
 	m.server = server
 	m.httpServer = httpServer
 	m.baseURL = parsed
+	if m.enableOAuth {
+		if meta := m.buildProtectedResourceMetadata(parsed); meta != nil {
+			m.oauthMetadata = meta
+		}
+	}
 	m.mu.Unlock()
 
 	m.tb.Store(t)
@@ -471,4 +495,61 @@ func (m *MockMCPServer) failf(format string, args ...any) {
 		return
 	}
 	panic(fmt.Sprintf(format, args...))
+}
+
+func (m *MockMCPServer) serveProtectedResourceMetadata(w http.ResponseWriter, req *http.Request) {
+	handler := auth.ProtectedResourceMetadataHandler(m.getProtectedResourceMetadata())
+	handler.ServeHTTP(w, req)
+}
+
+func (m *MockMCPServer) getProtectedResourceMetadata() *oauthex.ProtectedResourceMetadata {
+	m.mu.Lock()
+	meta := m.oauthMetadata
+	base := m.baseURL
+	enabled := m.enableOAuth
+	m.mu.Unlock()
+
+	if !enabled {
+		return nil
+	}
+	if meta != nil {
+		return meta
+	}
+
+	var resource string
+	if base != nil {
+		copyURL := *base
+		copyURL.Path = ""
+		copyURL.RawQuery = ""
+		copyURL.Fragment = ""
+		resource = copyURL.String()
+	}
+	meta = &oauthex.ProtectedResourceMetadata{
+		Resource:        resource,
+		ScopesSupported: []string{"read", "write"},
+	}
+	if resource != "" {
+		m.mu.Lock()
+		if m.oauthMetadata == nil {
+			m.oauthMetadata = meta
+		} else {
+			meta = m.oauthMetadata
+		}
+		m.mu.Unlock()
+	}
+	return meta
+}
+
+func (m *MockMCPServer) buildProtectedResourceMetadata(base *url.URL) *oauthex.ProtectedResourceMetadata {
+	if base == nil {
+		return nil
+	}
+	copyURL := *base
+	copyURL.Path = ""
+	copyURL.RawQuery = ""
+	copyURL.Fragment = ""
+	return &oauthex.ProtectedResourceMetadata{
+		Resource:        copyURL.String(),
+		ScopesSupported: []string{"read", "write"},
+	}
 }

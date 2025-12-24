@@ -155,7 +155,7 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 		ResponseType:    wiretypes.ResponsePayloadJSONRPC,
 	}
 	if len(rawResponse) > 0 {
-		payload.JSONRPCResponse = rawResponse
+		payload.JSONResponse = rawResponse
 	}
 	if response.Type() == types.ResponseTypeNotificationAcknowledgment {
 		payload.ResponseType = wiretypes.ResponsePayloadNotifyAck
