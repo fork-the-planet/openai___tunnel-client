@@ -35,6 +35,12 @@ export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 
 For the full surface (flags, defaults, advanced knobs), see [`configuration.md`](configuration.md).
 
+### OAuth-protected MCP (supported)
+
+- `Authorization` headers are forwarded through tunnel-service to your MCP server.
+- OAuth discovery GETs are forwarded to the tunnel-client; discovery payloads and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
+- The authorization server itself is not tunneled—if it is only reachable on-prem/behind a firewall and not accessible from the internet or the tunnel-client host, the OAuth flow can fail.
+
 ## 4) Run
 
 ```bash

@@ -45,3 +45,10 @@ flowchart LR
 - **Queueing/backpressure**: the control-plane poller requests up to the number of available slots in the bounded queue to avoid unbounded buffering.
 - **Progress/notifications**: MCP JSON-RPC notifications emitted during long-running calls are currently not relayed back to the control plane.
 - **Streaming semantics**: the client forwards a final JSON-RPC response per request; it does not currently stream intermediate updates back through the control plane.
+
+## OAuth-protected MCP
+
+- Forwards inbound `Authorization` headers to the MCP server via tunnel-client.
+- Handles OAuth discovery by queuing `oauth_discovery` commands; discovery GETs flow through the tunnel-client.
+- Rewrites `WWW-Authenticate` `resource_metadata` and discovery payload `resource` URLs to tunnel-service endpoints for the same `tunnel_id`.
+- The authorization server itself is not tunneled; if it is firewalled/on-prem and unreachable from the internet or the tunnel-client host, the OAuth flow can fail.

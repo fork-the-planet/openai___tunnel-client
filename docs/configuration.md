@@ -51,6 +51,10 @@
   - Env: `MCP_MAX_CONCURRENT_REQUESTS`
   - Default: `10`
 
+**OAuth-protected MCP notes:**
+- Forwards inbound `Authorization` headers and discovery GETs through the tunnel-client; discovery payload `resource` and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
+- The authorization server is not tunneled. If it is only reachable on-prem/behind a firewall and not accessible from the internet or the tunnel-client host, the OAuth flow can fail.
+
 ## Logging
 
 - **Level**
