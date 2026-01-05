@@ -282,7 +282,7 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 	logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
 	out := make([]controlplane.PolledCommand, 0, len(rawCommands))
 	for _, raw := range rawCommands {
-		// Peek discriminator for forward-compat. Missing or empty means JSON-RPC.
+		// Peek discriminator for forward-compat.
 		var probe struct {
 			CommandType wiretypes.CommandType `json:"command_type"`
 		}
@@ -291,8 +291,13 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 			continue
 		}
 
+		if probe.CommandType == "" {
+			logger.WarnContext(ctx, "control-plane command dropped: missing command_type")
+			continue
+		}
+
 		switch probe.CommandType {
-		case "", wiretypes.CommandTypeJSONRPC:
+		case wiretypes.CommandTypeJSONRPC:
 			var rpc wiretypes.RawJSONRPCPolledCommand
 			if err := json.Unmarshal(raw, &rpc); err != nil {
 				logger.WarnContext(ctx, "control-plane command dropped: invalid jsonrpc payload", slog.String("error", err.Error()))

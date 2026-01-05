@@ -279,10 +279,11 @@ func (m *MockTunnelService) appendCommandResponses(commands ...CommandResponse) 
 // NewCommand builds a raw tunnel command payload with the supplied JSON-RPC request and headers.
 func NewCommand(requestID string, jsonrpc json.RawMessage, headers http.Header) json.RawMessage {
 	command := map[string]any{
-		"request_id":  requestID,
-		"jsonrpc":     jsonrpc,
-		"created_at":  time.Now().UTC().Format(time.RFC3339),
-		"shard_token": requestID,
+		"command_type": "jsonrpc",
+		"request_id":   requestID,
+		"jsonrpc":      jsonrpc,
+		"created_at":   time.Now().UTC().Format(time.RFC3339),
+		"shard_token":  requestID,
 	}
 	if hdrs := cloneHeader(headers); hdrs != nil {
 		command["headers"] = hdrs

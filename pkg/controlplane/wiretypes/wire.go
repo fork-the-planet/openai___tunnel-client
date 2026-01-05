@@ -7,7 +7,6 @@ import (
 )
 
 // CommandType is a discriminator for different kinds of polled commands.
-// If absent, clients should assume JSON-RPC for backward compatibility.
 type CommandType string
 
 const (
@@ -47,9 +46,8 @@ type BaseRawPolledCommand struct {
 	// `X-Tunnel-Shard-Token`. The JSON body of the response MUST NOT contain
 	// this token.
 	ShardToken string `json:"shard_token"`
-	// CommandType is an optional discriminator. When omitted, clients should
-	// treat the command as a JSON-RPC command for backward compatibility.
-	CommandType CommandType `json:"command_type,omitempty"`
+	// CommandType is a discriminator for the command payload type.
+	CommandType CommandType `json:"command_type"`
 	CreatedAt   time.Time   `json:"created_at"`
 	Headers     http.Header `json:"headers"`
 }

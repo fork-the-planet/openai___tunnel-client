@@ -53,6 +53,7 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
   "commands":
         [
           {
+                "command_type": "jsonrpc",
                 "request_id": "dc7427fd-eeab-4128-a3a6-aee876de182c",
                 "shard_token": "shard-123",
                 "jsonrpc": {
@@ -150,6 +151,7 @@ func TestTunnelServiceClientPollSkipsInvalidCommands(t *testing.T) {
   "commands":
 	[
           {
+                "command_type": "jsonrpc",
                 "request_id": "",
                 "shard_token": "shard-missing-id",
                 "jsonrpc": {
@@ -157,6 +159,7 @@ func TestTunnelServiceClientPollSkipsInvalidCommands(t *testing.T) {
                 }
           },
           {
+                "command_type": "jsonrpc",
                 "request_id": "valid",
                 "shard_token": "shard-valid",
                 "jsonrpc": {
@@ -164,7 +167,7 @@ func TestTunnelServiceClientPollSkipsInvalidCommands(t *testing.T) {
                   "id": 1,
 		  "method": "ping"
 		},
-		"enqueued_at": "2024-01-01T00:00:00Z"
+		"created_at": "2024-01-01T00:00:00Z"
 	  }
 	]
 }
@@ -692,6 +695,7 @@ func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
 	const body = `{
   "commands": [
     {
+      "command_type": "jsonrpc",
       "request_id": "cmd-1",
       "shard_token": "sh-1",
       "jsonrpc": {"jsonrpc":"2.0","id":1,"method":"initialize"},
@@ -699,6 +703,7 @@ func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
       "headers": {"X": ["y"]}
     },
     {
+      "command_type": "jsonrpc",
       "request_id": "cmd-2",
       "shard_token": "sh-2",
       "jsonrpc": {"jsonrpc":"2.0","id":2,"method":"noop"},
@@ -706,6 +711,7 @@ func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
       "headers": {"X": ["y"]}
     },
     {
+      "command_type": "jsonrpc",
       "request_id": "cmd-3",
       "shard_token": "sh-3",
       "jsonrpc": {"jsonrpc":"2.0","id":3,"method":"noop"},
@@ -904,6 +910,7 @@ func TestTunnelServiceClientPollSkipsUnknownCommandType(t *testing.T) {
     {
       "request_id": "cmd-known",
       "shard_token": "shard-known",
+      "command_type": "jsonrpc",
       "jsonrpc": {"jsonrpc": "2.0", "id": 2, "method": "initialize"},
       "created_at": "2025-10-29T23:08:09Z",
       "headers": {}
