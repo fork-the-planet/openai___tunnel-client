@@ -335,6 +335,84 @@ func TestPollerTagsPollErrors(t *testing.T) {
 	assertHistogramCountWithAttributes(t, rm, metricNameCommandsPollLatency, attribute.Bool("error", true), 1)
 }
 
+func TestPollerDoesNotDropCommandsWhenFetcherExceedsLimit(t *testing.T) {
+	t.Parallel()
+
+	// Real-life scenario: tunnel-service may (incorrectly) return more commands than the
+	// requested limit. The poller must not drop those commands since the service may not
+	// re-deliver them. Instead, the poller should apply backpressure and enqueue them as
+	// the dispatcher drains the queue.
+
+	queueCh := make(chan controlplane.PolledCommand, 1)
+	queue := &chanQueue{ch: queueCh}
+	fetcher := &overLimitFetcher{
+		data: []controlplane.PolledCommand{
+			stubCommand{id: "1"},
+			stubCommand{id: "2"},
+			stubCommand{id: "3"},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		_ = meterProvider.Shutdown(context.Background())
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	// Drain slowly to force backpressure on the second/third enqueue while ensuring
+	// all commands are eventually observed.
+	got := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		select {
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for command %d", i+1)
+		case cmd := <-queueCh:
+			got = append(got, cmd.RequestID().String())
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+
+	cancel()
+	wg.Wait()
+
+	if fetcher.maxLimitSeen > cap(queueCh) {
+		t.Fatalf("fetcher should not be called with limit %d exceeding queue capacity %d", fetcher.maxLimitSeen, cap(queueCh))
+	}
+
+	want := []string{"1", "2", "3"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d commands, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("command order mismatch: got %v want %v", got, want)
+		}
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	assertCounterValue(t, rm, metricNameCommandsPolled, 3)
+	assertCounterValue(t, rm, metricNameCommandsEnqueued, 3)
+}
+
 type chanQueue struct {
 	ch chan controlplane.PolledCommand
 }
@@ -446,6 +524,34 @@ func findGaugeValue(rm metricdata.ResourceMetrics, name string) (int64, bool) {
 		}
 	}
 	return 0, false
+}
+
+type overLimitFetcher struct {
+	data []controlplane.PolledCommand
+
+	mu           sync.Mutex
+	called       bool
+	maxLimitSeen int
+}
+
+func (f *overLimitFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
+	f.mu.Lock()
+	if limit > f.maxLimitSeen {
+		f.maxLimitSeen = limit
+	}
+	first := !f.called
+	if first {
+		f.called = true
+	}
+	f.mu.Unlock()
+
+	if !first {
+		return nil, "", nil
+	}
+	// Intentionally ignore limit to simulate a misbehaving control plane.
+	out := make([]controlplane.PolledCommand, len(f.data))
+	copy(out, f.data)
+	return out, "", nil
 }
 
 func assertCounterValueWithAttributes(t *testing.T, rm metricdata.ResourceMetrics, name string, attr attribute.KeyValue, want int64) {
