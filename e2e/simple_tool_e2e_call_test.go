@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
@@ -23,10 +24,24 @@ func TestHarnessExecuteScenariousWithInitializationAndTool(t *testing.T) {
 func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 	t.Parallel()
 
-	runSimpleToolScenario(t, mockmcpserver.WithKeepalivePings())
+	runSimpleToolScenarioWithHarnessOptions(
+		t,
+		[]harnesspkg.HarnessOption{
+			harnesspkg.WithScenarioTimeout(10 * time.Second),
+		},
+		mockmcpserver.WithKeepalivePings(),
+	)
 }
 
 func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
+	runSimpleToolScenarioWithHarnessOptions(t, nil, mcpOptions...)
+}
+
+func runSimpleToolScenarioWithHarnessOptions(
+	t *testing.T,
+	harnessOptions []harnesspkg.HarnessOption,
+	mcpOptions ...mockmcpserver.Option,
+) {
 	t.Helper()
 
 	const (
@@ -91,8 +106,7 @@ func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
 	}
 	mcpOpts = append(mcpOpts, mcpOptions...)
 
-	h := harnesspkg.NewHarness(
-		t,
+	options := []harnesspkg.HarnessOption{
 		harnesspkg.WithClientConfig(func(cfg *config.Config) {
 			cfg.Logging.Level = slog.LevelDebug
 		}),
@@ -102,7 +116,12 @@ func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
 			mocktunnelservice.WithCommandResponses(toolCommand),
 		),
 		harnesspkg.WithMCPOptions(mcpOpts...),
-	)
+	}
+	if len(harnessOptions) > 0 {
+		options = append(options, harnessOptions...)
+	}
+
+	h := harnesspkg.NewHarness(t, options...)
 
 	h.ExecuteScenarious(t)
 
