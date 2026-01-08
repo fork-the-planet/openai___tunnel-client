@@ -56,53 +56,6 @@ func (l *tunnelEventLogger) LogEvent(event fxevent.Event) {
 	}
 }
 
-func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:           "tunnel-client",
-		Short:         "Tunnel client for the OpenAI MCP control plane",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTunnel(cmd, lookupEnv)
-		},
-	}
-	rootCmd.SetOut(stdout)
-	rootCmd.SetErr(stderr)
-
-	config.RegisterFlags(rootCmd.PersistentFlags())
-
-	writeUsage := func(cmd *cobra.Command) {
-		config.WriteUsage(rootCmd.PersistentFlags(), cmd.OutOrStdout())
-	}
-	rootCmd.SetUsageFunc(func(cmd *cobra.Command) error {
-		writeUsage(cmd)
-		return nil
-	})
-	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		writeUsage(cmd)
-	})
-	rootCmd.Version = tunnelClientVersion()
-	rootCmd.SetVersionTemplate("{{.Version}}\n")
-
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run the tunnel client poller",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTunnel(cmd, lookupEnv)
-		},
-	}
-	runCmd.SetUsageFunc(func(cmd *cobra.Command) error {
-		writeUsage(cmd)
-		return nil
-	})
-	runCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		writeUsage(cmd)
-	})
-	rootCmd.AddCommand(runCmd)
-
-	return rootCmd
-}
-
 func runTunnel(cmd *cobra.Command, lookupEnv func(string) (string, bool)) error {
 	cfg, err := config.LoadFromFlagSet(cmd.Flags(), lookupEnv)
 	if err != nil {
@@ -117,11 +70,4 @@ func runTunnel(cmd *cobra.Command, lookupEnv func(string) (string, bool)) error 
 	)
 	fxApp.Run()
 	return nil
-}
-
-func tunnelClientVersion() string {
-	if version.GitSHA != "" {
-		return fmt.Sprintf("%s (git sha: %s)", version.Version, version.GitSHA)
-	}
-	return version.Version
 }

@@ -44,7 +44,7 @@ For the full surface (flags, defaults, advanced knobs), see [`configuration.md`]
 ## 4) Run
 
 ```bash
-./bin/tunnel-client --log.level=info --log.format=struct-text
+./bin/tunnel-client run --log.level=info --log.format=struct-text
 ```
 
 The process will:

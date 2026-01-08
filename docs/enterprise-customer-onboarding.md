@@ -255,7 +255,7 @@ export CONTROL_PLANE_TUNNEL_ID="<tunnel_id>"
 export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 export CONTROL_PLANE_BASE_URL="<CONTROL_PLANE_BASE_URL>"
 
-./tunnel-client --log.level=info --log.format=json
+./tunnel-client run --log.level=info --log.format=json
 ```
 
 #### Docker

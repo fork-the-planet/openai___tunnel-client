@@ -24,8 +24,8 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 
 ## CLI
 
-- `tunnel-client` defaults to the `run` command.
-- `tunnel-client run` is equivalent and provided for future subcommands.
+- `tunnel-client` shows help and available subcommands.
+- `tunnel-client run` starts the client poller.
 
 ## License
 This project is licensed under the [Apache License 2.0](LICENSE).

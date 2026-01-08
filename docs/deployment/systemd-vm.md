@@ -15,7 +15,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/tunnel-client
-ExecStart=/opt/tunnel-client/tunnel-client --log.level=info --log.format=json
+ExecStart=/opt/tunnel-client/tunnel-client run --log.level=info --log.format=json
 Restart=always
 RestartSec=2
 

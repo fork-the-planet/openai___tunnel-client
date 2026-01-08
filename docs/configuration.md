@@ -7,8 +7,8 @@
 
 ## Commands
 
-- `run` (default): start the tunnel client poll loop.
-- `tunnel-client` and `tunnel-client run` are equivalent.
+- `run`: start the tunnel client poll loop.
+- `tunnel-client` with no subcommand prints help and available commands.
 
 ## Control plane
 
@@ -106,13 +106,13 @@ export CONTROL_PLANE_API_KEY="sk-..."
 export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
 export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 
-./bin/tunnel-client --log.level=info --log.format=struct-text
+./bin/tunnel-client run --log.level=info --log.format=struct-text
 ```
 
 ### API key via file
 
 ```bash
-./bin/tunnel-client \
+./bin/tunnel-client run \
   --control-plane.tunnel-id=tunnel_<abc> \
   --control-plane.api-key=file:/run/secrets/control-plane-api-key \
   --mcp.server-url=https://mcp.internal.example.com/mcp \

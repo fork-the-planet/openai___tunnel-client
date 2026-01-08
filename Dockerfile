@@ -33,4 +33,4 @@ ENTRYPOINT ["/entrypoint.sh"]
 FROM runtime-base
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/bin/tunnel-client"]
+ENTRYPOINT ["/usr/bin/tunnel-client", "run"]
