@@ -683,6 +683,80 @@ func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
 	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
 }
 
+func TestTunnelServiceClientFetchTunnelMetadata(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/tunnels/"+url.PathEscape(tunnelID) {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"tunnel_123","name":"Demo tunnel","description":"demo"}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	metadata, err := client.FetchTunnelMetadata(context.Background())
+	if !assert.NoError(t, err, "FetchTunnelMetadata failed") {
+		return
+	}
+	assert.Equal(t, "tunnel_123", metadata.ID)
+	assert.Equal(t, "Demo tunnel", metadata.Name)
+	assert.Equal(t, "demo", metadata.Description)
+}
+
+func TestTunnelServiceClientFetchTunnelMetadataStatusError(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"missing permission"}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, err = client.FetchTunnelMetadata(context.Background())
+	if !assert.Error(t, err, "expected error for non-2xx status") {
+		return
+	}
+	var statusErr *MetadataStatusError
+	if !assert.ErrorAs(t, err, &statusErr) {
+		return
+	}
+	assert.Equal(t, http.StatusForbidden, statusErr.StatusCode())
+	assert.Equal(t, "403 Forbidden", statusErr.Status())
+}
+
 func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
 	t.Parallel()
 

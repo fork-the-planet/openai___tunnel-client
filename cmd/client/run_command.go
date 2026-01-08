@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
@@ -11,29 +12,43 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
 type tunnelEventLogger struct {
 	*fxevent.SlogLogger
-	logger *slog.Logger
-	cfg    *config.ControlPlaneConfig
+	logger        *slog.Logger
+	cfg           *config.ControlPlaneConfig
+	metadataState *controlplane.MetadataState
 }
 
-func newTunnelEventLogger(logger *slog.Logger, cfg *config.ControlPlaneConfig) fxevent.Logger {
+func newTunnelEventLogger(logger *slog.Logger, cfg *config.ControlPlaneConfig, metadataState *controlplane.MetadataState) fxevent.Logger {
 	return &tunnelEventLogger{
-		SlogLogger: &fxevent.SlogLogger{Logger: logger},
-		logger:     logger,
-		cfg:        cfg,
+		SlogLogger:    &fxevent.SlogLogger{Logger: logger},
+		logger:        logger,
+		cfg:           cfg,
+		metadataState: metadataState,
 	}
 }
 
 func (l *tunnelEventLogger) LogEvent(event fxevent.Event) {
 	if started, ok := event.(*fxevent.Started); ok && started.Err == nil {
 		tunnelURL := l.cfg.BaseURL.JoinPath("v1", "tunnel", l.cfg.TunnelID.String()).String()
+		metaName := "tunnel meta hasn't fetched"
+		metaDescription := "tunnel meta hasn't fetched"
+		if l.metadataState != nil {
+			metadata, err, ok := l.metadataState.Wait(2 * time.Second)
+			if ok && err == nil && metadata != nil {
+				metaName = metadata.Name
+				metaDescription = metadata.Description
+			}
+		}
 		l.logger.Info("🟢 tunnel-client started",
 			slog.String("tunnel_id", l.cfg.TunnelID.String()),
 			slog.String("tunnel_url", tunnelURL),
+			slog.String("name", metaName),
+			slog.String("description", metaDescription),
 			slog.String("version", version.Version),
 		)
 	} else {
@@ -96,8 +111,8 @@ func runTunnel(cmd *cobra.Command, lookupEnv func(string) (string, bool)) error 
 
 	fxApp := app.New(cfg,
 		fx.Provide(func() io.Writer { return cmd.OutOrStdout() }),
-		fx.WithLogger(func(logger *slog.Logger, cfg *config.ControlPlaneConfig) fxevent.Logger {
-			return newTunnelEventLogger(logger, cfg)
+		fx.WithLogger(func(logger *slog.Logger, cfg *config.ControlPlaneConfig, metadataState *controlplane.MetadataState) fxevent.Logger {
+			return newTunnelEventLogger(logger, cfg, metadataState)
 		}),
 	)
 	fxApp.Run()

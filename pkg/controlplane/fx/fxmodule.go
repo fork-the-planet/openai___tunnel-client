@@ -2,6 +2,7 @@ package fx
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -16,8 +17,8 @@ import (
 // Module wires control-plane polling into the Fx graph.
 var Module = fx.Module(
 	"controlplane",
-	fx.Provide(newTunnelServiceClient, newPoller),
-	fx.Invoke(runPoller),
+	fx.Provide(newMetadataState, newTunnelServiceClient, newPoller),
+	fx.Invoke(runMetadataFetch, runPoller),
 )
 
 type fetcherParams struct {
@@ -34,6 +35,7 @@ type clientResult struct {
 
 	Fetcher   controlplane.Fetcher
 	Responder controlplane.Responder
+	Client    *internal.TunnelServiceClient
 }
 
 func newTunnelServiceClient(p fetcherParams) (clientResult, error) {
@@ -46,6 +48,7 @@ func newTunnelServiceClient(p fetcherParams) (clientResult, error) {
 	return clientResult{
 		Fetcher:   client,
 		Responder: client,
+		Client:    client,
 	}, nil
 }
 
@@ -78,6 +81,74 @@ type runnerParams struct {
 	Lifecycle fx.Lifecycle
 	Logger    *slog.Logger
 	Poller    internal.Poller
+}
+
+type metadataParams struct {
+	fx.In
+
+	Lifecycle     fx.Lifecycle
+	Logger        *slog.Logger
+	Client        *internal.TunnelServiceClient
+	MetadataState *controlplane.MetadataState
+}
+
+func newMetadataState() *controlplane.MetadataState {
+	return controlplane.NewMetadataState()
+}
+
+func runMetadataFetch(p metadataParams) error {
+	logger := p.Logger.With(tclog.FieldComponent, tclog.ComponentControlPlane)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	p.Lifecycle.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			go func() {
+				defer close(done)
+				metadata, err := p.Client.FetchTunnelMetadata(ctx)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					var statusErr *internal.MetadataStatusError
+					if errors.As(err, &statusErr) {
+						logger.WarnContext(
+							ctx,
+							"tunnel metadata fetch failed",
+							slog.Int("status_code", statusErr.StatusCode()),
+							slog.String("status", statusErr.Status()),
+						)
+						p.MetadataState.Set(nil, err)
+						return
+					}
+					logger.WarnContext(ctx, "tunnel metadata fetch failed", slog.String("error", err.Error()))
+					p.MetadataState.Set(nil, err)
+					return
+				}
+
+				p.MetadataState.Set(&controlplane.TunnelMetadata{
+					ID:          metadata.ID,
+					Name:        metadata.Name,
+					Description: metadata.Description,
+				}, nil)
+				logger.InfoContext(
+					ctx,
+					"tunnel metadata fetched",
+					slog.String("tunnel_id", metadata.ID),
+					slog.String("name", metadata.Name),
+					slog.String("description", metadata.Description),
+				)
+			}()
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			cancel()
+			<-done
+			return nil
+		},
+	})
+
+	return nil
 }
 
 func runPoller(p runnerParams) error {

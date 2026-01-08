@@ -17,6 +17,8 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 - The client **long-polls** the OpenAI tunnel control plane over HTTPS:
   - `GET /v1/tunnel/{tunnel_id}/poll`
   - `POST /v1/tunnel/{tunnel_id}/response`
+- On startup, it fetches tunnel metadata for operator visibility:
+  - `GET /v1/tunnels/{tunnel_id}`
 - It forwards the received JSON-RPC requests to your configured MCP server over HTTP(S).
 - It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) for probes and Prometheus scraping.
 

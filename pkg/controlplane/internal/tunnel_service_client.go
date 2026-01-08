@@ -30,6 +30,7 @@ const (
 	defaultPollTimeout = 30 * time.Second
 	pollPathFormat     = "/v1/tunnel/%s/poll"
 	responsePathFormat = "/v1/tunnel/%s/response"
+	metadataPathFormat = "/v1/tunnels/%s"
 )
 
 var errMissingConfig = errors.New("controlplane client: config is required")
@@ -40,6 +41,7 @@ type TunnelServiceClient struct {
 	client           *http.Client
 	pollEndpoint     *url.URL
 	responseEndpoint *url.URL
+	metadataEndpoint *url.URL
 	logger           *slog.Logger
 	tunnelID         types.TunnelID
 	apiKey           string
@@ -71,6 +73,7 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 	tunnelIDSegment := url.PathEscape(cfg.TunnelID.String())
 	pollEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(pollPathFormat, tunnelIDSegment)})
 	responseEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(responsePathFormat, tunnelIDSegment)})
+	metadataEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(metadataPathFormat, tunnelIDSegment)})
 
 	timeout := cfg.PollTimeout
 	if timeout <= 0 {
@@ -86,6 +89,7 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 		},
 		pollEndpoint:     pollEndpoint,
 		responseEndpoint: responseEndpoint,
+		metadataEndpoint: metadataEndpoint,
 		logger:           logger,
 		tunnelID:         cfg.TunnelID,
 		apiKey:           cfg.APIKey,
@@ -95,10 +99,63 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 		slog.String("tunnel_id", client.tunnelID.String()),
 		slog.String("poll_endpoint", client.pollEndpoint.String()),
 		slog.String("response_endpoint", client.responseEndpoint.String()),
+		slog.String("metadata_endpoint", client.metadataEndpoint.String()),
 		slog.Int64("timeout_ms", timeout.Milliseconds()),
 	)
 
 	return client, nil
+}
+
+// TunnelMetadata captures the minimal tunnel metadata needed for boot logging.
+type TunnelMetadata struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type MetadataStatusError struct {
+	statusCode int
+	status     string
+}
+
+func (e *MetadataStatusError) Error() string {
+	return fmt.Sprintf("controlplane client: unexpected metadata status %d", e.statusCode)
+}
+
+func (e *MetadataStatusError) StatusCode() int {
+	return e.statusCode
+}
+
+func (e *MetadataStatusError) Status() string {
+	return e.status
+}
+
+// FetchTunnelMetadata requests the tunnel metadata record for the configured tunnel.
+func (c *TunnelServiceClient) FetchTunnelMetadata(ctx context.Context) (*TunnelMetadata, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.metadataEndpoint.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane client: build tunnel metadata request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane client: fetch tunnel metadata: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, &MetadataStatusError{statusCode: resp.StatusCode, status: resp.Status}
+	}
+
+	var metadata TunnelMetadata
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("controlplane client: decode tunnel metadata: %w", err)
+	}
+
+	return &metadata, nil
 }
 
 func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider otelmetric.MeterProvider) http.RoundTripper {
