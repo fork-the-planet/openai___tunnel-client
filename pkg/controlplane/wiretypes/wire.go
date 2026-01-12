@@ -19,9 +19,10 @@ const (
 type ResponsePayloadType string
 
 const (
-	ResponsePayloadJSONRPC   ResponsePayloadType = "jsonrpc_response"
-	ResponsePayloadNotifyAck ResponsePayloadType = "notify_ack"
-	ResponsePayloadOAuth     ResponsePayloadType = "oauth_discovery_response"
+	ResponsePayloadJSONRPC       ResponsePayloadType = "jsonrpc_response"
+	ResponsePayloadJSONRPCNotify ResponsePayloadType = "jsonrpc_notify"
+	ResponsePayloadNotifyAck     ResponsePayloadType = "notify_ack"
+	ResponsePayloadOAuth         ResponsePayloadType = "oauth_discovery_response"
 )
 
 // TunnelResponsePayload mirrors the body posted to POST /v1/tunnel/{tunnel_id}/response when

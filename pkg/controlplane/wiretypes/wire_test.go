@@ -100,6 +100,35 @@ func TestTunnelResponsePayloadOmitemptyAndHeaders(t *testing.T) {
 	}
 }
 
+func TestTunnelResponsePayloadJSONRPCNotifyType(t *testing.T) {
+	payload := TunnelResponsePayload{
+		RequestID:    "req-notify",
+		JSONResponse: json.RawMessage(`{"jsonrpc":"2.0","method":"notify","params":{"state":"ready"}}`),
+		ResponseCode: http.StatusOK,
+		ResponseType: ResponsePayloadJSONRPCNotify,
+	}
+
+	marshaled, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(marshaled, &got); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if got["resp_type"] != string(ResponsePayloadJSONRPCNotify) {
+		t.Fatalf("expected resp_type to be %q, got %v", ResponsePayloadJSONRPCNotify, got["resp_type"])
+	}
+	if got["resp_code"] != float64(http.StatusOK) {
+		t.Fatalf("expected resp_code %d, got %v", http.StatusOK, got["resp_code"])
+	}
+	if _, ok := got["resp_json"]; !ok {
+		t.Fatalf("expected resp_json to be present")
+	}
+}
+
 func TestPolledCommandEnvelopeUnmarshalCommands(t *testing.T) {
 	fixture := []byte(`{"commands":[{"request_id":"req-777","shard_token":"shard-888","command_type":"jsonrpc","created_at":"2024-10-11T12:13:14Z","headers":{"X-Test":["alpha"]},"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list","params":{"needle":"hay"}}},{"request_id":"req-888","shard_token":"shard-999","command_type":"oauth_discovery","created_at":"2024-10-11T12:14:15Z","headers":{}}]}`)
 
