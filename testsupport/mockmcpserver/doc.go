@@ -6,9 +6,10 @@ import (
 	"net/http"
 )
 
-// Package mockmcpserver provides a Streamable HTTP MCP server double that lets
-// tests script tool responses and capture incoming call metadata without
-// standing up a real MCP server.
+// Package mockmcpserver provides MCP server doubles that let tests script tool
+// responses and capture incoming call metadata without standing up a real MCP
+// server. Use Start to run a streamable HTTP server, or StartInMemory/StartStdio
+// to run over in-memory or stdio transports.
 //
 // Configure the server entirely through options such as WithCalls, start it in
 // a test with testing.TB, and exercise it with a real MCP client.

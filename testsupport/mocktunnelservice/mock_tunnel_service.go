@@ -175,6 +175,7 @@ type scriptedCommand struct {
 	mutator   CommandMutator
 	delivered bool
 	completed bool
+	responses int
 }
 
 // MockTunnelService simulates the subset of tunnel-service endpoints the control-plane client calls.
@@ -593,25 +594,29 @@ func (m *MockTunnelService) handleResponse(w http.ResponseWriter, r *http.Reques
 	}
 	m.received = append(m.received, record)
 	if matched {
-		slot.completed = true
-		m.signalStateChangeLocked()
-
 		if expected.RequestID != "" && expected.RequestID != payload.RequestID {
 			m.failf("response out of order: got %q want %q", payload.RequestID, expected.RequestID)
 		}
-		if expected.Headers != nil && !headersEqual(expected.Headers, payload.ResponseHeaders) {
-			m.failf("unexpected resp_headers for %q: got=%v want=%v", payload.RequestID, payload.ResponseHeaders, expected.Headers)
-		}
-		if expected.Assert != nil {
-			if tb, ok := m.tb.Load().(testing.TB); ok && tb != nil {
-				tb.Helper()
-				expected.Assert(tb, record)
-			} else {
-				expected.Assert(nil, record)
+		if slot.responses == 0 {
+			if expected.Headers != nil && !headersEqual(expected.Headers, payload.ResponseHeaders) {
+				m.failf("unexpected resp_headers for %q: got=%v want=%v", payload.RequestID, payload.ResponseHeaders, expected.Headers)
+			}
+			if expected.Assert != nil {
+				if tb, ok := m.tb.Load().(testing.TB); ok && tb != nil {
+					tb.Helper()
+					expected.Assert(tb, record)
+				} else {
+					expected.Assert(nil, record)
+				}
+			}
+			if expected.PostProcess != nil {
+				expected.PostProcess(record, m.storage)
 			}
 		}
-		if expected.PostProcess != nil {
-			expected.PostProcess(record, m.storage)
+		slot.responses++
+		if payload.ResponseType != wiretypes.ResponsePayloadJSONRPCNotify {
+			slot.completed = true
+			m.signalStateChangeLocked()
 		}
 	}
 

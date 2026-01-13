@@ -133,6 +133,80 @@ func TestMockMCPServerUsage(t *testing.T) {
 	}
 }
 
+func TestMockMCPServerInMemory(t *testing.T) {
+	t.Parallel()
+
+	server := NewMockMCPServer(
+		WithCalls(
+			Call{
+				Tool:   "ping",
+				Result: json.RawMessage(`{"ok":true}`),
+			},
+		),
+	)
+	clientTransport := server.StartInMemory(t)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+
+	pingRes, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ping"})
+	if err != nil {
+		t.Fatalf("call ping: %v", err)
+	}
+	var pingStructured map[string]any
+	if raw, err := json.Marshal(pingRes.StructuredContent); err == nil {
+		_ = json.Unmarshal(raw, &pingStructured)
+	}
+	if pingStructured["ok"] != true {
+		t.Fatalf("unexpected ping result: %v", pingStructured)
+	}
+}
+
+func TestMockMCPServerStdio(t *testing.T) {
+	server := NewMockMCPServer(
+		WithCalls(
+			Call{
+				Tool:   "ping",
+				Result: json.RawMessage(`{"ok":true}`),
+			},
+		),
+	)
+	clientTransport := server.StartStdio(t)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+
+	pingRes, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ping"})
+	if err != nil {
+		t.Fatalf("call ping: %v", err)
+	}
+	var pingStructured map[string]any
+	if raw, err := json.Marshal(pingRes.StructuredContent); err == nil {
+		_ = json.Unmarshal(raw, &pingStructured)
+	}
+	if pingStructured["ok"] != true {
+		t.Fatalf("unexpected ping result: %v", pingStructured)
+	}
+}
+
 func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	t.Parallel()
 

@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,6 +107,10 @@ type MockMCPServer struct {
 	baseURL    *url.URL
 	closeOnce  sync.Once
 
+	transportCancel  context.CancelFunc
+	transportDone    chan error
+	transportCleanup func()
+
 	enableOAuth  bool
 	protectOAuth bool
 	apiKeys      map[string]*APIKey
@@ -115,6 +121,8 @@ type MockMCPServer struct {
 
 	tb atomic.Value // testing.TB
 }
+
+var stdioLock sync.Mutex
 
 // NewMockMCPServer constructs an empty mock server configured by optional options.
 func NewMockMCPServer(opts ...Option) *MockMCPServer {
@@ -129,7 +137,7 @@ func NewMockMCPServer(opts ...Option) *MockMCPServer {
 func (m *MockMCPServer) Start(t testing.TB) {
 	t.Helper()
 	m.mu.Lock()
-	if m.httpServer != nil {
+	if m.httpServer != nil || m.transportDone != nil {
 		m.mu.Unlock()
 		t.Fatalf("mock MCP server already started")
 		return
@@ -142,16 +150,7 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		return
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "mock-mcp-server", Version: "1.0.0"}, nil)
-	tools := m.uniqueToolsLocked()
-	for _, toolName := range tools {
-		tool := &mcp.Tool{
-			Name:        toolName,
-			Description: "mock tool",
-			InputSchema: &jsonschema.Schema{Type: "object"},
-		}
-		mcp.AddTool(server, tool, m.toolHandler(toolName))
-	}
+	server := m.newServerLocked()
 
 	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
 	var protectedHandler http.Handler = streamableHandler
@@ -225,11 +224,33 @@ func (m *MockMCPServer) Close() {
 		server := m.httpServer
 		m.httpServer = nil
 		m.baseURL = nil
+		cancel := m.transportCancel
+		done := m.transportDone
+		cleanup := m.transportCleanup
+		m.transportCancel = nil
+		m.transportDone = nil
+		m.transportCleanup = nil
 		remaining := len(m.calls)
 		m.calls = nil
 		m.mu.Unlock()
 		if server != nil {
 			server.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			select {
+			case err := <-done:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					m.failf("mock MCP server transport stopped with error: %v", err)
+				}
+			case <-time.After(time.Second):
+				m.failf("mock MCP server transport did not stop before timeout")
+			}
+		}
+		if cleanup != nil {
+			cleanup()
 		}
 		if remaining != 0 {
 			m.failf("mock MCP server stopped with %d pending call(s)", remaining)
@@ -246,6 +267,57 @@ func (m *MockMCPServer) BaseURL() *url.URL {
 	}
 	copyURL := *m.baseURL
 	return &copyURL
+}
+
+// StartInMemory launches the mock MCP server on an in-memory transport.
+func (m *MockMCPServer) StartInMemory(t testing.TB) *mcp.InMemoryTransport {
+	t.Helper()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	m.startTransport(t, serverTransport, nil)
+	return clientTransport
+}
+
+// StartStdio launches the mock MCP server over stdio and returns a client transport.
+// Note that stdio is process-wide, so this method should not be used concurrently.
+func (m *MockMCPServer) StartStdio(t testing.TB) *mcp.IOTransport {
+	t.Helper()
+	stdioLock.Lock()
+
+	serverStdin, clientWriter, err := os.Pipe()
+	if err != nil {
+		stdioLock.Unlock()
+		t.Fatalf("mock MCP server stdio pipe: %v", err)
+		return nil
+	}
+	clientReader, serverStdout, err := os.Pipe()
+	if err != nil {
+		_ = serverStdin.Close()
+		_ = clientWriter.Close()
+		stdioLock.Unlock()
+		t.Fatalf("mock MCP server stdio pipe: %v", err)
+		return nil
+	}
+
+	origStdin := os.Stdin
+	origStdout := os.Stdout
+	os.Stdin = serverStdin
+	os.Stdout = serverStdout
+
+	cleanup := func() {
+		os.Stdin = origStdin
+		os.Stdout = origStdout
+		_ = serverStdin.Close()
+		_ = serverStdout.Close()
+		_ = clientReader.Close()
+		_ = clientWriter.Close()
+		stdioLock.Unlock()
+	}
+
+	m.startTransport(t, &mcp.StdioTransport{}, cleanup)
+	return &mcp.IOTransport{
+		Reader: clientReader,
+		Writer: clientWriter,
+	}
 }
 
 // WaitForRequests blocks until at least n tool calls have completed or ctx expires.
@@ -297,6 +369,47 @@ func (m *MockMCPServer) uniqueToolsLocked() []string {
 		tools = append(tools, name)
 	}
 	return tools
+}
+
+func (m *MockMCPServer) newServerLocked() *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "mock-mcp-server", Version: "1.0.0"}, nil)
+	tools := m.uniqueToolsLocked()
+	for _, toolName := range tools {
+		tool := &mcp.Tool{
+			Name:        toolName,
+			Description: "mock tool",
+			InputSchema: &jsonschema.Schema{Type: "object"},
+		}
+		mcp.AddTool(server, tool, m.toolHandler(toolName))
+	}
+	return server
+}
+
+func (m *MockMCPServer) startTransport(t testing.TB, transport mcp.Transport, cleanup func()) {
+	t.Helper()
+	m.mu.Lock()
+	if m.httpServer != nil || m.transportDone != nil {
+		m.mu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
+		t.Fatalf("mock MCP server already started")
+		return
+	}
+	server := m.newServerLocked()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	m.server = server
+	m.transportCancel = cancel
+	m.transportDone = done
+	m.transportCleanup = cleanup
+	m.mu.Unlock()
+
+	m.tb.Store(t)
+	go func() {
+		done <- server.Run(ctx, transport)
+	}()
+	t.Cleanup(m.Close)
 }
 
 func (m *MockMCPServer) toolHandler(name string) mcp.ToolHandlerFor[map[string]any, map[string]any] {
@@ -364,7 +477,10 @@ func (m *MockMCPServer) recordRequest(req *mcp.CallToolRequest, call *Call) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	args := cloneJSON(req.Params.Arguments)
-	headers := cloneHeader(req.Extra.Header)
+	var headers http.Header
+	if req.Extra != nil {
+		headers = cloneHeader(req.Extra.Header)
+	}
 	m.received = append(m.received, IncomingRequest{
 		Tool:      call.Tool,
 		Arguments: args,
