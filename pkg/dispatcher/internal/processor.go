@@ -307,23 +307,11 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			return
 		}
 
-		// TODO(denyska): Implement relaying of notifications back to the tunnel-service for long-running requests.
-		// See specifications:
-		// - JSON-RPC Notification: https://www.jsonrpc.org/specification#notification
-		// - MCP Basic Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic
-		// Note: A notification is a request that does not include an ID.
-		// Notifications are primarily used to provide updates on the progress or status
-		// of long-running requests initiated by the client.
-		// For simplicity, notification handling is currently not supported.
-		if reqMsg, ok := msg.(*jsonrpc.Request); ok {
-			if !reqMsg.ID.IsValid() {
-				logger.DebugContext(
-					ctx,
-					"dispatcher received notification from MCP server. ignoring",
-					attrsToArgs(messageSummaryAttrs(reqMsg))...,
-				)
-				continue
+		if notifyMsg, ok := asNotification(msg); ok {
+			if err := p.forwardNotification(ctx, logger, cmd, responseCode, responseHeaders, notifyMsg); err != nil {
+				return
 			}
+			continue
 		}
 
 		response, ok := msg.(*jsonrpc.Response)
@@ -354,9 +342,8 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			return
 		}
 
-		// TODO(denyska): Implement handling of notifications from MCP server.
-		// Until we support streaming notifications, we drop `text/event-stream` updates entirely, so propagating the upstream Content-Type would lie to the tunnel service.
-		// Force any non-empty Content-Type header to `application/json` so the control plane only sees formats we truly deliver.
+		// Ensure final JSON-RPC responses present as application/json to the control plane,
+		// even if the upstream server labeled them differently.
 		if responseHeaders.Get("Content-Type") != "" {
 			logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", responseHeaders.Get("Content-Type")), slog.String("new", "application/json"))
 			responseHeaders = responseHeaders.Clone()
@@ -386,6 +373,58 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		logger.DebugContext(ctx, "dispatcher delivered response to control plane", slog.Bool("finalResponse", finalResponse))
 		return
 	}
+}
+
+func (p *mcpProcessor) forwardNotification(ctx context.Context, logger *slog.Logger, cmd controlplane.JsonRpcCommand, responseCode int, responseHeaders http.Header, notifyMsg *jsonrpc.Request) error {
+	logger.DebugContext(
+		ctx,
+		"dispatcher received notification from MCP server; forwarding to control plane",
+		attrsToArgs(messageSummaryAttrs(notifyMsg))...,
+	)
+
+	encodedNotification, err := jsonrpc.EncodeMessage(notifyMsg)
+	if err != nil || len(encodedNotification) == 0 {
+		logger.ErrorContext(ctx, "failed to encode notification from MCP server", slog.String("error", err.Error()))
+		return err
+	}
+
+	notificationHeaders := responseHeaders
+	if notificationHeaders == nil {
+		notificationHeaders = http.Header{}
+	} else {
+		notificationHeaders = notificationHeaders.Clone()
+	}
+	if notificationHeaders.Get("Content-Type") == "" {
+		notificationHeaders.Set("Content-Type", "text/event-stream")
+	}
+
+	tunnelNotification := types.NewJSONRPCNotification(encodedNotification, responseCode, notificationHeaders)
+	if tsRequestID, err := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), tunnelNotification); err != nil {
+		attrs := []any{slog.String("error", err.Error())}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			logger.WarnContext(ctx, "context canceled while forwarding notification to control plane", attrs...)
+		} else {
+			logger.ErrorContext(ctx, "failed to forward notification to control plane", attrs...)
+		}
+		return err
+	}
+
+	return nil
+}
+
+// asNotification returns the request when the message is a JSON-RPC notification (request without an ID).
+func asNotification(msg jsonrpc.Message) (*jsonrpc.Request, bool) {
+	req, ok := msg.(*jsonrpc.Request)
+	if !ok || req == nil {
+		return nil, false
+	}
+	if req.IsCall() {
+		return nil, false
+	}
+	return req, true
 }
 
 func messageSummaryAttrs(msg jsonrpc.Message) []slog.Attr {
@@ -463,7 +502,7 @@ func requestKindAttributes(req *jsonrpc.Request) []attribute.KeyValue {
 		return nil
 	}
 	kind := "call"
-	if !req.ID.IsValid() {
+	if !req.IsCall() {
 		kind = "notification"
 	}
 

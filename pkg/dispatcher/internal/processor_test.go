@@ -230,9 +230,26 @@ func TestProcessorStreamableNotificationsBeforeResponse(t *testing.T) {
 	err = processor.Process(ctx, command)
 	require.NoError(t, err)
 
-	got := responder.waitForResponse(t)
-	require.Equal(t, command.id, got.requestID)
-	resp := decodeJSONRPCResponse(t, got.response.Payload())
+	got := responder.waitForResponses(t, 4)
+	require.Len(t, got, 4)
+
+	for i := 0; i < 3; i++ {
+		notif := got[i]
+		require.Equal(t, command.id, notif.requestID)
+		require.Equal(t, types.ResponseTypeJSONRPCNotification, notif.response.Type())
+		require.Equal(t, "text/event-stream", notif.response.Headers().Get("Content-Type"))
+
+		msg, err := jsonrpc.DecodeMessage(notif.response.Payload())
+		require.NoError(t, err)
+		reqMsg, ok := msg.(*jsonrpc.Request)
+		require.True(t, ok)
+		require.False(t, reqMsg.ID.IsValid())
+		require.Equal(t, "notifications/progress", reqMsg.Method)
+	}
+
+	final := got[3]
+	require.Equal(t, command.id, final.requestID)
+	resp := decodeJSONRPCResponse(t, final.response.Payload())
 	require.NotNil(t, resp, "expected JSON-RPC response payload")
 	require.Nil(t, resp.Error)
 
@@ -439,6 +456,69 @@ func TestProcessorOverridesContentTypeHeader(t *testing.T) {
 	jsonResp := decodeJSONRPCResponse(t, resp.response.Payload())
 	require.NotNil(t, jsonResp)
 	require.Equal(t, id, jsonResp.ID)
+}
+
+func TestProcessorForwardsNotificationsWithJSONContentType(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("notif-content-type")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		headers: http.Header{
+			http.CanonicalHeaderKey("Content-Type"): []string{"text/event-stream"},
+		},
+		readSteps: []readStep{
+			{msg: &jsonrpc.Request{Method: "notifications/progress"}, err: nil},
+			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("notif-content-type-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-notif-content-type",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	responses := responder.waitForResponses(t, 2)
+	require.Len(t, responses, 2)
+
+	notif := responses[0]
+	require.Equal(t, types.ResponseTypeJSONRPCNotification, notif.response.Type())
+	require.Equal(t, "text/event-stream", notif.response.Headers().Get("Content-Type"))
+	msg, err := jsonrpc.DecodeMessage(notif.response.Payload())
+	require.NoError(t, err)
+	reqMsg, ok := msg.(*jsonrpc.Request)
+	require.True(t, ok)
+	require.False(t, reqMsg.ID.IsValid())
+	require.Equal(t, "notifications/progress", reqMsg.Method)
+
+	final := responses[1]
+	require.Equal(t, types.ResponseTypeJSONRPCResponse, final.response.Type())
+	require.Equal(t, "application/json", final.response.Headers().Get("Content-Type"))
+	jsonResp := decodeJSONRPCResponse(t, final.response.Payload())
+	require.NotNil(t, jsonResp)
+	require.Equal(t, callID, jsonResp.ID)
 }
 
 func TestProcessorReturnsErrorResponseOnWriteFailure(t *testing.T) {
@@ -1294,7 +1374,7 @@ func TestBuildJSONRPCErrorResponseAndRequestKindAttributes(t *testing.T) {
 	require.Nil(t, requestKindAttributes(nil))
 }
 
-func TestProcessorForwardResponsesIgnoresUpstreamNotificationRequests(t *testing.T) {
+func TestProcessorForwardResponsesForwardsUpstreamNotificationRequests(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -1333,8 +1413,24 @@ func TestProcessorForwardResponsesIgnoresUpstreamNotificationRequests(t *testing
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	got := responder.waitForResponse(t)
-	require.Equal(t, cmd.id, got.requestID)
+	got := responder.waitForResponses(t, 2)
+	require.Len(t, got, 2)
+
+	notif := got[0]
+	require.Equal(t, cmd.id, notif.requestID)
+	require.Equal(t, types.ResponseTypeJSONRPCNotification, notif.response.Type())
+	require.Equal(t, "text/event-stream", notif.response.Headers().Get("Content-Type"))
+
+	notifMsg, err := jsonrpc.DecodeMessage(notif.response.Payload())
+	require.NoError(t, err)
+	notifReq, ok := notifMsg.(*jsonrpc.Request)
+	require.True(t, ok)
+	require.False(t, notifReq.ID.IsValid())
+	require.Equal(t, "notifications/progress", notifReq.Method)
+
+	final := got[1]
+	require.Equal(t, cmd.id, final.requestID)
+	require.Equal(t, types.ResponseTypeJSONRPCResponse, final.response.Type())
 }
 
 func TestProcessorForwardResponsesStopsOnNonResponseMessage(t *testing.T) {
@@ -1755,7 +1851,7 @@ type tunnelResponse struct {
 
 func newRecordingResponder() *recordingResponder {
 	return &recordingResponder{
-		responses: make(chan tunnelResponse, 1),
+		responses: make(chan tunnelResponse, 8),
 	}
 }
 
@@ -1783,6 +1879,16 @@ func (r *recordingResponder) waitForResponse(t *testing.T) tunnelResponse {
 		t.Fatalf("timed out waiting for response")
 		return tunnelResponse{}
 	}
+}
+
+func (r *recordingResponder) waitForResponses(t *testing.T, n int) []tunnelResponse {
+	t.Helper()
+
+	out := make([]tunnelResponse, 0, n)
+	for len(out) < n {
+		out = append(out, r.waitForResponse(t))
+	}
+	return out
 }
 
 func newTestMeterProvider(t *testing.T) *sdkmetric.MeterProvider {
