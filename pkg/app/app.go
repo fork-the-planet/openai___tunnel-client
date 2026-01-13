@@ -34,6 +34,7 @@ func Options(cfg *config.Config, opts ...fx.Option) []fx.Option {
 			&cfg.AdminUI,
 		),
 		log.Module,
+		adminui.Module,
 		dispatcher.Module,
 		controlplane.Module,
 		mcpclient.Module,
@@ -41,10 +42,6 @@ func Options(cfg *config.Config, opts ...fx.Option) []fx.Option {
 		process.Module,
 		health.HealthMuxModule,
 		fx.Invoke(func(health.Service) {}),
-	}
-
-	if cfg.AdminUI.Enabled {
-		base = append(base, adminui.Module)
 	}
 	return append(base, opts...)
 }

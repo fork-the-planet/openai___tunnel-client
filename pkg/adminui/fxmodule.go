@@ -23,6 +23,7 @@ var Module = fx.Module(
 		func(buf *LogBuffer) tclog.Sink { return buf },
 	),
 	fx.Invoke(registerRoutes),
+	fx.Invoke(registerStartup),
 )
 
 type routeParams struct {
@@ -35,6 +36,7 @@ type routeParams struct {
 	LoggingConfig *config.LoggingConfig
 	ControlPlane  *config.ControlPlaneConfig
 	MCPConfig     *config.MCPConfig
+	AdminUIConfig *config.AdminUIConfig
 	MetadataState *controlplane.MetadataState
 }
 
@@ -62,16 +64,23 @@ func registerRoutes(p routeParams) error {
 		return fmt.Errorf("adminui: log buffer is required")
 	}
 
-	p.AdminMux.HandleFunc("/", handleIndex)
-	p.AdminMux.Handle("/assets/", handleAssets())
-	p.AdminMux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+	guard := func(h http.Handler) http.Handler {
+		if p.AdminUIConfig != nil && p.AdminUIConfig.AllowRemote {
+			return h
+		}
+		return localOnly(h)
+	}
+
+	p.AdminMux.Handle("/", guard(http.HandlerFunc(handleIndex)))
+	p.AdminMux.Handle("/assets/", guard(handleAssets()))
+	p.AdminMux.Handle("/api/status", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, buildStatus(p))
-	})
-	p.AdminMux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
-	p.AdminMux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer))
-	p.AdminMux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+	})))
+	p.AdminMux.Handle("/api/logs", guard(http.HandlerFunc(handleLogsJSON(p.Buffer))))
+	p.AdminMux.Handle("/api/logs/stream", guard(http.HandlerFunc(handleLogsStream(p.Buffer))))
+	p.AdminMux.Handle("/favicon.ico", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	})
+	})))
 
 	// Record a single startup line in the in-memory buffer so the UI isn't empty.
 	if p.Logger != nil {

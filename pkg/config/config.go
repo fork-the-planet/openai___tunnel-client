@@ -64,8 +64,15 @@ type Config struct {
 
 // AdminUIConfig defines runtime behavior for the embedded admin web UI.
 type AdminUIConfig struct {
-	// Enabled controls whether the embedded web UI is mounted on the admin/health server.
-	Enabled bool
+	// AllowRemote controls whether the embedded web UI and log endpoints are
+	// accessible from non-loopback clients.
+	//
+	// When false, the UI endpoints only respond to loopback requests (127.0.0.1/::1),
+	// even if the health server is bound to 0.0.0.0/::.
+	AllowRemote bool
+	// OpenBrowser controls whether tunnel-client attempts to open the embedded UI
+	// in the default browser on startup.
+	OpenBrowser bool
 }
 
 // ControlPlaneConfig defines how the client reaches the tunnel control plane.
@@ -169,7 +176,8 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
-	_, _ = fmt.Fprintln(fs.Output(), "  START_WEB_UI\tSet to true to enable the embedded web UI (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  ALLOW_REMOTE_UI\tSet to true to allow non-loopback access to the embedded web UI (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
 }
 
 // RegisterFlags attaches all supported CLI flags to the provided flag set.
@@ -186,7 +194,8 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Bool("log.http-raw-unsafe", false, "Log full raw HTTP requests and responses (including bodies/headers). WARNING: May include PII or sensitive data. Use only for debugging. (env.LOG_HTTP_RAW_UNSAFE)")
 	fs.String("health.listen-addr", defaultHealthListenAddr, "Address the health HTTP server listens on (ip:port) (env.HEALTH_LISTEN_ADDR)")
 	fs.String("health.url-file", "", "File to write the health base URL to after startup (env.HEALTH_URL_FILE)")
-	fs.Bool("start-web-ui", false, "Start the embedded web UI on the health server (env.START_WEB_UI)")
+	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
+	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
 	fs.String("mcp.server-url", "", "Target MCP server URL (env.MCP_SERVER_URL)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
@@ -591,26 +600,52 @@ func buildProcessConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 }
 
 func buildAdminUIConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (AdminUIConfig, error) {
-	enabled, err := resolveStartWebUI(fs, lookupEnv)
+	allowRemote, err := resolveAllowRemoteUI(fs, lookupEnv)
 	if err != nil {
 		return AdminUIConfig{}, err
 	}
-	return AdminUIConfig{Enabled: enabled}, nil
+
+	openBrowser, err := resolveOpenWebUI(fs, lookupEnv)
+	if err != nil {
+		return AdminUIConfig{}, err
+	}
+
+	return AdminUIConfig{AllowRemote: allowRemote, OpenBrowser: openBrowser}, nil
 }
 
-func resolveStartWebUI(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (bool, error) {
-	if flag := fs.Lookup("start-web-ui"); flag != nil && flag.Changed {
-		val, err := fs.GetBool("start-web-ui")
+func resolveOpenWebUI(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (bool, error) {
+	if flag := fs.Lookup("open-web-ui"); flag != nil && flag.Changed {
+		val, err := fs.GetBool("open-web-ui")
 		if err != nil {
-			return false, fmt.Errorf("parse --start-web-ui: %w", err)
+			return false, fmt.Errorf("parse --open-web-ui: %w", err)
 		}
 		return val, nil
 	}
 
-	if envVal, ok := lookupEnv("START_WEB_UI"); ok && envVal != "" {
+	if envVal, ok := lookupEnv("OPEN_WEB_UI"); ok && envVal != "" {
 		val, err := strconv.ParseBool(envVal)
 		if err != nil {
-			return false, fmt.Errorf("parse START_WEB_UI: %w", err)
+			return false, fmt.Errorf("parse OPEN_WEB_UI: %w", err)
+		}
+		return val, nil
+	}
+
+	return false, nil
+}
+
+func resolveAllowRemoteUI(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (bool, error) {
+	if flag := fs.Lookup("allow-remote-ui"); flag != nil && flag.Changed {
+		val, err := fs.GetBool("allow-remote-ui")
+		if err != nil {
+			return false, fmt.Errorf("parse --allow-remote-ui: %w", err)
+		}
+		return val, nil
+	}
+
+	if envVal, ok := lookupEnv("ALLOW_REMOTE_UI"); ok && envVal != "" {
+		val, err := strconv.ParseBool(envVal)
+		if err != nil {
+			return false, fmt.Errorf("parse ALLOW_REMOTE_UI: %w", err)
 		}
 		return val, nil
 	}

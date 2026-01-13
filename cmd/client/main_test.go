@@ -103,11 +103,14 @@ func TestAppBoots(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "metrics response status")
 	require.Contains(t, string(metricsBody), "liveness", "metrics should include liveness gauge")
 
-	// The embedded UI is opt-in; when disabled, / should not be registered.
-	resp, err = client.Get(baseURL + "/")
+	resp, err = client.Get(baseURL + "/ui")
 	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	uiBody, uiReadErr := io.ReadAll(resp.Body)
+	uiCloseErr := resp.Body.Close()
+	require.NoError(t, uiReadErr)
+	require.NoError(t, uiCloseErr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "ui response status")
+	require.Contains(t, string(uiBody), "tunnel-client", "ui should include tunnel-client title")
 
 	healthURLContents, err := os.ReadFile(healthURLPath)
 	require.NoError(t, err)
@@ -124,52 +127,6 @@ func TestAppBoots(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist, "pid file removed on shutdown")
 	_, err = os.Stat(healthURLPath)
 	require.ErrorIs(t, err, os.ErrNotExist, "health URL file removed on shutdown")
-}
-
-func TestAppBootsWithUIEnabled(t *testing.T) {
-	tempDir := t.TempDir()
-	healthURLPath := filepath.Join(tempDir, "health_url")
-
-	cfg := &config.Config{
-		ControlPlane: config.ControlPlaneConfig{
-			BaseURL:             mustParseURL(t, "http://127.0.0.1"),
-			TunnelID:            types.TunnelID("tunnel_0123456789abcdef0123456789abcdef"),
-			APIKey:              "test-api-key",
-			MaxInFlightRequests: 1,
-			PollTimeout:         100 * time.Millisecond,
-		},
-		Logging: config.LoggingConfig{
-			Level: slog.LevelInfo,
-		},
-		Health: config.HealthConfig{
-			ListenAddr: "127.0.0.1:0",
-			URLFile:    healthURLPath,
-		},
-		MCP: config.MCPConfig{
-			ServerURL:             mustParseURL(t, "http://127.0.0.1"),
-			ConnectionMaxTTL:      time.Minute,
-			MaxConcurrentRequests: 10,
-		},
-		AdminUI: config.AdminUIConfig{Enabled: true},
-	}
-	require.NoError(t, cfg.MCP.BootstrapOAuthResourceMetadataURLs())
-
-	var svc health.Service
-	app := fxtest.New(t, app.Options(cfg, fx.Populate(&svc))...)
-	app.RequireStart()
-	t.Cleanup(func() { app.RequireStop() })
-
-	baseURL := "http://" + svc.Addr()
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Get(baseURL + "/ui")
-	require.NoError(t, err)
-	body, readErr := io.ReadAll(resp.Body)
-	closeErr := resp.Body.Close()
-	require.NoError(t, readErr)
-	require.NoError(t, closeErr)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, string(body), "tunnel-client")
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

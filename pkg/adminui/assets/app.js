@@ -119,10 +119,14 @@
   function parseMetrics(text) {
     const out = new Map();
     const lines = (text || "").split("\n");
-    for (const line of lines) {
+    for (const raw of lines) {
+      const line = (raw || "").trim();
       if (!line || line.startsWith("#")) continue;
+      // Prometheus text format is: name{labels} value [timestamp]
+      // We parse a minimal subset (including optional timestamps) and ignore
+      // NaN/Inf values.
       const m = line.match(
-        /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+]?(?:\d+\.?\d*|\d*\.?\d+)(?:[eE][-+]?\d+)?)$/
+        /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+((?:[-+]?(?:\d+\.?\d*|\d*\.?\d+)(?:[eE][-+]?\d+)?)|NaN|\+Inf|-Inf|Inf)(?:\s+\d+)?$/
       );
       if (!m) continue;
       const name = m[1];
@@ -134,12 +138,80 @@
     return out;
   }
 
-  function pickFirst(map, names) {
+  function firstMetricSeries(map, names) {
     for (const n of names) {
       const xs = map.get(n);
-      if (xs && xs.length) return xs[0].value;
+      if (xs && xs.length) return xs;
     }
     return null;
+  }
+
+  function maxMetric(map, names) {
+    const xs = firstMetricSeries(map, names);
+    if (!xs) return null;
+    let max = null;
+    for (const x of xs) {
+      if (max == null || x.value > max) max = x.value;
+    }
+    return max;
+  }
+
+  function sumMetric(map, names) {
+    const xs = firstMetricSeries(map, names);
+    if (!xs) return null;
+    let sum = 0;
+    for (const x of xs) sum += x.value;
+    return sum;
+  }
+
+  function findMetricSeries(map, names) {
+    // Exact match first.
+    for (const n of names) {
+      const xs = map.get(n);
+      if (xs && xs.length) return xs;
+    }
+
+    const keys = Array.from(map.keys());
+
+    // Suffix match (handles exporters that namespace metric names).
+    for (const n of names) {
+      const matches = keys.filter((k) => k === n || k.endsWith(n));
+      if (matches.length) {
+        matches.sort((a, b) => a.length - b.length);
+        const xs = map.get(matches[0]);
+        if (xs && xs.length) return xs;
+      }
+    }
+
+    // Substring match (last resort).
+    for (const n of names) {
+      const matches = keys.filter((k) => k.includes(n));
+      if (matches.length) {
+        matches.sort((a, b) => a.length - b.length);
+        const xs = map.get(matches[0]);
+        if (xs && xs.length) return xs;
+      }
+    }
+
+    return null;
+  }
+
+  function maxMetric2(map, names) {
+    const xs = findMetricSeries(map, names);
+    if (!xs) return null;
+    let max = null;
+    for (const x of xs) {
+      if (max == null || x.value > max) max = x.value;
+    }
+    return max;
+  }
+
+  function sumMetric2(map, names) {
+    const xs = findMetricSeries(map, names);
+    if (!xs) return null;
+    let sum = 0;
+    for (const x of xs) sum += x.value;
+    return sum;
   }
 
   function fmtTimestampSeconds(ts) {
@@ -156,16 +228,34 @@
       $("metricsRaw").textContent = t;
       const m = parseMetrics(t);
 
-      const lastPoll = pickFirst(m, [
+      const lastPoll = maxMetric2(m, [
         "commands_poll_last_successful_timestamp_seconds",
       ]);
-      const qLen = pickFirst(m, ["commands_queue_length"]);
-      const qCap = pickFirst(m, ["commands_queue_capacity"]);
-      const wOcc = pickFirst(m, ["dispatcher_worker_pool_occupancy"]);
-      const wCap = pickFirst(m, ["dispatcher_worker_pool_capacity"]);
-      const pollErrs = pickFirst(m, [
+      const qLen = maxMetric2(m, [
+        "commands_queue_length",
+        "commands_queue_length_total",
+        "queue_length",
+      ]);
+      const qCap = maxMetric2(m, [
+        "commands_queue_capacity",
+        "commands_queue_capacity_total",
+        "queue_capacity",
+      ]);
+      const wOcc = maxMetric2(m, [
+        "dispatcher_worker_pool_occupancy",
+        "dispatcher_worker_pool_occupancy_total",
+        "worker_pool_occupancy",
+      ]);
+      const wCap = maxMetric2(m, [
+        "dispatcher_worker_pool_capacity",
+        "dispatcher_worker_pool_capacity_total",
+        "worker_pool_capacity",
+      ]);
+      const pollErrs = sumMetric2(m, [
         "commands_poll_errors",
         "commands_poll_errors_total",
+        "poll_errors",
+        "poll_errors_total",
       ]);
 
       $("mLastPoll").textContent = fmtTimestampSeconds(lastPoll);
@@ -175,6 +265,24 @@
         wOcc == null || wCap == null ? "—" : wOcc + " / " + wCap;
       $("mPollErrors").textContent =
         pollErrs == null ? "—" : pollErrs.toString();
+
+      if (
+        qLen == null &&
+        qCap == null &&
+        wOcc == null &&
+        wCap == null &&
+        pollErrs == null
+      ) {
+        const keys = Array.from(m.keys());
+        const interesting = keys
+          .filter((k) => k.includes("commands_") || k.includes("dispatcher_"))
+          .slice(0, 12);
+        $("metricsErr").textContent =
+          interesting.length > 0
+            ? "could not match expected tunnel-client metrics; found: " +
+              interesting.join(", ")
+            : "could not find tunnel-client metrics in /metrics (open /metrics to inspect)";
+      }
     } catch (e) {
       $("metricsErr").textContent = "error: " + e;
     }
@@ -209,26 +317,52 @@
     }
   }
 
-  function formatEvent(ev, includeAttrs) {
+  function formatEventForSearch(ev) {
+    const t = ev.time ? new Date(ev.time).toISOString() : "";
+    const lvl = (ev.level || "").toUpperCase();
+    const attrs = ev.attrs || {};
+    const comp = attrs.component ? "[" + attrs.component + "] " : "";
+    const msg = ev.message || "";
+    let base = [t, lvl].filter(Boolean).join(" ");
+    if (base) base += " ";
+    base += comp + msg;
+    try {
+      if (attrs && Object.keys(attrs).length > 0) {
+        base += " " + JSON.stringify(attrs);
+      }
+    } catch (e) {
+      // ignore
+    }
+    return base;
+  }
+
+  function formatEvent(ev) {
     const t = ev.time ? new Date(ev.time).toISOString() : "";
     const lvl = (ev.level || "").toUpperCase();
     const attrs = ev.attrs || {};
     const comp = attrs.component ? "[" + attrs.component + "] " : "";
     const msg = ev.message || "";
     const hint = [];
+
+    // Common IDs
     if (attrs.request_id) hint.push("req=" + attrs.request_id);
     if (attrs.tunnel_request_id) hint.push("ts=" + attrs.tunnel_request_id);
     if (attrs.session_id) hint.push("sess=" + attrs.session_id);
+
+    // Common diagnostics (so errors show up like the terminal output).
+    if (attrs.error) hint.push("error=" + JSON.stringify(attrs.error));
+    if (attrs.retry_in_ms != null)
+      hint.push("retry_in_ms=" + attrs.retry_in_ms);
+    if (attrs.poll_timeout_ms != null)
+      hint.push("poll_timeout_ms=" + attrs.poll_timeout_ms);
+
     let base = [t, lvl].filter(Boolean).join(" ");
     if (base) base += " ";
     base += comp + msg;
     if (hint.length) base += " " + hint.join(" ");
-    if (
-      includeAttrs &&
-      includeAttrs !== false &&
-      showAttrsEl.checked &&
-      ev.attrs
-    ) {
+
+    // Optional full attrs view.
+    if (showAttrsEl.checked && ev.attrs) {
       base += " " + JSON.stringify(ev.attrs);
     }
     return base;
@@ -243,7 +377,7 @@
       if (minLevel === "error" && lvl !== "error") return false;
     }
     if (!filter) return true;
-    const line = formatEvent(ev, true).toLowerCase();
+    const line = formatEventForSearch(ev).toLowerCase();
     return line.includes(filter);
   }
 
@@ -251,7 +385,7 @@
     if (!passesFilters(ev)) return;
     const line = document.createElement("div");
     line.className = "log-line level-" + (ev.level || "info").toLowerCase();
-    line.textContent = formatEvent(ev, false);
+    line.textContent = formatEvent(ev);
     logsEl.appendChild(line);
     if (autoscrollEl.checked) {
       logsEl.scrollTop = logsEl.scrollHeight;

@@ -92,18 +92,21 @@
   - Env: `HEALTH_URL_FILE`
   - Use when binding to a random port (e.g., `:0`) and you need to publish the resolved base URL.
 
-## Embedded web UI (optional)
+## Embedded web UI
 
-The tunnel client can optionally serve a lightweight web UI from the same admin/health server.
+When running `tunnel-client run`, the tunnel client serves a lightweight web UI from the same admin/health server.
 
-- **Enable UI**
-  - Flag: `--start-web-ui`
-  - Env: `START_WEB_UI`
+- **UI entrypoints**: `GET /` or `GET /ui`
+- **Static assets**: `GET /assets/*`
+- **Remote access (optional)**
+  - By default, UI + log endpoints only respond to loopback clients (127.0.0.1/::1).
+  - Flag: `--allow-remote-ui`
+  - Env: `ALLOW_REMOTE_UI`
   - Default: `false`
-
-When enabled, the UI is available at:
-
-- `GET /` or `GET /ui`
+- **Open UI in browser (optional)**
+  - Flag: `--open-web-ui`
+  - Env: `OPEN_WEB_UI`
+  - Default: `false`
 
 ## Process utilities
 
