@@ -21,6 +21,8 @@ require (
 	go.uber.org/fx v1.23.0
 )
 
+require github.com/inconshreveable/mousetrap v1.1.0 // indirect
+
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
