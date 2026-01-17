@@ -43,8 +43,8 @@ flowchart LR
 
 - **Outbound-only**: the tunnel itself requires no inbound connectivity. The only inbound port is the optional local admin server.
 - **Queueing/backpressure**: the control-plane poller requests up to the number of available slots in the bounded queue to avoid unbounded buffering.
-- **Progress/notifications**: MCP JSON-RPC notifications emitted during long-running calls are currently not relayed back to the control plane.
-- **Streaming semantics**: the client forwards a final JSON-RPC response per request; it does not currently stream intermediate updates back through the control plane.
+- **Progress/notifications**: MCP JSON-RPC notifications are posted via `/v1/tunnel/{tunnel_id}/response` using `resp_type=jsonrpc_notify` and are forwarded to the connector when SSE is enabled.
+- **Streaming semantics**: the client can stream intermediate JSON-RPC notifications over SSE when the connector requests `text/event-stream`, then posts a final JSON-RPC response to close the stream.
 
 ## OAuth-protected MCP
 

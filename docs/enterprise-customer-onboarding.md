@@ -387,6 +387,7 @@ On your MCP server, confirm you observe:
 - The OpenAI-hosted MCP tunnel endpoint receives one JSON-RPC request.
 - It enqueues the request under your `tunnel_id`.
 - It waits (holds the HTTP request open) for the tunnel client to return the final response.
+- If the connector includes `Accept: text/event-stream`, the response is streamed as SSE, with JSON-RPC notifications forwarded as they arrive and a final JSON-RPC response closing the stream.
 
 ### Tunnel-client control-plane endpoints: `/v1/tunnel/{tunnel_id}/poll` and `/response`
 
@@ -395,8 +396,9 @@ On your MCP server, confirm you observe:
   - Response is `200 OK` with a list of commands when work is available.
 - The tunnel client posts results to `/response` (including:
   - `request_id`,
-  - final JSON-RPC response payload, and
+  - final JSON-RPC response payload (or JSON-RPC notifications), and
   - selected response headers and status code from the MCP server).
+- JSON-RPC notifications are sent with `resp_type=jsonrpc_notify` and are forwarded to the connector stream when SSE is enabled.
 
 ### Timeouts (high level)
 
@@ -411,8 +413,7 @@ If you expect long-running MCP calls, coordinate timeout values with OpenAI.
 
 ## Current limitations (important)
 
-- **No SSE / streaming** responses end-to-end. MCP servers should return final `application/json` responses.
-- **No progress notifications forwarded** back to the connector today.
+- **SSE is opt-in**: connectors must send `Accept: text/event-stream` to receive streamed notifications; otherwise they receive a single `application/json` response.
 - The OpenAI tunnel queueing and timeout behavior is optimized for deterministic request/response flows.
 
 ---
