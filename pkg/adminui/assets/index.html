@@ -49,6 +49,8 @@
               <span class="mono" id="vTunnelId">—</span>
               <button class="small" id="copyTunnelId">Copy</button>
             </div>
+            <div class="muted">Tunnel name</div><div class="mono" id="vTunnelName">—</div>
+            <div class="muted">Description</div><div class="mono" id="vTunnelDescription">—</div>
             <div class="muted">Poll timeout</div><div class="mono" id="vPollTimeout">—</div>
             <div class="muted">Max inflight</div><div class="mono" id="vMaxInflight">—</div>
           </div>
@@ -82,6 +84,7 @@
           </div>
           <div class="kv" style="margin-top: 12px">
             <div class="muted">Last poll success</div><div class="mono" id="mLastPoll">—</div>
+            <div class="muted">Poll cycles</div><div class="mono" id="mPollCycles">—</div>
             <div class="muted">Queue</div><div class="mono" id="mQueue">—</div>
             <div class="muted">Worker pool</div><div class="mono" id="mWorkers">—</div>
             <div class="muted">Poll errors</div><div class="mono" id="mPollErrors">—</div>
@@ -143,8 +146,10 @@
               <div class="small muted">Streaming from <span class="mono">/api/logs/stream</span> (SSE)</div>
             </div>
             <span style="flex:1"></span>
-            <label class="small"><input type="checkbox" id="autoscroll" checked /> autoscroll</label>
-            <label class="small"><input type="checkbox" id="showAttrs" /> show attrs</label>
+            <div class="checkbox-stack small">
+              <label><input type="checkbox" id="autoscroll" checked /> autoscroll</label>
+              <label><input type="checkbox" id="showAttrs" /> show attrs</label>
+            </div>
             <button id="pause">Pause</button>
             <button id="clear">Clear</button>
           </div>

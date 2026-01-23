@@ -128,6 +128,23 @@ button {
 
 button:hover, .tab:hover { border-color: rgba(127,127,127,.55); }
 
+.checkbox-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.checkbox-stack label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkbox-stack input {
+  margin: 0;
+}
+
 .panel { display: none; }
 .panel[aria-hidden="false"] { display: block; }
 

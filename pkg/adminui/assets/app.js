@@ -162,6 +162,9 @@
       $("vMcpUrl").textContent = s.mcp_server_url || "—";
       $("vCpBase").textContent = s.control_plane_base_url || "—";
       $("vTunnelId").textContent = s.control_plane_tunnel_id || "—";
+      const meta = s.tunnel_metadata || {};
+      $("vTunnelName").textContent = meta.name || "—";
+      $("vTunnelDescription").textContent = meta.description || "—";
       $("vPollTimeout").textContent = s.control_plane_poll_timeout || "—";
       $("vMaxInflight").textContent = (
         s.control_plane_max_inflight || "—"
@@ -311,6 +314,10 @@
       const lastPoll = maxMetric2(m, [
         "commands_poll_last_successful_timestamp_seconds",
       ]);
+      const pollCycles = sumMetric2(m, [
+        "commands_poll_cycles_total",
+        "commands_poll_cycles",
+      ]);
       const qLen = maxMetric2(m, [
         "commands_queue_length",
         "commands_queue_length_total",
@@ -339,6 +346,8 @@
       ]);
 
       $("mLastPoll").textContent = fmtTimestampSeconds(lastPoll);
+      $("mPollCycles").textContent =
+        pollCycles == null ? "—" : pollCycles.toString();
       $("mQueue").textContent =
         qLen == null || qCap == null ? "—" : qLen + " / " + qCap;
       $("mWorkers").textContent =
