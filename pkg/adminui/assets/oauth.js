@@ -124,6 +124,9 @@
       const urlDiv = document.createElement("div");
       urlDiv.className = "oauth-url";
       if (selected) urlDiv.classList.add("selected");
+      if (!selected && attempt && attempt.tried) {
+        urlDiv.classList.add("tried");
+      }
       if (placeholder) urlDiv.classList.add("placeholder");
       urlDiv.textContent = urlText;
       statusCell.appendChild(statusDiv);

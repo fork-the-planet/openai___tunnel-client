@@ -142,6 +142,10 @@ h1 {
   font-weight: 600;
 }
 
+.oauth-url.tried {
+  color: var(--muted);
+}
+
 .oauth-url.placeholder {
   color: var(--muted);
 }
