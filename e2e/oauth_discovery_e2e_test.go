@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
@@ -108,6 +109,7 @@ func TestHarnessHandlesOAuthDiscoveryCommandWithWWWAuthenticateProbe(t *testing.
 		harnesspkg.WithClientConfig(func(cfg *config.Config) {
 			cfg.Logging.Level = slog.LevelDebug
 		}),
+		harnesspkg.WithScenarioTimeout(5*time.Second),
 		harnesspkg.WithControlPlaneOptions(
 			mocktunnelservice.WithCommandResponses(oauthCommand),
 		),
