@@ -31,6 +31,7 @@ func (s stubCommand) EnqueuedAt() time.Time      { return time.Time{} }
 func (s stubCommand) PolledAt() time.Time        { return time.Time{} }
 func (s stubCommand) Headers() http.Header       { return nil }
 func (s stubCommand) ShardToken() string         { return "" }
+func (s stubCommand) Channel() string            { return types.DefaultChannel }
 func (s stubCommand) SessionID() (string, bool) {
 	return "", false
 }
@@ -203,6 +204,7 @@ func (u untypedCommand) EnqueuedAt() time.Time      { return time.Time{} }
 func (u untypedCommand) PolledAt() time.Time        { return time.Time{} }
 func (u untypedCommand) Headers() http.Header       { return nil }
 func (u untypedCommand) ShardToken() string         { return "" }
+func (u untypedCommand) Channel() string            { return types.DefaultChannel }
 func (u untypedCommand) SessionID() (string, bool)  { return "", false }
 
 func TestPollerRecordsInvalidCommandTypeDrops(t *testing.T) {
@@ -257,6 +259,41 @@ func TestPollerRecordsInvalidCommandTypeDrops(t *testing.T) {
 	assertCounterValue(t, rm, metricNameCommandsPolled, 2)
 	assertCounterValue(t, rm, metricNameCommandsEnqueued, 1)
 	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonInvalidCommandType), 1)
+}
+
+func TestBuildBaseDefaultsChannel(t *testing.T) {
+	raw := wiretypes.BaseRawPolledCommand{
+		RequestID:   "req-1",
+		ShardToken:  "shard-1",
+		CommandType: wiretypes.CommandTypeJSONRPC,
+		CreatedAt:   time.Now(),
+	}
+
+	base, _, err := buildBase(raw, time.Now())
+	if err != nil {
+		t.Fatalf("buildBase: %v", err)
+	}
+	if base.Channel() != types.DefaultChannel {
+		t.Fatalf("expected default channel %q, got %q", types.DefaultChannel, base.Channel())
+	}
+}
+
+func TestBuildBasePreservesChannel(t *testing.T) {
+	raw := wiretypes.BaseRawPolledCommand{
+		RequestID:   "req-2",
+		ShardToken:  "shard-2",
+		CommandType: wiretypes.CommandTypeJSONRPC,
+		Channel:     "harpoon",
+		CreatedAt:   time.Now(),
+	}
+
+	base, _, err := buildBase(raw, time.Now())
+	if err != nil {
+		t.Fatalf("buildBase: %v", err)
+	}
+	if base.Channel() != "harpoon" {
+		t.Fatalf("expected channel %q, got %q", "harpoon", base.Channel())
+	}
 }
 
 func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {

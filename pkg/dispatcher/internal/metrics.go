@@ -13,10 +13,12 @@ import (
 
 const (
 	metricNameCommandEndToEndLatency = "command_end_to_end_latency_milliseconds"
+	metricNameUnsupportedChannel     = "command_unsupported_channel_total"
 )
 
 type processorMetrics struct {
 	commandEndToEndLatency metric.Float64Histogram
+	unsupportedChannel     metric.Int64Counter
 }
 
 type latencyFlags struct {
@@ -38,13 +40,27 @@ func newProcessorMetrics(meter metric.Meter) (*processorMetrics, error) {
 		return nil, err
 	}
 
+	unsupportedChannel, err := meter.Int64Counter(
+		metricNameUnsupportedChannel,
+		metric.WithDescription("Count of polled commands dropped due to unsupported channels."),
+		metric.WithUnit("{count}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &processorMetrics{
 		commandEndToEndLatency: commandEndToEndLatency,
+		unsupportedChannel:     unsupportedChannel,
 	}, nil
 }
 
 func (m *processorMetrics) recordCommandEndToEndLatency(ctx context.Context, latency time.Duration, attrs []attribute.KeyValue) {
 	m.commandEndToEndLatency.Record(ctx, float64(latency/time.Millisecond), metric.WithAttributes(attrs...))
+}
+
+func (m *processorMetrics) recordUnsupportedChannel(ctx context.Context, attrs []attribute.KeyValue) {
+	m.unsupportedChannel.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 func (m *processorMetrics) recordCommandLatencies(ctx context.Context, tunnelID types.TunnelID, statusCode int, attrs []attribute.KeyValue, enqueuedAt, polledAt time.Time, flags *latencyFlags) {

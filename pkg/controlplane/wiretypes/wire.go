@@ -29,6 +29,7 @@ const (
 // delivering MCP results back to tunnel-service.
 type TunnelResponsePayload struct {
 	RequestID       string              `json:"request_id"`
+	Channel         string              `json:"channel,omitempty"`
 	JSONResponse    json.RawMessage     `json:"resp_json,omitempty"`
 	ResponseHeaders http.Header         `json:"resp_headers,omitempty"`
 	ResponseCode    int                 `json:"resp_code,omitempty"`
@@ -49,6 +50,7 @@ type BaseRawPolledCommand struct {
 	ShardToken string `json:"shard_token"`
 	// CommandType is a discriminator for the command payload type.
 	CommandType CommandType `json:"command_type"`
+	Channel     string      `json:"channel,omitempty"`
 	CreatedAt   time.Time   `json:"created_at"`
 	Headers     http.Header `json:"headers"`
 }

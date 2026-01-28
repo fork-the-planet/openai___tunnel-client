@@ -361,6 +361,10 @@ func (c *queueTestCommand) ShardToken() string {
 	return c.shardToken
 }
 
+func (c *queueTestCommand) Channel() string {
+	return types.DefaultChannel
+}
+
 func (c *queueTestCommand) SessionID() (string, bool) {
 	return "", false
 }

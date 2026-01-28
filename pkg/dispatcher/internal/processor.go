@@ -2,6 +2,7 @@ package dispatcherinternal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -137,6 +138,14 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	channel := cmd.Channel()
+	if channel == "" {
+		channel = types.DefaultChannel
+	}
+	if channel != types.DefaultChannel {
+		return p.rejectUnsupportedChannel(ctx, logger, cmd, channel)
+	}
+
 	switch typedCmd := cmd.(type) {
 	case controlplane.JsonRpcCommand:
 		return p.processJsonRpcCommand(ctx, logger, typedCmd)
@@ -146,6 +155,62 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 		logger.ErrorContext(ctx, "polled command was not a JSON-RPC command")
 		return fmt.Errorf("unexpected command type %T", cmd)
 	}
+}
+
+func (p *mcpProcessor) rejectUnsupportedChannel(ctx context.Context, logger *slog.Logger, cmd controlplane.PolledCommand, channel string) error {
+	statusCode := http.StatusBadRequest
+	err := fmt.Errorf("unsupported channel %q", channel)
+	logger.ErrorContext(ctx, "dispatcher received unsupported channel", slog.String("channel", channel))
+
+	attrs := []attribute.KeyValue{
+		attribute.String("tunnel_id", p.tunnelID.String()),
+		attribute.String("channel", channel),
+	}
+	switch cmd.(type) {
+	case controlplane.JsonRpcCommand:
+		attrs = append(attrs, attribute.String("command_type", "jsonrpc"))
+	case controlplane.OauthDiscoveryCommand:
+		attrs = append(attrs, attribute.String("command_type", "oauth_discovery"))
+	default:
+		attrs = append(attrs, attribute.String("command_type", "unknown"))
+	}
+	p.metrics.recordUnsupportedChannel(ctx, attrs)
+
+	var response *types.TunnelResponse
+	switch typedCmd := cmd.(type) {
+	case controlplane.JsonRpcCommand:
+		req, ok := typedCmd.Message().(*jsonrpc.Request)
+		if ok {
+			encoded, encodeErr := buildJSONRPCErrorResponse(req, statusCode, err)
+			if encodeErr != nil {
+				return fmt.Errorf("build channel error response: %w", encodeErr)
+			}
+			response = types.NewTunnelResponse(encoded, statusCode, http.Header{})
+		}
+	case controlplane.OauthDiscoveryCommand:
+		payload, encodeErr := json.Marshal(map[string]any{
+			"error": map[string]any{
+				"message": fmt.Sprintf("unsupported channel %q", channel),
+				"type":    "invalid_request_error",
+				"code":    "unsupported_channel",
+			},
+		})
+		if encodeErr != nil {
+			return fmt.Errorf("encode channel error response: %w", encodeErr)
+		}
+		response = types.NewOAuthDiscoveryResponse(payload, statusCode, http.Header{})
+	}
+
+	if response == nil {
+		return fmt.Errorf("unsupported channel %q for command type %T", channel, cmd)
+	}
+
+	if _, postErr := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), response); postErr != nil {
+		logger.ErrorContext(ctx, "failed to post channel error response to control plane", slog.String("error", postErr.Error()))
+		return postErr
+	}
+
+	return err
 }
 
 func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.Logger, cmd controlplane.JsonRpcCommand) error {

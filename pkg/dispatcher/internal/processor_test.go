@@ -183,6 +183,68 @@ func TestProcessorAddsDefaultAcceptHeaderWhenMissing(t *testing.T) {
 	require.Equal(t, defaultAcceptHeaderValue, conn.writeHeaders.Get("Accept"))
 }
 
+func TestProcessorRejectsUnsupportedChannel(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		_ = meterProvider.Shutdown(context.Background())
+	})
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       &stubForwardingTransport{},
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	id, err := jsonrpc.MakeID("unsupported-channel")
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("unsupported-channel"),
+		message:    &jsonrpc.Request{ID: id, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-unsupported",
+		channel:    "harpoon",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	resp := decodeJSONRPCResponse(t, got.response.Payload())
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Error)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	sum, ok := findCounter(rm, metricNameUnsupportedChannel)
+	require.True(t, ok, "unsupported channel metric not found")
+
+	var found bool
+	for _, dp := range sum.DataPoints {
+		if dp.Value != 1 {
+			continue
+		}
+		if val, ok := dp.Attributes.Value(attribute.Key("channel")); ok && val.AsString() == "harpoon" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "unsupported channel metric missing channel attribute")
+}
+
 func TestProcessorStreamableNotificationsBeforeResponse(t *testing.T) {
 	t.Parallel()
 
@@ -2047,6 +2109,22 @@ func findHistogram(rm metricdata.ResourceMetrics, name string) (metricdata.Histo
 	return metricdata.Histogram[float64]{}, false
 }
 
+func findCounter(rm metricdata.ResourceMetrics, name string) (metricdata.Sum[int64], bool) {
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != name {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				return metricdata.Sum[int64]{}, false
+			}
+			return sum, true
+		}
+	}
+	return metricdata.Sum[int64]{}, false
+}
+
 func dataPointsByLatencyType(t *testing.T, dps []metricdata.HistogramDataPoint[float64]) map[string]metricdata.HistogramDataPoint[float64] {
 	t.Helper()
 	out := make(map[string]metricdata.HistogramDataPoint[float64])
@@ -2153,6 +2231,7 @@ type fakePolledCommand struct {
 	headers    http.Header
 	sessionID  *string
 	shardToken string
+	channel    string
 }
 
 func (f *fakePolledCommand) RequestID() types.RequestID {
@@ -2179,6 +2258,13 @@ func (f *fakePolledCommand) ShardToken() string {
 	return f.shardToken
 }
 
+func (f *fakePolledCommand) Channel() string {
+	if f.channel == "" {
+		return types.DefaultChannel
+	}
+	return f.channel
+}
+
 func (f *fakePolledCommand) SessionID() (string, bool) {
 	if f.sessionID == nil {
 		return "", false
@@ -2192,6 +2278,7 @@ type fakeOauthDiscoveryCommand struct {
 	polledAt   time.Time
 	headers    http.Header
 	shardToken string
+	channel    string
 }
 
 func (f *fakeOauthDiscoveryCommand) RequestID() types.RequestID { return f.id }
@@ -2199,8 +2286,14 @@ func (f *fakeOauthDiscoveryCommand) EnqueuedAt() time.Time      { return f.enque
 func (f *fakeOauthDiscoveryCommand) PolledAt() time.Time        { return f.polledAt }
 func (f *fakeOauthDiscoveryCommand) Headers() http.Header       { return f.headers }
 func (f *fakeOauthDiscoveryCommand) ShardToken() string         { return f.shardToken }
-func (f *fakeOauthDiscoveryCommand) SessionID() (string, bool)  { return "", false }
-func (f *fakeOauthDiscoveryCommand) IsOAuthDiscovery() bool     { return true }
+func (f *fakeOauthDiscoveryCommand) Channel() string {
+	if f.channel == "" {
+		return types.DefaultChannel
+	}
+	return f.channel
+}
+func (f *fakeOauthDiscoveryCommand) SessionID() (string, bool) { return "", false }
+func (f *fakeOauthDiscoveryCommand) IsOAuthDiscovery() bool    { return true }
 
 type unknownPolledCommand struct {
 	id         types.RequestID
@@ -2209,6 +2302,7 @@ type unknownPolledCommand struct {
 	headers    http.Header
 	sessionID  *string
 	shardToken string
+	channel    string
 }
 
 func (f *unknownPolledCommand) RequestID() types.RequestID { return f.id }
@@ -2216,6 +2310,12 @@ func (f *unknownPolledCommand) EnqueuedAt() time.Time      { return f.enqueuedAt
 func (f *unknownPolledCommand) PolledAt() time.Time        { return f.polledAt }
 func (f *unknownPolledCommand) Headers() http.Header       { return f.headers }
 func (f *unknownPolledCommand) ShardToken() string         { return f.shardToken }
+func (f *unknownPolledCommand) Channel() string {
+	if f.channel == "" {
+		return types.DefaultChannel
+	}
+	return f.channel
+}
 func (f *unknownPolledCommand) SessionID() (string, bool) {
 	if f.sessionID == nil {
 		return "", false

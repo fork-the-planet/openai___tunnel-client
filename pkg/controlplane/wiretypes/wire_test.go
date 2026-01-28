@@ -14,6 +14,7 @@ func TestRawJSONRPCPolledCommandMarshalFieldNames(t *testing.T) {
 			RequestID:   "req-123",
 			ShardToken:  "shard-456",
 			CommandType: CommandTypeJSONRPC,
+			Channel:     "harpoon",
 			CreatedAt:   createdAt,
 			Headers: http.Header{
 				"X-Trace-ID": []string{"trace-789"},
@@ -40,6 +41,9 @@ func TestRawJSONRPCPolledCommandMarshalFieldNames(t *testing.T) {
 	}
 	if got["command_type"] != string(CommandTypeJSONRPC) {
 		t.Fatalf("expected command_type to be %q, got %v", CommandTypeJSONRPC, got["command_type"])
+	}
+	if got["channel"] != "harpoon" {
+		t.Fatalf("expected channel to be harpoon, got %v", got["channel"])
 	}
 	if _, ok := got["created_at"]; !ok {
 		t.Fatalf("expected created_at to be present")
@@ -130,7 +134,7 @@ func TestTunnelResponsePayloadJSONRPCNotifyType(t *testing.T) {
 }
 
 func TestPolledCommandEnvelopeUnmarshalCommands(t *testing.T) {
-	fixture := []byte(`{"commands":[{"request_id":"req-777","shard_token":"shard-888","command_type":"jsonrpc","created_at":"2024-10-11T12:13:14Z","headers":{"X-Test":["alpha"]},"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list","params":{"needle":"hay"}}},{"request_id":"req-888","shard_token":"shard-999","command_type":"oauth_discovery","created_at":"2024-10-11T12:14:15Z","headers":{}}]}`)
+	fixture := []byte(`{"commands":[{"request_id":"req-777","shard_token":"shard-888","command_type":"jsonrpc","channel":"harpoon","created_at":"2024-10-11T12:13:14Z","headers":{"X-Test":["alpha"]},"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list","params":{"needle":"hay"}}},{"request_id":"req-888","shard_token":"shard-999","command_type":"oauth_discovery","channel":"main","created_at":"2024-10-11T12:14:15Z","headers":{}}]}`)
 
 	var envelope PolledCommandEnvelope
 	if err := json.Unmarshal(fixture, &envelope); err != nil {

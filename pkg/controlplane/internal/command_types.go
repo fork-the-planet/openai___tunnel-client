@@ -35,6 +35,7 @@ type basePolledCommand struct {
 	headers    http.Header
 	sessionID  *string
 	shardToken string
+	channel    string
 }
 
 func (c *basePolledCommand) RequestID() types.RequestID { return c.requestID }
@@ -47,6 +48,7 @@ func (c *basePolledCommand) Headers() http.Header {
 	return c.headers
 }
 func (c *basePolledCommand) ShardToken() string { return c.shardToken }
+func (c *basePolledCommand) Channel() string    { return c.channel }
 func (c *basePolledCommand) SessionID() (string, bool) {
 	if c.sessionID == nil {
 		return "", false

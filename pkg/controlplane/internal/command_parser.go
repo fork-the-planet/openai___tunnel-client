@@ -32,6 +32,11 @@ func buildBase(raw wiretypes.BaseRawPolledCommand, polledAt time.Time) (basePoll
 		}
 	}
 
+	channel, err := types.NormalizeChannel(raw.Channel)
+	if err != nil {
+		return basePolledCommand{}, nil, fmt.Errorf("invalid channel: %w", err)
+	}
+
 	base := basePolledCommand{
 		requestID:  types.RequestID(raw.RequestID),
 		enqueued:   raw.CreatedAt,
@@ -39,6 +44,7 @@ func buildBase(raw wiretypes.BaseRawPolledCommand, polledAt time.Time) (basePoll
 		headers:    headers,
 		shardToken: raw.ShardToken,
 		sessionID:  mcpclient.SessionIDFromHeaders(headers),
+		channel:    channel,
 	}
 	return base, headers, nil
 }
