@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -72,7 +73,7 @@ func handleLogsJSON(buf *LogBuffer) http.HandlerFunc {
 	}
 }
 
-func handleLogsStream(buf *LogBuffer) http.HandlerFunc {
+func handleLogsStream(buf *LogBuffer, shutdownCtx context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -84,13 +85,14 @@ func handleLogsStream(buf *LogBuffer) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		notify := buf.Subscribe(r.Context())
+		streamCtx := mergeContexts(r.Context(), shutdownCtx)
+		notify := buf.Subscribe(streamCtx)
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-r.Context().Done():
+			case <-streamCtx.Done():
 				return
 			case ev, ok := <-notify:
 				if !ok {
@@ -108,6 +110,24 @@ func handleLogsStream(buf *LogBuffer) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+func mergeContexts(primary context.Context, secondary context.Context) context.Context {
+	if primary == nil {
+		primary = context.Background()
+	}
+	if secondary == nil {
+		return primary
+	}
+	ctx, cancel := context.WithCancel(primary)
+	go func() {
+		select {
+		case <-secondary.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx
 }
 
 func parseLimit(r *http.Request, def, max int) int {

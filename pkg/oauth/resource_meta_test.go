@@ -3,6 +3,8 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -78,6 +80,10 @@ func candidateURLsToStrings(candidates []DiscoveryCandidate) []string {
 	return out
 }
 
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func TestParseResourceMetadataFromWWWAuthenticate(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +126,21 @@ func TestParseResourceMetadataFromWWWAuthenticate(t *testing.T) {
 	}
 }
 
+func TestBuildOAuthDiscoveryCandidatesRequiresLogger(t *testing.T) {
+	t.Parallel()
+
+	serverEndpoint, err := url.Parse("https://example.com/public/mcp")
+	require.NoError(t, err)
+
+	_, _, err = BuildOAuthDiscoveryCandidates(
+		context.Background(),
+		http.DefaultClient,
+		serverEndpoint,
+		nil,
+	)
+	require.Error(t, err)
+}
+
 func TestBuildOAuthDiscoveryCandidatesProbeFirst(t *testing.T) {
 	t.Parallel()
 
@@ -139,16 +160,65 @@ func TestBuildOAuthDiscoveryCandidatesProbeFirst(t *testing.T) {
 	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
 	require.NoError(t, err)
 
-	candidates, probe := BuildOAuthDiscoveryCandidates(
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
 		context.Background(),
 		server.Client(),
 		serverEndpoint,
-		nil,
+		testLogger(),
 	)
+	require.NoError(t, err)
 
 	require.NotNil(t, probe)
 	require.True(t, probe.Attempted)
 	require.Equal(t, server.URL+probePath, probe.URL)
+	require.NotEmpty(t, candidates)
+	require.Equal(t, DiscoverySourceWWWAuthenticate, candidates[0].Source)
+
+	expected := []string{
+		server.URL + probePath,
+		server.URL + "/.well-known/oauth-protected-resource/public/mcp",
+		server.URL + "/.well-known/oauth-protected-resource",
+	}
+	require.Equal(t, expected, candidateURLsToStrings(candidates))
+}
+
+func TestBuildOAuthDiscoveryCandidatesFallbackToGET(t *testing.T) {
+	t.Parallel()
+
+	probePath := "/.well-known/oauth-protected-resource/custom"
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/public/mcp" {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodGet {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, serverURL+probePath))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	serverURL = server.URL
+
+	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
+	require.NoError(t, err)
+
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
+		context.Background(),
+		server.Client(),
+		serverEndpoint,
+		testLogger(),
+	)
+	require.NoError(t, err)
+
+	require.NotNil(t, probe)
+	require.True(t, probe.Attempted)
+	require.Equal(t, server.URL+probePath, probe.URL)
+	require.Empty(t, probe.Error)
 	require.NotEmpty(t, candidates)
 	require.Equal(t, DiscoverySourceWWWAuthenticate, candidates[0].Source)
 
@@ -179,12 +249,13 @@ func TestBuildOAuthDiscoveryCandidatesDedupesProbe(t *testing.T) {
 	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
 	require.NoError(t, err)
 
-	candidates, probe := BuildOAuthDiscoveryCandidates(
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
 		context.Background(),
 		server.Client(),
 		serverEndpoint,
-		nil,
+		testLogger(),
 	)
+	require.NoError(t, err)
 
 	require.NotNil(t, probe)
 	require.True(t, probe.Attempted)
@@ -214,17 +285,50 @@ func TestBuildOAuthDiscoveryCandidatesMissingHeaderFallsBack(t *testing.T) {
 	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
 	require.NoError(t, err)
 
-	candidates, probe := BuildOAuthDiscoveryCandidates(
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
 		context.Background(),
 		server.Client(),
 		serverEndpoint,
-		nil,
+		testLogger(),
 	)
+	require.NoError(t, err)
 
 	require.NotNil(t, probe)
 	require.True(t, probe.Attempted)
 	require.Empty(t, probe.URL)
 	require.NotEmpty(t, probe.Error)
+	require.Len(t, candidates, 2)
+	require.Equal(t, DiscoverySourceWellKnownPath, candidates[0].Source)
+}
+
+func TestBuildOAuthDiscoveryCandidatesProbeErrorBothMethods(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/public/mcp" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
+	require.NoError(t, err)
+
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
+		context.Background(),
+		server.Client(),
+		serverEndpoint,
+		testLogger(),
+	)
+	require.NoError(t, err)
+
+	require.NotNil(t, probe)
+	require.True(t, probe.Attempted)
+	require.Empty(t, probe.URL)
+	require.NotEmpty(t, probe.Error)
+	require.Contains(t, probe.Error, "GET")
 	require.Len(t, candidates, 2)
 	require.Equal(t, DiscoverySourceWellKnownPath, candidates[0].Source)
 }
@@ -245,12 +349,13 @@ func TestBuildOAuthDiscoveryCandidatesMissingResourceMetadataFallsBack(t *testin
 	serverEndpoint, err := url.Parse(server.URL + "/public/mcp")
 	require.NoError(t, err)
 
-	candidates, probe := BuildOAuthDiscoveryCandidates(
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
 		context.Background(),
 		server.Client(),
 		serverEndpoint,
-		nil,
+		testLogger(),
 	)
+	require.NoError(t, err)
 
 	require.NotNil(t, probe)
 	require.True(t, probe.Attempted)

@@ -44,12 +44,11 @@ func startOAuthDiscovery(p discoveryParams) error {
 	if p.HTTPClient == nil {
 		return fmt.Errorf("oauth discovery: http client is required")
 	}
-
-	logger := p.Logger
-	if logger == nil {
-		logger = slog.Default()
+	if p.Logger == nil {
+		return fmt.Errorf("oauth discovery: logger is required")
 	}
-	logger = logger.With(tclog.FieldComponent, "oauth")
+
+	logger := p.Logger.With(tclog.FieldComponent, "oauth")
 
 	transportKind := p.MCPConfig.TransportKind
 	if transportKind == "" {
@@ -74,7 +73,12 @@ func startOAuthDiscovery(p discoveryParams) error {
 				defer cancel()
 
 				start := time.Now()
-				candidates, probe := BuildOAuthDiscoveryCandidates(fetchCtx, p.HTTPClient, serverURL, logger)
+				candidates, probe, err := BuildOAuthDiscoveryCandidates(fetchCtx, p.HTTPClient, serverURL, logger)
+				if err != nil {
+					p.State.Set(nil, err, nil, nil)
+					logger.WarnContext(fetchCtx, "OAuth discovery disabled", slog.String("error", err.Error()))
+					return
+				}
 				candidateStrings := candidatesToStrings(candidates)
 				if len(candidates) == 0 {
 					err := errors.New("oauth discovery metadata URLs are not configured")
@@ -93,7 +97,7 @@ func startOAuthDiscovery(p discoveryParams) error {
 				p.State.Set(result, nil, probe, candidateStrings)
 				logger.InfoContext(fetchCtx, "OAuth discovery ProtectedResourceMetaData fetched",
 					slog.Int("status_code", resp.ResponseCode()),
-					slog.Duration("latency", time.Since(start)),
+					slog.Int64("latency_ms", time.Since(start).Milliseconds()),
 				)
 			}()
 

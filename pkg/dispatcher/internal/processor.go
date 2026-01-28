@@ -247,7 +247,10 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 		return fmt.Errorf("dispatcher processor: missing MCP server URL")
 	}
 
-	candidates, _ := oauth.BuildOAuthDiscoveryCandidates(ctx, p.oauthHTTPClient, p.mcpServerURL, logger)
+	candidates, _, err := oauth.BuildOAuthDiscoveryCandidates(ctx, p.oauthHTTPClient, p.mcpServerURL, logger)
+	if err != nil {
+		return err
+	}
 	if len(candidates) == 0 {
 		return fmt.Errorf("dispatcher processor: missing OAuth metadata URLs")
 	}

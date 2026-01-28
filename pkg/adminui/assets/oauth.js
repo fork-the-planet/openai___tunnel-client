@@ -40,6 +40,22 @@
     return "skipped";
   }
 
+  function reasonForAttempt(attempt, pending, type, probe) {
+    if (attempt) {
+      if (attempt.error) return attempt.error;
+      if (attempt.tried && attempt.status_code) {
+        return "HTTP " + attempt.status_code;
+      }
+      if (!attempt.tried && !pending) {
+        return "Skipped: higher-priority selected";
+      }
+    }
+    if (type === "www_authenticate" && probe && probe.error) {
+      return probe.error;
+    }
+    return "";
+  }
+
   function fallbackURLs(discoveryUrls) {
     const urls = Array.isArray(discoveryUrls) ? discoveryUrls : [];
     const out = { well_known_path: "", well_known_root: "" };
@@ -76,14 +92,14 @@
       }
     });
 
-    discoveryOrder.forEach(({ priority, source }) => {
-      const attempt = attemptsBySource.get(source);
+    discoveryOrder.forEach(({ priority, source: type }) => {
+      const attempt = attemptsBySource.get(type);
       let status = statusForAttempt(attempt, pending);
       let urlText = attempt ? attempt.url : "";
       let selected = attempt ? !!attempt.selected : false;
       let placeholder = false;
 
-      if (source === "www_authenticate") {
+      if (type === "www_authenticate") {
         if (probe && probe.attempted && !probe.url) {
           status = "skipped";
           urlText = "WWW-Authenticate resource_metadata not implemented";
@@ -99,7 +115,7 @@
       } else {
         if (!urlText) {
           urlText =
-            source === "well_known_path"
+            type === "well_known_path"
               ? fallback.well_known_path
               : fallback.well_known_root;
         }
@@ -115,7 +131,7 @@
       priorityCell.textContent = String(priority);
 
       const typeCell = document.createElement("td");
-      typeCell.textContent = source;
+      typeCell.textContent = type;
 
       const statusCell = document.createElement("td");
       const statusDiv = document.createElement("div");
@@ -129,6 +145,11 @@
       }
       if (placeholder) urlDiv.classList.add("placeholder");
       urlDiv.textContent = urlText;
+      const reason = reasonForAttempt(attempt, pending, type, probe);
+      if (reason) {
+        statusDiv.title = reason;
+        urlDiv.title = reason;
+      }
       statusCell.appendChild(statusDiv);
       statusCell.appendChild(urlDiv);
 

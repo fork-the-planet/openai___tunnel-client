@@ -126,9 +126,12 @@ func BuildOAuthDiscoveryCandidates(
 	client *http.Client,
 	serverURL *url.URL,
 	logger *slog.Logger,
-) ([]DiscoveryCandidate, *WWWAuthenticateProbeStatus) {
+) ([]DiscoveryCandidate, *WWWAuthenticateProbeStatus, error) {
+	if logger == nil {
+		return nil, nil, fmt.Errorf("oauth discovery: logger is required")
+	}
 	if serverURL == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -142,7 +145,7 @@ func BuildOAuthDiscoveryCandidates(
 		})
 	}
 	candidates = append(candidates, buildWellKnownCandidates(serverURL)...)
-	return dedupeCandidates(candidates), probe.status()
+	return dedupeCandidates(candidates), probe.status(), nil
 }
 
 func probeWWWAuthenticateResourceMetadata(
@@ -162,42 +165,62 @@ func probeWWWAuthenticateResourceMetadata(
 	}
 	result.Attempted = true
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL.String(), http.NoBody)
+	methods := []string{http.MethodPost, http.MethodGet}
+	var lastErr error
+	for _, method := range methods {
+		parsed, err := tryWWWAuthenticateProbe(ctx, client, serverURL, logger, method)
+		if err == nil {
+			result.URL = parsed
+			result.Error = ""
+			return result
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		result.Error = lastErr.Error()
+	}
+	return result
+}
+
+func tryWWWAuthenticateProbe(
+	ctx context.Context,
+	client *http.Client,
+	serverURL *url.URL,
+	logger *slog.Logger,
+	method string,
+) (*url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, method, serverURL.String(), http.NoBody)
 	if err != nil {
-		result.Error = fmt.Sprintf("oauth discovery: build WWW-Authenticate probe: %v", err)
-		return result
+		return nil, fmt.Errorf("oauth discovery: build WWW-Authenticate probe %s: %v", method, err)
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		result.Error = fmt.Sprintf("oauth discovery: WWW-Authenticate probe failed: %v", err)
 		if logger != nil {
-			logger.WarnContext(ctx, "oauth discovery WWW-Authenticate probe failed", slog.String("error", err.Error()))
+			logger.WarnContext(ctx, "oauth discovery WWW-Authenticate probe failed", slog.String("method", method), slog.String("error", err.Error()))
 		}
-		return result
+		return nil, fmt.Errorf("oauth discovery: WWW-Authenticate probe %s failed: %v", method, err)
 	}
 	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
-		return result
+		return nil, fmt.Errorf("oauth discovery: WWW-Authenticate probe %s got status %d", method, resp.StatusCode)
 	}
 
 	header := resp.Header.Get("WWW-Authenticate")
 	if header == "" {
-		result.Error = "oauth discovery: WWW-Authenticate header missing"
-		return result
+		return nil, fmt.Errorf("oauth discovery: WWW-Authenticate header missing (%s %d)", method, resp.StatusCode)
 	}
 
 	parsed, err := parseResourceMetadataFromWWWAuthenticate(header)
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return nil, fmt.Errorf("%s (%s %d)", err.Error(), method, resp.StatusCode)
 	}
 
-	result.URL = parsed
-	return result
+	return parsed, nil
 }
 
 func parseResourceMetadataFromWWWAuthenticate(header string) (*url.URL, error) {

@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -31,6 +32,7 @@ type routeParams struct {
 	fx.In
 
 	AdminMux      *http.ServeMux `name:"admin_mux"`
+	Lifecycle     fx.Lifecycle
 	Logger        *slog.Logger
 	Buffer        *LogBuffer
 	HealthService health.Service
@@ -66,6 +68,17 @@ func registerRoutes(p routeParams) error {
 	if p.Buffer == nil {
 		return fmt.Errorf("adminui: log buffer is required")
 	}
+	if p.Lifecycle == nil {
+		return fmt.Errorf("adminui: lifecycle is required")
+	}
+
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	p.Lifecycle.Append(fx.Hook{
+		OnStop: func(context.Context) error {
+			streamCancel()
+			return nil
+		},
+	})
 
 	guard := func(h http.Handler) http.Handler {
 		if p.AdminUIConfig != nil && p.AdminUIConfig.AllowRemote {
@@ -83,7 +96,7 @@ func registerRoutes(p routeParams) error {
 		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})))
 	p.AdminMux.Handle("/api/logs", guard(http.HandlerFunc(handleLogsJSON(p.Buffer))))
-	p.AdminMux.Handle("/api/logs/stream", guard(http.HandlerFunc(handleLogsStream(p.Buffer))))
+	p.AdminMux.Handle("/api/logs/stream", guard(http.HandlerFunc(handleLogsStream(p.Buffer, streamCtx))))
 	p.AdminMux.Handle("/favicon.ico", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
