@@ -1,15 +1,23 @@
 (function () {
   const $ = (id) => document.getElementById(id);
-  const panels = ["overview", "metrics", "oauth", "logs"];
+  const panels = ["overview", "metrics", "oauth", "harpoon", "logs"];
   const tabs = Array.from(document.querySelectorAll(".tab"));
+  const tabListeners = [];
 
   function selectTab(name) {
     tabs.forEach((t) =>
       t.setAttribute("aria-selected", t.dataset.tab === name ? "true" : "false")
     );
-    panels.forEach((p) =>
-      $("panel-" + p).setAttribute("aria-hidden", p === name ? "false" : "true")
-    );
+    panels.forEach((p) => {
+      const panel = $("panel-" + p);
+      if (!panel) return;
+      panel.setAttribute("aria-hidden", p === name ? "false" : "true");
+    });
+    tabListeners.forEach((fn) => {
+      try {
+        fn(name);
+      } catch (e) {}
+    });
   }
 
   tabs.forEach((t) =>
@@ -54,6 +62,9 @@
   adminUI.$ = $;
   adminUI.fetchJSON = fetchJSON;
   adminUI.fmtUptime = fmtUptime;
+  adminUI.onTabChange = (fn) => {
+    if (typeof fn === "function") tabListeners.push(fn);
+  };
 
   function copy(text) {
     if (!text) return;

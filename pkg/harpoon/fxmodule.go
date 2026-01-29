@@ -52,6 +52,7 @@ type harpoonOutputs struct {
 
 	Server           *Server
 	Registry         *Registry
+	CallBuffer       *CallBuffer
 	HarpoonTransport mcp.Transport `name:"harpoon_in_memory_transport"`
 }
 
@@ -75,7 +76,8 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server, err := NewServer(p.Config, registry, logger)
+	buffer := NewCallBuffer()
+	server, err := NewServer(p.Config, registry, buffer, logger)
 	if err != nil {
 		return harpoonOutputs{}, err
 	}
@@ -115,6 +117,7 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 	return harpoonOutputs{
 		Server:           server,
 		Registry:         registry,
+		CallBuffer:       buffer,
 		HarpoonTransport: clientTransport,
 	}, nil
 }

@@ -92,6 +92,11 @@
   - Flag: `--harpoon-additional-transport=http-streamable`
   - Env: `HARPOON_ADDITIONAL_TRANSPORTS` (semicolon- or newline-delimited list)
   - Behavior: exposes the harpoon MCP server over the admin/health HTTP server at `GET/POST /harpoon/mcp` (loopback-only unless `--allow-remote-ui` is set).
+- **Capture payloads (debug only)**
+  - Flag: `--harpoon-capture-payloads`
+  - Env: `HARPOON_CAPTURE_PAYLOADS`
+  - Default: `false`
+  - Behavior: stores request/response payloads in the Harpoon admin UI call history.
 
 ## Logging
 

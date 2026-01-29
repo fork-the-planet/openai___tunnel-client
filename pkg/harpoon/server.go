@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/invopop/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -44,6 +45,7 @@ type Server struct {
 	registry      *Registry
 	cfg           *config.HarpoonConfig
 	httpTransport http.RoundTripper
+	callBuffer    *CallBuffer
 }
 
 type callTargetRequest struct {
@@ -77,7 +79,7 @@ type targetInfo struct {
 }
 
 // NewServer constructs a harpoon MCP server.
-func NewServer(cfg *config.HarpoonConfig, registry *Registry, logger *slog.Logger) (*Server, error) {
+func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer, logger *slog.Logger) (*Server, error) {
 	if cfg == nil {
 		return nil, errors.New("harpoon: config is required")
 	}
@@ -87,11 +89,15 @@ func NewServer(cfg *config.HarpoonConfig, registry *Registry, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if buffer == nil {
+		buffer = NewCallBuffer()
+	}
 	return &Server{
 		logger:        logger.With(tclog.FieldComponent, tclog.ComponentHarpoon),
 		registry:      registry,
 		cfg:           cfg,
 		httpTransport: transport.CloneDefault(),
+		callBuffer:    buffer,
 	}, nil
 }
 
@@ -167,6 +173,7 @@ func (s *Server) listTargets() listTargetsResponse {
 
 func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*callTargetResponse, error) {
 	logger := tclog.LoggerWithContextIdentifiers(ctx, s.logger)
+	start := time.Now()
 
 	label := strings.TrimSpace(params.Label)
 	if label == "" {
@@ -236,6 +243,17 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			slog.Int("status_code", 0),
 			slog.Int(maxBodyLogFieldName, 0),
 		)
+		s.recordCall(callRecordInput{
+			label:     label,
+			url:       resolved.String(),
+			method:    method,
+			status:    0,
+			reqBytes:  len(bodyBytes),
+			respBytes: 0,
+			errorMsg:  cause,
+			startedAt: start,
+			params:    params,
+		})
 		return nil, newToolError(label, cause)
 	}
 	defer func() {
@@ -255,6 +273,18 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			slog.Int("status_code", resp.StatusCode),
 			slog.Int(maxBodyLogFieldName, len(body)),
 		)
+		s.recordCall(callRecordInput{
+			label:        label,
+			url:          resp.Request.URL.String(),
+			method:       method,
+			status:       resp.StatusCode,
+			reqBytes:     len(bodyBytes),
+			respBytes:    len(body),
+			errorMsg:     "response read failed",
+			startedAt:    start,
+			params:       params,
+			responseBody: body,
+		})
 		return nil, newToolError(label, "response read failed")
 	}
 	if tooLarge {
@@ -266,6 +296,18 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			slog.Int("status_code", resp.StatusCode),
 			slog.Int(maxBodyLogFieldName, len(body)),
 		)
+		s.recordCall(callRecordInput{
+			label:        label,
+			url:          resp.Request.URL.String(),
+			method:       method,
+			status:       resp.StatusCode,
+			reqBytes:     len(bodyBytes),
+			respBytes:    len(body),
+			errorMsg:     "response exceeds size limit",
+			startedAt:    start,
+			params:       params,
+			responseBody: body,
+		})
 		return nil, newToolError(label, "response exceeds size limit")
 	}
 
@@ -277,6 +319,19 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		slog.Int("request_bytes", len(bodyBytes)),
 		slog.Int(maxBodyLogFieldName, len(body)),
 	)
+
+	s.recordCall(callRecordInput{
+		label:        label,
+		url:          resp.Request.URL.String(),
+		method:       method,
+		status:       resp.StatusCode,
+		reqBytes:     len(bodyBytes),
+		respBytes:    len(body),
+		errorMsg:     "",
+		startedAt:    start,
+		params:       params,
+		responseBody: body,
+	})
 
 	return &callTargetResponse{
 		StatusCode: resp.StatusCode,
@@ -455,4 +510,53 @@ func classifyRequestError(err error) string {
 		return "redirect blocked"
 	}
 	return "request failed"
+}
+
+type callRecordInput struct {
+	label        string
+	url          string
+	method       string
+	status       int
+	reqBytes     int
+	respBytes    int
+	errorMsg     string
+	startedAt    time.Time
+	params       callTargetRequest
+	responseBody []byte
+}
+
+func (s *Server) recordCall(input callRecordInput) {
+	if s == nil || s.callBuffer == nil {
+		return
+	}
+	entry := CallEntry{
+		Timestamp: time.Now().UTC(),
+		Label:     input.label,
+		URL:       input.url,
+		Method:    input.method,
+		Status:    input.status,
+		LatencyMS: int(time.Since(input.startedAt).Milliseconds()),
+		ReqBytes:  input.reqBytes,
+		RespBytes: input.respBytes,
+		Error:     input.errorMsg,
+	}
+	if s.cfg != nil && s.cfg.CapturePayloads {
+		entry.RequestBody = input.params.Body
+		if len(input.responseBody) > 0 {
+			bodyText, bodyIsBase64 := formatResponseBody(input.responseBody)
+			entry.ResponseBody = bodyText
+			entry.BodyIsBase64 = bodyIsBase64
+		}
+	}
+	s.callBuffer.RecordCall(entry)
+}
+
+func formatResponseBody(body []byte) (string, bool) {
+	if len(body) == 0 {
+		return "", false
+	}
+	if utf8.Valid(body) {
+		return string(body), false
+	}
+	return base64.StdEncoding.EncodeToString(body), true
 }

@@ -287,12 +287,79 @@ func TestIntegrationRedirectTruncationAndPathJoin(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCallTargetPayloadCaptureDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		CapturePayloads:    false,
+		Targets: []config.HarpoonTarget{{
+			Label:   "svc",
+			BaseURL: mustParseURL(t, server.URL),
+		}},
+	}
+	client := newTestServer(t, cfg)
+
+	_, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "svc",
+		Path:   "/",
+		Method: http.MethodPost,
+		Body:   `{"hello":"world"}`,
+	})
+	require.NoError(t, err)
+
+	snapshot := client.callBuffer.Snapshot(1, "svc")
+	require.Len(t, snapshot, 1)
+	require.Empty(t, snapshot[0].RequestBody)
+	require.Empty(t, snapshot[0].ResponseBody)
+	require.False(t, snapshot[0].BodyIsBase64)
+}
+
+func TestCallTargetPayloadCaptureEnabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte{0xff, 0x00, 0x01})
+	}))
+	defer server.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		CapturePayloads:    true,
+		Targets: []config.HarpoonTarget{{
+			Label:   "svc",
+			BaseURL: mustParseURL(t, server.URL),
+		}},
+	}
+	client := newTestServer(t, cfg)
+
+	_, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "svc",
+		Path:   "/",
+		Method: http.MethodPost,
+		Body:   `{"hello":"world"}`,
+	})
+	require.NoError(t, err)
+
+	snapshot := client.callBuffer.Snapshot(1, "svc")
+	require.Len(t, snapshot, 1)
+	require.Equal(t, `{"hello":"world"}`, snapshot[0].RequestBody)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte{0xff, 0x00, 0x01}), snapshot[0].ResponseBody)
+	require.True(t, snapshot[0].BodyIsBase64)
+}
+
 func newTestServer(t *testing.T, cfg *config.HarpoonConfig) *Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	registry, err := NewRegistry(cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
 	require.NoError(t, err)
-	server, err := NewServer(cfg, registry, logger)
+	buffer := NewCallBuffer()
+	server, err := NewServer(cfg, registry, buffer, logger)
 	require.NoError(t, err)
 	return server
 }

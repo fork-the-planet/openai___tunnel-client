@@ -11,6 +11,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/health"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
@@ -39,9 +40,12 @@ type routeParams struct {
 	LoggingConfig *config.LoggingConfig
 	ControlPlane  *config.ControlPlaneConfig
 	MCPConfig     *config.MCPConfig
+	HarpoonConfig *config.HarpoonConfig
 	AdminUIConfig *config.AdminUIConfig
 	MetadataState *controlplane.MetadataState
 	OAuthState    *oauth.DiscoveryState
+	HarpoonBuffer *harpoon.CallBuffer
+	HarpoonReg    *harpoon.Registry
 }
 
 type statusResponse struct {
@@ -115,6 +119,9 @@ func registerRoutes(p routeParams) error {
 	})
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
 	gmux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer, streamCtx))
+	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig))
+	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg, p.HarpoonConfig))
+	gmux.HandleFunc("/api/harpoon/calls", handleHarpoonCalls(p.HarpoonBuffer, p.HarpoonConfig))
 	gmux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

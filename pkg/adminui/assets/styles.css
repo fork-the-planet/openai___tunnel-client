@@ -213,3 +213,67 @@ button:hover, .tab:hover { border-color: rgba(127,127,127,.55); }
 .level-info { color: inherit; }
 .level-warn { color: var(--warn); }
 .level-error { color: var(--bad); }
+
+.harpoon-disabled {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  background: var(--bg);
+  margin-top: 12px;
+}
+
+.harpoon-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.harpoon-table th,
+.harpoon-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.harpoon-table th {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.harpoon-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.harpoon-call {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(127,127,127,.04);
+}
+
+.harpoon-call-header {
+  display: grid;
+  grid-template-columns: 26px minmax(160px, 1.4fr) minmax(90px, 0.7fr) minmax(70px, 0.6fr) minmax(70px, 0.6fr) minmax(80px, 0.7fr) minmax(120px, 0.9fr) minmax(120px, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.harpoon-toggle {
+  padding: 4px 6px;
+  border-radius: 8px;
+  min-width: 24px;
+}
+
+.harpoon-call-details {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.harpoon-payload pre {
+  margin-top: 6px;
+}

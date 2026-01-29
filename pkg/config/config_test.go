@@ -289,6 +289,27 @@ func TestLoadParsesHarpoonAdditionalTransport(t *testing.T) {
 	}
 }
 
+func TestLoadParsesHarpoonCapturePayloads(t *testing.T) {
+	args := []string{"--harpoon-capture-payloads"}
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+		"CONTROL_PLANE_API_KEY":   "control-key",
+		"LOG_FORMAT":              "struct-text",
+		"MCP_SERVER_URL":          "https://mcp.example",
+	}
+
+	cfg, err := Load(args, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err != nil {
+		t.Fatalf("unexpected error loading harpoon capture payloads: %v", err)
+	}
+	if !cfg.Harpoon.CapturePayloads {
+		t.Fatalf("expected harpoon capture payloads to be enabled")
+	}
+}
+
 func TestLoadRejectsHarpoonMaxResponseBytesTooHigh(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID":    envTunnelID,

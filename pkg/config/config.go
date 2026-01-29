@@ -142,6 +142,7 @@ type HarpoonConfig struct {
 	MaxRedirects         int
 	AdditionalTransports []HarpoonTransportKind
 	Targets              []HarpoonTarget
+	CapturePayloads      bool
 }
 
 // HarpoonTarget describes a configured harpoon target.
@@ -233,6 +234,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Int("harpoon-max-response-bytes", DefaultHarpoonMaxResponseBytes, "Maximum harpoon response size in bytes (env.HARPOON_MAX_RESPONSE_BYTES)")
 	fs.Int("harpoon-max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
 	fs.StringArray("harpoon-additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
+	fs.Bool("harpoon-capture-payloads", false, "Capture request/response payloads for the Harpoon admin UI (debug only). (env.HARPOON_CAPTURE_PAYLOADS)")
 
 	if f := fs.Lookup("log.file"); f != nil {
 		f.DefValue = "stdout"
@@ -804,12 +806,17 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
+	capturePayloads, err := getBool(fs, lookupEnv, "harpoon-capture-payloads", "HARPOON_CAPTURE_PAYLOADS")
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
 	return HarpoonConfig{
 		AllowPlaintextHTTP:   allowPlaintext,
 		MaxResponseBytes:     maxResponseBytes,
 		MaxRedirects:         maxRedirects,
 		Targets:              targets,
 		AdditionalTransports: additional,
+		CapturePayloads:      capturePayloads,
 	}, nil
 }
 
