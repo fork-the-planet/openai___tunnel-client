@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"go.openai.org/api/tunnel-client/pkg/httpguard"
 )
 
 //go:embed assets/*
@@ -85,7 +87,7 @@ func handleLogsStream(buf *LogBuffer, shutdownCtx context.Context) http.HandlerF
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		streamCtx := mergeContexts(r.Context(), shutdownCtx)
+		streamCtx := httpguard.MergeContexts(r.Context(), shutdownCtx)
 		notify := buf.Subscribe(streamCtx)
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -110,24 +112,6 @@ func handleLogsStream(buf *LogBuffer, shutdownCtx context.Context) http.HandlerF
 			}
 		}
 	}
-}
-
-func mergeContexts(primary context.Context, secondary context.Context) context.Context {
-	if primary == nil {
-		primary = context.Background()
-	}
-	if secondary == nil {
-		return primary
-	}
-	ctx, cancel := context.WithCancel(primary)
-	go func() {
-		select {
-		case <-secondary.Done():
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	return ctx
 }
 
 func parseLimit(r *http.Request, def, max int) int {

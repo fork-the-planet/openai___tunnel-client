@@ -13,6 +13,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/health"
+	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/version"
@@ -65,26 +66,6 @@ type statusResponse struct {
 	Warnings                []string                     `json:"warnings,omitempty"`
 }
 
-type guardedMux struct {
-	mux         *http.ServeMux
-	allowRemote bool
-}
-
-func (g guardedMux) Handle(pattern string, h http.Handler) {
-	g.mux.Handle(pattern, g.guard(h))
-}
-
-func (g guardedMux) HandleFunc(pattern string, fn func(http.ResponseWriter, *http.Request)) {
-	g.Handle(pattern, http.HandlerFunc(fn))
-}
-
-func (g guardedMux) guard(h http.Handler) http.Handler {
-	if g.allowRemote {
-		return h
-	}
-	return localOnly(h)
-}
-
 func registerRoutes(p routeParams) error {
 	if p.AdminMux == nil {
 		return fmt.Errorf("adminui: admin mux is required")
@@ -104,10 +85,11 @@ func registerRoutes(p routeParams) error {
 		},
 	})
 
-	gmux := guardedMux{
-		mux:         p.AdminMux,
-		allowRemote: p.AdminUIConfig != nil && p.AdminUIConfig.AllowRemote,
-	}
+	gmux := httpguard.NewGuardedMux(
+		p.AdminMux,
+		p.AdminUIConfig != nil && p.AdminUIConfig.AllowRemote,
+		"admin UI is restricted to loopback; set --allow-remote-ui to override",
+	)
 
 	gmux.HandleFunc("/", handleIndex)
 	gmux.Handle("/assets/", handleAssets())

@@ -14,13 +14,14 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/health"
+	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 )
 
 // Module wires the harpoon MCP server.
 var Module = fx.Module(
 	"harpoon",
-	fx.Provide(newHarpoonService),
+	fx.Provide(newHarpoonService, newHarpoonGuardedMux),
 	fx.Invoke(registerAdditionalTransport),
 )
 
@@ -125,61 +126,58 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 type additionalTransportParams struct {
 	fx.In
 
-	AdminMux      *http.ServeMux `name:"admin_mux"`
-	AdminUIConfig *config.AdminUIConfig
-	Config        *config.HarpoonConfig
-	Server        *Server
-	Logger        *slog.Logger
+	Lifecycle  fx.Lifecycle
+	GuardedMux httpguard.GuardedMux
+	Config     *config.HarpoonConfig
+	Server     *Server
+	Logger     *slog.Logger
+}
+
+type guardedMuxParams struct {
+	fx.In
+
+	AdminMux *http.ServeMux `name:"admin_mux"`
+	Config   *config.AdminUIConfig
+}
+
+func newHarpoonGuardedMux(p guardedMuxParams) httpguard.GuardedMux {
+	return httpguard.NewGuardedMux(
+		p.AdminMux,
+		false,
+		"harpoon transport is restricted to loopback",
+	)
 }
 
 func registerAdditionalTransport(p additionalTransportParams) error {
-	if p.Config == nil || p.Server == nil || p.AdminMux == nil {
+	if p.Config == nil || p.Server == nil {
 		return nil
 	}
 	if !p.Config.AdditionalTransportEnabled(config.HarpoonTransportHTTPStreamable) {
 		// No log here to avoid noise when the transport is intentionally disabled.
 		return nil
 	}
+	if p.Lifecycle == nil {
+		return fmt.Errorf("harpoon: lifecycle is required for http-streamable transport")
+	}
 	logger := p.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	p.Lifecycle.Append(fx.Hook{
+		OnStop: func(context.Context) error {
+			streamCancel()
+			return nil
+		},
+	})
 	streamServer := p.Server.MCPServer()
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return streamServer
 	}, nil)
-	guarded := guardHandler(handler, p.AdminUIConfig)
-	p.AdminMux.Handle("/harpoon/mcp", guarded)
+	handler = httpguard.WithShutdownContext(handler, streamCtx)
+	p.GuardedMux.Handle("/harpoon/mcp", handler)
 	logger.Info("harpoon streamable transport enabled", slog.String("path", "/harpoon/mcp"), slog.String(tclog.FieldComponent, tclog.ComponentHarpoon))
 	return nil
-}
-
-func guardHandler(next http.Handler, cfg *config.AdminUIConfig) http.Handler {
-	if cfg != nil && cfg.AllowRemote {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopbackRequest(r) {
-			http.Error(w, "harpoon transport is restricted to loopback; set --allow-remote-ui to override", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func isLoopbackRequest(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback()
 }
 
 func buildHarpoonHTTPEndpoint(healthCfg *config.HealthConfig, svc health.Service, timeout time.Duration) string {

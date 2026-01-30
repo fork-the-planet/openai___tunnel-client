@@ -31,6 +31,7 @@ type harnessConfig struct {
 	logWriter           io.Writer
 	mcpTransportKind    config.MCPTransportKind
 	mcpCommandArgs      []string
+	useHarpoonTransport bool
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -95,6 +96,14 @@ func WithInMemoryMCPTransport() HarnessOption {
 	}
 }
 
+// WithHarpoonInMemoryTransport routes MCP traffic to the embedded harpoon server.
+func WithHarpoonInMemoryTransport() HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.mcpTransportKind = config.MCPTransportInMemory
+		cfg.useHarpoonTransport = true
+	}
+}
+
 // WithMCPCommand configures the client to launch an MCP server over stdio.
 func WithMCPCommand(commandArgs []string) HarnessOption {
 	return func(cfg *harnessConfig) {
@@ -113,6 +122,7 @@ type Harness struct {
 	tunnelStarted bool
 	mcpStarted    bool
 	inMemoryMCP   *mcp.InMemoryTransport
+	useHarpoon    bool
 	logWriter     io.Writer
 	logBuffer     *bytes.Buffer
 }
@@ -184,6 +194,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		MCP:          mcpServer,
 		cfg:          clientCfg,
 		waitTimeout:  cfg.scenarioTimeout,
+		useHarpoon:   cfg.useHarpoonTransport,
 		logWriter:    logWriter,
 		logBuffer:    &logBuf,
 	}
@@ -257,6 +268,9 @@ func (h *Harness) startMCPServer(t testing.TB) {
 	}
 	switch h.cfg.MCP.TransportKind {
 	case config.MCPTransportInMemory:
+		if h.useHarpoon {
+			return
+		}
 		h.inMemoryMCP = h.MCP.StartInMemory(t)
 	case config.MCPTransportStdio:
 		h.mcpStarted = true
@@ -300,7 +314,7 @@ func (h *Harness) startClient(t testing.TB) {
 		}
 		cfg.MCP.ServerURL = mcpURL
 	case config.MCPTransportInMemory, config.MCPTransportStdio:
-		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil {
+		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil && !h.useHarpoon {
 			t.Fatalf("mock MCP in-memory transport must be started before the client")
 			return
 		}
@@ -320,7 +334,13 @@ func (h *Harness) startClient(t testing.TB) {
 		fx.Provide(func() io.Writer { return logWriter }),
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
 	}
-	if h.inMemoryMCP != nil {
+	if h.useHarpoon {
+		options = append(options, fx.Provide(fx.Annotate(
+			func(transport mcp.Transport) mcp.Transport { return transport },
+			fx.ParamTags(`name:"harpoon_in_memory_transport"`),
+			fx.ResultTags(`name:"mcp_injected_transport"`),
+		)))
+	} else if h.inMemoryMCP != nil {
 		options = append(options, fx.Provide(fx.Annotate(
 			func() mcp.Transport { return h.inMemoryMCP },
 			fx.ResultTags(`name:"mcp_injected_transport"`),

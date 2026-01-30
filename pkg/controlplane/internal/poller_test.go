@@ -919,6 +919,50 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	}
 }
 
+func TestPollerRetriesOnCanceledErrorWithoutStop(t *testing.T) {
+	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
+	fetcher := &erroringFetcher{err: context.Canceled, pollCh: make(chan struct{}, 4)}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, time.Millisecond, 2*time.Millisecond)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	fetcher.waitForPoll(t)
+	select {
+	case <-fetcher.pollCh:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("poller did not retry after context.Canceled error")
+	}
+
+	cancel()
+	wg.Wait()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	if got, ok := findCounterValueWithAttributes(rm, metricNameCommandsPollErrors, attribute.String(attributeKeyErrorKind, errorKindContextCanceled)); !ok || got == 0 {
+		t.Fatalf("expected context_canceled poll error metric, got %d (ok=%v)", got, ok)
+	}
+}
+
 func TestPollerStopsWithoutBackoffOnCancel(t *testing.T) {
 	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
 	fetcher := &cancelAwareFetcher{pollStarted: make(chan struct{}, 1)}

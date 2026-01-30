@@ -35,8 +35,10 @@ var (
 		http.MethodPost: {},
 		http.MethodPut:  {},
 	}
-	listTargetsSchema = &jsonschema.Schema{Type: "object"}
-	callTargetSchema  = buildCallTargetSchema()
+	listTargetsSchema       = &jsonschema.Schema{Type: "object"}
+	listTargetsOutputSchema = buildListTargetsOutputSchema()
+	callTargetSchema        = buildCallTargetSchema()
+	callTargetOutputSchema  = buildCallTargetOutputSchema()
 )
 
 // Server provides MCP tools for constrained HTTP access.
@@ -103,16 +105,23 @@ func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer
 
 // MCPServer builds an MCP server with harpoon tools registered.
 func (s *Server) MCPServer() *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "harpoon", Version: "1.0.0"}, nil)
+	serverOptions := &mcp.ServerOptions{
+		Capabilities: &mcp.ServerCapabilities{
+			Tools: &mcp.ToolCapabilities{ListChanged: false},
+		},
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "harpoon", Version: "1.0.0"}, serverOptions)
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_targets",
-		Description: "List available harpoon targets by label.",
-		InputSchema: listTargetsSchema,
+		Name:         "list_targets",
+		Description:  "List available harpoon targets by label.",
+		InputSchema:  listTargetsSchema,
+		OutputSchema: listTargetsOutputSchema,
 	}, s.listTargetsHandler())
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "call_target",
-		Description: "Call an allowlisted HTTP target by label.",
-		InputSchema: callTargetSchema,
+		Name:         "call_target",
+		Description:  "Call an allowlisted HTTP target by label.",
+		InputSchema:  callTargetSchema,
+		OutputSchema: callTargetOutputSchema,
 	}, s.callTargetHandler())
 	return server
 }
@@ -233,8 +242,9 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 
 	resp, err := client.Do(req)
 	if err != nil {
+		toolErr := asToolError(err)
 		cause := classifyRequestError(err)
-		logger.InfoContext(ctx, "harpoon request failed",
+		logFields := []any{
 			slog.String("label", label),
 			slog.String("url", resolved.String()),
 			slog.String("method", method),
@@ -242,7 +252,20 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			slog.Int("request_bytes", len(bodyBytes)),
 			slog.Int("status_code", 0),
 			slog.Int(maxBodyLogFieldName, 0),
+		}
+		if toolErr != nil && toolErr.redirectURL != "" {
+			logFields = append(logFields,
+				slog.String("redirect_url", toolErr.redirectURL),
+				slog.String("redirect_reason", toolErr.reason),
+			)
+		}
+		logger.InfoContext(ctx, "harpoon request failed",
+			logFields...,
 		)
+		responseMsg := "request failed"
+		if toolErr != nil {
+			responseMsg = toolErr.msg
+		}
 		s.recordCall(callRecordInput{
 			label:     label,
 			url:       resolved.String(),
@@ -254,7 +277,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			startedAt: start,
 			params:    params,
 		})
-		return nil, newToolError(label, cause)
+		return nil, newToolError(label, responseMsg)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -416,7 +439,7 @@ func (s *Server) redirectPolicy(label string, maxRedirects int, followRedirects 
 			return newToolError(label, "redirect blocked")
 		}
 		if !s.registry.AllowsURL(req.URL) {
-			return newToolError(label, "redirect blocked")
+			return newRedirectBlockedError(label, req.URL.String())
 		}
 		return nil
 	}
@@ -452,21 +475,66 @@ func decodeArguments(args map[string]any, out any) error {
 }
 
 func buildCallTargetSchema() *jsonschema.Schema {
-	schema := jsonschema.Reflect(callTargetRequest{})
+	reflector := &jsonschema.Reflector{DoNotReference: true}
+	schema := reflector.Reflect(callTargetRequest{})
 	if schema.Type == "" {
 		schema.Type = "object"
 	}
-	schema.Required = []string{"label", "path", "method"}
+	schema.Required = []string{"label", "method"}
+	if schema.Properties != nil {
+		if headersSchema, ok := schema.Properties.Get("headers"); ok && headersSchema != nil {
+			headersSchema.Default = map[string]string{}
+		}
+		if methodSchema, ok := schema.Properties.Get("method"); ok && methodSchema != nil {
+			allowed := allowedMethodsList()
+			enum := make([]any, len(allowed))
+			for i, method := range allowed {
+				enum[i] = method
+			}
+			methodSchema.Enum = enum
+		}
+	}
+	return schema
+}
+
+func buildCallTargetOutputSchema() *jsonschema.Schema {
+	reflector := &jsonschema.Reflector{DoNotReference: true}
+	schema := reflector.Reflect(callTargetResponse{})
+	if schema.Type == "" {
+		schema.Type = "object"
+	}
+	schema.Required = nil
+	return schema
+}
+
+func buildListTargetsOutputSchema() *jsonschema.Schema {
+	reflector := &jsonschema.Reflector{DoNotReference: true}
+	schema := reflector.Reflect(listTargetsResponse{})
+	if schema.Type == "" {
+		schema.Type = "object"
+	}
+	schema.Required = nil
 	return schema
 }
 
 type toolError struct {
-	label string
-	msg   string
+	label       string
+	msg         string
+	redirectURL string
+	reason      string
 }
 
 func newToolError(label, msg string) *toolError {
 	return &toolError{label: label, msg: msg}
+}
+
+func newRedirectBlockedError(label, redirectURL string) *toolError {
+	return &toolError{
+		label:       label,
+		msg:         "redirect blocked",
+		redirectURL: redirectURL,
+		reason:      "redirect target not in allow list",
+	}
 }
 
 func (e *toolError) Error() string {
@@ -501,6 +569,9 @@ func classifyRequestError(err error) string {
 	}
 	var te *toolError
 	if errors.As(err, &te) {
+		if te.redirectURL != "" {
+			return fmt.Sprintf("%s: %s not in allow list", te.msg, te.redirectURL)
+		}
 		return te.msg
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
