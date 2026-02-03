@@ -372,6 +372,40 @@ func TestFetchOAuthMetadataAttemptsCapture(t *testing.T) {
 	require.Equal(t, DiscoverySourceWellKnownRoot, attempts[1].Source)
 }
 
+func TestFetchOAuthMetadataRetriesTimeoutWithIncreasingRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	targetURL, err := url.Parse("https://example.com/.well-known/oauth-protected-resource")
+	require.NoError(t, err)
+
+	var calls int
+	var deadlines []time.Time
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if dl, ok := req.Context().Deadline(); ok {
+				deadlines = append(deadlines, dl)
+			}
+			return nil, context.DeadlineExceeded
+		}),
+		Timeout: 30 * time.Second,
+	}
+
+	_, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		[]DiscoveryCandidate{{URL: targetURL, Source: DiscoverySourceWellKnownRoot}},
+		nil,
+	)
+	require.Error(t, fetchErr)
+	require.Equal(t, 1+oauthMetadataRequestRetryCount, calls)
+	require.Len(t, deadlines, 1+oauthMetadataRequestRetryCount)
+	retryDeadlines := deadlines[1:]
+	require.Len(t, retryDeadlines, oauthMetadataRequestRetryCount)
+	require.True(t, retryDeadlines[1].After(retryDeadlines[0]), "second retry deadline should be later than first")
+	require.True(t, retryDeadlines[2].After(retryDeadlines[1]), "third retry deadline should be later than second")
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {

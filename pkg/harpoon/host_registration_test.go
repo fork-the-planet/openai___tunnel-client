@@ -55,6 +55,85 @@ func TestBuildAutoLabelUsesRoleIndex(t *testing.T) {
 	}
 }
 
+func TestRegisterHostBundleAddsDeterministicSuffixOnCollision(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, true, nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	classifier := hostclassifier.NewHostClassifier(config.HarpoonHostClassifierConfig{
+		IncludeSuffix:  []string{"internal"},
+		IncludePrivate: false,
+	})
+
+	bundle := hostbus.URLBundle{
+		URLs: []hostbus.URLRecord{
+			{
+				URL:  mustParseURLForHostRegistration(t, "https://first.internal/issuer"),
+				Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "issuer"}, {Key: hostbus.TagKeyIndex, Value: "0"}},
+			},
+			{
+				URL:  mustParseURLForHostRegistration(t, "https://second.internal/issuer"),
+				Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "issuer"}, {Key: hostbus.TagKeyIndex, Value: "0"}},
+			},
+			{
+				URL:  mustParseURLForHostRegistration(t, "https://third.internal/issuer"),
+				Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "issuer"}, {Key: hostbus.TagKeyIndex, Value: "0"}},
+			},
+		},
+	}
+
+	if err := registerHostBundle(bundle, classifier, registry, logger); err != nil {
+		t.Fatalf("register bundle: %v", err)
+	}
+
+	if _, ok := registry.Lookup("oauth-issuer-0"); !ok {
+		t.Fatalf("expected label oauth-issuer-0")
+	}
+	if _, ok := registry.Lookup("oauth-issuer-0-1"); !ok {
+		t.Fatalf("expected label oauth-issuer-0-1")
+	}
+	if _, ok := registry.Lookup("oauth-issuer-0-2"); !ok {
+		t.Fatalf("expected label oauth-issuer-0-2")
+	}
+}
+
+func TestRegisterHostBundleDerivedEndpointsPrivateHostsOnly(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, true, nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	classifier := hostclassifier.NewHostClassifier(config.HarpoonHostClassifierConfig{
+		IncludeSuffix:  []string{"internal"},
+		IncludePrivate: false,
+	})
+
+	bundle := hostbus.URLBundle{
+		URLs: []hostbus.URLRecord{
+			{
+				URL:  mustParseURLForHostRegistration(t, "https://auth.internal/authorize"),
+				Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "authorization-endpoint"}, {Key: hostbus.TagKeyIndex, Value: "0"}},
+			},
+			{
+				URL:  mustParseURLForHostRegistration(t, "https://public.example.com/token"),
+				Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "token-endpoint"}, {Key: hostbus.TagKeyIndex, Value: "0"}},
+			},
+		},
+	}
+
+	if err := registerHostBundle(bundle, classifier, registry, logger); err != nil {
+		t.Fatalf("register bundle: %v", err)
+	}
+
+	if _, ok := registry.Lookup("oauth-authorization-endpoint-0"); !ok {
+		t.Fatalf("expected private derived endpoint to be registered")
+	}
+	if _, ok := registry.Lookup("oauth-token-endpoint-0"); ok {
+		t.Fatalf("did not expect public derived endpoint registration")
+	}
+}
+
 func mustParseURLForHostRegistration(t *testing.T, raw string) *url.URL {
 	parsed, err := url.Parse(raw)
 	if err != nil {

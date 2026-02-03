@@ -111,21 +111,29 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 			)
 			continue
 		}
-		label := buildAutoLabel(record, idx)
-		if label == "" {
+		baseLabel := buildAutoLabel(record, idx)
+		if baseLabel == "" {
 			logger.Warn("harpoon host auto-registration skipped: empty label",
 				slog.String("url", safeURL(record.URL)),
 				slog.String("inclusion_reason", reason),
 			)
 			continue
 		}
-		if _, exists := registry.Lookup(label); exists {
-			logger.Info("harpoon host auto-registration skipped: label exists",
-				slog.String("label", label),
+		label, collisionCount := resolveAutoLabelCollision(baseLabel, registry)
+		if label == "" {
+			logger.Warn("harpoon host auto-registration skipped: no available label",
+				slog.String("base_label", baseLabel),
 				slog.String("url", safeURL(record.URL)),
 				slog.String("inclusion_reason", reason),
 			)
 			continue
+		}
+		if collisionCount > 0 {
+			logger.Info("harpoon host auto-registration resolved label collision",
+				slog.String("base_label", baseLabel),
+				slog.String("label", label),
+				slog.Int("collision_count", collisionCount),
+			)
 		}
 		target := Target{
 			Label:           label,
@@ -167,6 +175,48 @@ func buildAutoLabel(record hostbus.URLRecord, fallbackIndex int) string {
 		parts = append(parts, index)
 	}
 	return sanitizeLabel(strings.Join(parts, "-"))
+}
+
+func resolveAutoLabelCollision(baseLabel string, registry *Registry) (string, int) {
+	if baseLabel == "" || registry == nil {
+		return "", 0
+	}
+
+	for i := 0; i < 10_000; i++ {
+		candidate := baseLabel
+		if i > 0 {
+			candidate = labelWithNumericSuffix(baseLabel, i)
+		}
+		if candidate == "" {
+			continue
+		}
+		if _, exists := registry.Lookup(candidate); exists {
+			continue
+		}
+		return candidate, i
+	}
+	return "", 0
+}
+
+func labelWithNumericSuffix(baseLabel string, suffix int) string {
+	if baseLabel == "" || suffix <= 0 {
+		return baseLabel
+	}
+
+	suffixPart := fmt.Sprintf("-%d", suffix)
+	maxBaseLen := 64 - len(suffixPart)
+	if maxBaseLen < 1 {
+		return ""
+	}
+
+	trimmed := baseLabel
+	if len(trimmed) > maxBaseLen {
+		trimmed = strings.TrimRight(trimmed[:maxBaseLen], "-_")
+		if trimmed == "" {
+			trimmed = "x"
+		}
+	}
+	return trimmed + suffixPart
 }
 
 func tagValue(tags []hostbus.Tag, key hostbus.TagKey) string {

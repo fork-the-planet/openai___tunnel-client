@@ -15,13 +15,14 @@ const DefaultDiscoveryTimeout = 5 * time.Second
 
 // DiscoveryResult captures OAuth ProtectedResourceMetaData returned by the MCP server.
 type DiscoveryResult struct {
-	URL        string             `json:"url,omitempty"`
-	FetchedAt  time.Time          `json:"fetched_at,omitempty"`
-	StatusCode int                `json:"status_code,omitempty"`
-	Headers    http.Header        `json:"headers,omitempty"`
-	Body       json.RawMessage    `json:"body,omitempty"`
-	BodyText   string             `json:"body_text,omitempty"`
-	Attempts   []DiscoveryAttempt `json:"attempts,omitempty"`
+	URL                string                         `json:"url,omitempty"`
+	FetchedAt          time.Time                      `json:"fetched_at,omitempty"`
+	StatusCode         int                            `json:"status_code,omitempty"`
+	Headers            http.Header                    `json:"headers,omitempty"`
+	Body               json.RawMessage                `json:"body,omitempty"`
+	BodyText           string                         `json:"body_text,omitempty"`
+	Attempts           []DiscoveryAttempt             `json:"attempts,omitempty"`
+	AuthServerMetadata *AuthServerMetadataFetchResult `json:"auth_server_metadata,omitempty"`
 }
 
 // DiscoveryState tracks the result of a background OAuth ProtectedResourceMetaData fetch.

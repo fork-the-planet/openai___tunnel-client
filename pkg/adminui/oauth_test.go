@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"testing"
@@ -15,8 +16,13 @@ func TestBuildOAuthStatusWithAttempts(t *testing.T) {
 	t.Parallel()
 
 	serverURL := mustParseURL(t, "https://example.com/public/mcp")
+	body := json.RawMessage(`{
+		"resource":"https://resource.internal",
+		"authorization_servers":["https://auth-1.internal","https://auth-2.internal"]
+	}`)
 	state := oauth.NewDiscoveryState()
 	state.Set(&oauth.DiscoveryResult{
+		Body: body,
 		Attempts: []oauth.DiscoveryAttempt{{
 			URL:    "https://example.com/.well-known/oauth-protected-resource/public/mcp",
 			Source: oauth.DiscoverySourceWellKnownPath,
@@ -34,6 +40,9 @@ func TestBuildOAuthStatusWithAttempts(t *testing.T) {
 	require.NotNil(t, out.Metadata)
 	require.Len(t, out.Metadata.Attempts, 1)
 	require.Equal(t, "https://example.com/override", out.DiscoveryURLs[0])
+	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
+	require.Equal(t, 2, out.AuthServerCount)
+	require.Equal(t, "https://auth-1.internal", out.SelectedAuthServer)
 }
 
 func TestBuildOAuthStatusPendingUsesConfigURLs(t *testing.T) {
@@ -50,6 +59,9 @@ func TestBuildOAuthStatusPendingUsesConfigURLs(t *testing.T) {
 	require.True(t, out.Pending)
 	require.NotEmpty(t, out.DiscoveryURLs)
 	require.Equal(t, expectedMetadataURLs(serverURL), out.DiscoveryURLs)
+	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
+	require.Equal(t, 0, out.AuthServerCount)
+	require.Empty(t, out.SelectedAuthServer)
 }
 
 func TestBuildOAuthStatusErrorIncludesAttempts(t *testing.T) {
@@ -73,6 +85,7 @@ func TestBuildOAuthStatusErrorIncludesAttempts(t *testing.T) {
 	require.Equal(t, "boom", out.Error)
 	require.NotNil(t, out.Metadata)
 	require.Len(t, out.Metadata.Attempts, 1)
+	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
 }
 
 func expectedMetadataURLs(serverURL *url.URL) []string {

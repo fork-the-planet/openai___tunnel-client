@@ -8,53 +8,14 @@
       if (!res.ok) throw new Error(res.status + " " + res.statusText);
       return await res.json();
     });
-  const fmtUptime =
-    adminUI.fmtUptime ||
-    ((seconds) => {
-      seconds = Math.max(0, Math.floor(seconds || 0));
-      const d = Math.floor(seconds / 86400);
-      seconds -= d * 86400;
-      const h = Math.floor(seconds / 3600);
-      seconds -= h * 3600;
-      const m = Math.floor(seconds / 60);
-      seconds -= m * 60;
-      const parts = [];
-      if (d) parts.push(d + "d");
-      if (h) parts.push(h + "h");
-      if (m) parts.push(m + "m");
-      parts.push(seconds + "s");
-      return parts.join(" ");
-    });
+
+  const expandedRows = new Set();
 
   const discoveryOrder = [
-    { priority: 1, source: "www_authenticate" },
-    { priority: 2, source: "well_known_path" },
-    { priority: 3, source: "well_known_root" },
+    { source: "www_authenticate" },
+    { source: "well_known_path" },
+    { source: "well_known_root" },
   ];
-
-  function statusForAttempt(attempt, pending) {
-    if (attempt && attempt.selected) return "selected";
-    if (attempt && attempt.tried) return "tried";
-    if (attempt) return "skipped";
-    if (pending) return "pending";
-    return "skipped";
-  }
-
-  function reasonForAttempt(attempt, pending, type, probe) {
-    if (attempt) {
-      if (attempt.error) return attempt.error;
-      if (attempt.tried && attempt.status_code) {
-        return "HTTP " + attempt.status_code;
-      }
-      if (!attempt.tried && !pending) {
-        return "Skipped: higher-priority selected";
-      }
-    }
-    if (type === "www_authenticate" && probe && probe.error) {
-      return probe.error;
-    }
-    return "";
-  }
 
   function fallbackURLs(discoveryUrls) {
     const urls = Array.isArray(discoveryUrls) ? discoveryUrls : [];
@@ -73,166 +34,307 @@
     return out;
   }
 
-  function renderDiscoveryTable(payload) {
-    const tbody = $("oauthDiscoveryRows");
-    if (!tbody) return;
-    tbody.textContent = "";
+  function fmtTimestamp(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return ts;
+    return d.toISOString();
+  }
 
+  function reasonForAttempt(attempt, pending, type, probe) {
+    if (attempt) {
+      if (attempt.error) return attempt.error;
+      if (!attempt.tried && !pending) {
+        return "Skipped: higher-priority selected";
+      }
+    }
+    if (type === "www_authenticate" && probe && probe.error) {
+      return probe.error;
+    }
+    return "";
+  }
+
+  function buildPRMDRows(payload) {
     const pending = payload ? payload.pending : false;
     const probe = payload ? payload.www_authenticate_probe : null;
     const attempts =
       payload && payload.metadata && Array.isArray(payload.metadata.attempts)
         ? payload.metadata.attempts
         : [];
-    const fallback = fallbackURLs(payload ? payload.discovery_urls : []);
     const attemptsBySource = new Map();
     attempts.forEach((attempt) => {
-      if (attempt && attempt.source) {
-        attemptsBySource.set(attempt.source, attempt);
-      }
+      if (attempt && attempt.source) attemptsBySource.set(attempt.source, attempt);
     });
 
-    discoveryOrder.forEach(({ priority, source: type }) => {
+    const fallback = fallbackURLs(payload ? payload.discovery_urls : []);
+    const rows = [];
+    discoveryOrder.forEach((entry, idx) => {
+      const type = entry.source;
       const attempt = attemptsBySource.get(type);
-      let status = statusForAttempt(attempt, pending);
-      let urlText = attempt ? attempt.url : "";
-      let selected = attempt ? !!attempt.selected : false;
-      let placeholder = false;
-
-      if (type === "www_authenticate") {
-        if (probe && probe.attempted && !probe.url) {
-          status = "skipped";
-          urlText = "WWW-Authenticate resource_metadata not implemented";
-          selected = false;
-          placeholder = true;
-        } else if (!urlText && probe && probe.url) {
-          urlText = probe.url;
-        }
-        if (!urlText && !placeholder) {
-          urlText = "—";
-          placeholder = true;
-        }
-      } else {
-        if (!urlText) {
-          urlText =
-            type === "well_known_path"
-              ? fallback.well_known_path
-              : fallback.well_known_root;
-        }
-        if (!urlText) {
-          urlText = "—";
-          placeholder = true;
-        }
-      }
-
-      const row = document.createElement("tr");
-
-      const priorityCell = document.createElement("td");
-      priorityCell.textContent = String(priority);
-
-      const typeCell = document.createElement("td");
-      typeCell.textContent = type;
-
-      const statusCell = document.createElement("td");
-      const statusDiv = document.createElement("div");
-      statusDiv.className = "oauth-status";
-      statusDiv.textContent = status;
-      const urlDiv = document.createElement("div");
-      urlDiv.className = "oauth-url";
-      if (selected) urlDiv.classList.add("selected");
-      if (!selected && attempt && attempt.tried) {
-        urlDiv.classList.add("tried");
-      }
-      if (placeholder) urlDiv.classList.add("placeholder");
-      urlDiv.textContent = urlText;
       const reason = reasonForAttempt(attempt, pending, type, probe);
-      if (reason) {
-        statusDiv.title = reason;
-        urlDiv.title = reason;
+
+      let urlText = attempt ? attempt.url : "";
+      if (type === "www_authenticate") {
+        if (!urlText && probe && probe.url) urlText = probe.url;
+      } else if (!urlText) {
+        urlText = type === "well_known_path" ? fallback.well_known_path : fallback.well_known_root;
       }
-      statusCell.appendChild(statusDiv);
-      statusCell.appendChild(urlDiv);
+      if (!urlText) urlText = "—";
 
-      row.appendChild(priorityCell);
-      row.appendChild(typeCell);
-      row.appendChild(statusCell);
-      tbody.appendChild(row);
+      let status = "skipped";
+      if (attempt && attempt.selected) {
+        status = "fetched";
+      } else if (attempt && attempt.tried && attempt.error) {
+        status = "error";
+      } else if (attempt && attempt.tried) {
+        status = "tried";
+      } else if (pending) {
+        status = "pending";
+      }
+
+      rows.push({
+        key: "prmd|" + type + "|" + urlText,
+        priority: idx + 1,
+        step: type,
+        url: urlText,
+        status,
+        details: {
+          statusCode: attempt ? attempt.status_code : 0,
+          status: status,
+          fetchedAt: payload && payload.metadata ? payload.metadata.fetched_at : "",
+          source: payload ? payload.metadata_source : "",
+          sourceURL: urlText,
+          headers: attempt && attempt.selected && payload && payload.metadata ? payload.metadata.headers : null,
+          body: attempt && attempt.selected && payload && payload.metadata ? payload.metadata.body : null,
+          bodyText: attempt && attempt.selected && payload && payload.metadata ? payload.metadata.body_text : "",
+          error: reason,
+        },
+      });
     });
+
+    return rows;
   }
 
-  function fmtTimestamp(ts) {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    if (Number.isNaN(d.getTime())) return ts;
-    const ageSec = Math.floor((Date.now() - d.getTime()) / 1000);
-    return d.toISOString() + " (" + fmtUptime(ageSec) + " ago)";
+  function buildAuthMetaRows(payload, startPriority) {
+    const rows = [];
+    const authMeta = payload && payload.metadata ? payload.metadata.auth_server_metadata : null;
+    const attempts = authMeta && Array.isArray(authMeta.attempts) ? authMeta.attempts : [];
+    attempts.forEach((attempt, idx) => {
+      let status = "skipped";
+      if (attempt && attempt.selected) {
+        status = "fetched";
+      } else if (attempt && attempt.tried && attempt.error) {
+        status = "error";
+      } else if (attempt && attempt.tried) {
+        status = "tried";
+      }
+
+      const stepBits = ["auth_server_meta"];
+      if (attempt && attempt.document) stepBits.push(String(attempt.document));
+      if (attempt && attempt.path_style) stepBits.push("(" + String(attempt.path_style) + ")");
+
+      rows.push({
+        key: "auth|" + idx + "|" + (attempt && attempt.url ? attempt.url : "—"),
+        priority: startPriority + idx,
+        step: stepBits.join(" "),
+        url: attempt && attempt.url ? attempt.url : "—",
+        status,
+        details: {
+          statusCode: attempt ? attempt.status_code : 0,
+          status: status,
+          fetchedAt: payload && payload.metadata ? payload.metadata.fetched_at : "",
+          source: "auth_server_metadata",
+          sourceURL: attempt && attempt.url ? attempt.url : "—",
+          headers: attempt ? attempt.headers : null,
+          body: attempt ? attempt.body : null,
+          bodyText: attempt ? attempt.body_text : "",
+          error: attempt ? attempt.error : "",
+        },
+      });
+    });
+    return rows;
   }
 
-  function renderOAuthMetadata(meta, err, pending, metadataSource) {
-    const statusEl = $("oauthStatus");
-    if (!statusEl) return;
-    if (err) {
-      statusEl.textContent = "error";
-    } else if (pending) {
-      statusEl.textContent = "pending";
-    } else if (meta) {
-      statusEl.textContent = meta.status_code || "—";
+  function hasDetails(details) {
+    if (!details) return false;
+    return !!(
+      details.statusCode ||
+      details.error ||
+      (details.headers && Object.keys(details.headers).length) ||
+      details.body ||
+      details.bodyText ||
+      details.fetchedAt
+    );
+  }
+
+  function appendKVRow(parent, key, value) {
+    const kEl = document.createElement("div");
+    kEl.className = "muted";
+    kEl.textContent = key;
+    const vEl = document.createElement("div");
+    vEl.className = "mono";
+    vEl.textContent = value;
+    parent.appendChild(kEl);
+    parent.appendChild(vEl);
+  }
+
+  function appendCollapsibleSection(parent, titleText, contentText) {
+    const detailsEl = document.createElement("details");
+    detailsEl.className = "oauth-detail-collapse";
+    detailsEl.open = false;
+
+    const summary = document.createElement("summary");
+    summary.className = "oauth-detail-summary";
+    summary.textContent = titleText;
+    detailsEl.appendChild(summary);
+
+    if (contentText && contentText.trim() !== "") {
+      const pre = document.createElement("pre");
+      pre.className = "pre mono oauth-detail-pre";
+      pre.textContent = contentText;
+      detailsEl.appendChild(pre);
     } else {
-      statusEl.textContent = "—";
+      const empty = document.createElement("div");
+      empty.className = "oauth-detail-empty";
+      detailsEl.appendChild(empty);
     }
-    const fetchedEl = $("oauthFetchedAt");
-    if (fetchedEl) {
-      fetchedEl.textContent = meta ? fmtTimestamp(meta.fetched_at) : "—";
-    }
-    const sourceEl = $("oauthSourceUrl");
-    if (sourceEl) {
-      sourceEl.textContent = meta ? meta.url || "—" : "—";
-    }
-    const metaSourceEl = $("oauthMetadataSource");
-    if (metaSourceEl) {
-      metaSourceEl.textContent = metadataSource || "—";
-    }
+    parent.appendChild(detailsEl);
+  }
 
-    const headersEl = $("oauthHeaders");
-    const bodyEl = $("oauthBody");
-    if (!headersEl || !bodyEl) return;
+  function renderDetailContent(detailCell, details) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "oauth-detail-wrap";
 
-    if (err) {
-      headersEl.textContent = "";
-      bodyEl.textContent = "";
+    const title = document.createElement("div");
+    title.className = "oauth-detail-title";
+    title.textContent = "OAuth metadata";
+    wrapper.appendChild(title);
+
+    const kv = document.createElement("div");
+    kv.className = "oauth-detail-kv";
+    appendKVRow(kv, "Status", details && details.status ? details.status : "—");
+    appendKVRow(kv, "Fetched at", fmtTimestamp(details ? details.fetchedAt : ""));
+    appendKVRow(kv, "Source URL", details && details.sourceURL ? details.sourceURL : "—");
+    appendKVRow(kv, "Metadata source", details && details.source ? details.source : "—");
+    appendKVRow(kv, "HTTP status", details && details.statusCode ? "HTTP " + details.statusCode : "—");
+    appendKVRow(kv, "Error", details && details.error ? details.error : "—");
+    wrapper.appendChild(kv);
+
+    const headersText =
+      details && details.headers && Object.keys(details.headers).length
+        ? JSON.stringify(details.headers, null, 2)
+        : "";
+    appendCollapsibleSection(wrapper, "Headers", headersText);
+
+    const bodyText =
+      details && details.body
+        ? JSON.stringify(details.body, null, 2)
+        : details && details.bodyText
+          ? details.bodyText
+          : "";
+    appendCollapsibleSection(wrapper, "Body", bodyText);
+
+    detailCell.appendChild(wrapper);
+  }
+
+  function renderDiscoveryTable(payload) {
+    const tbody = $("oauthDiscoveryRows");
+    if (!tbody) return;
+    tbody.textContent = "";
+
+    const prmdRows = buildPRMDRows(payload || null);
+    const authRows = buildAuthMetaRows(payload || null, prmdRows.length + 1);
+    const rows = prmdRows.concat(authRows);
+
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.className = "muted";
+      td.textContent = "No discovery rows.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
       return;
     }
 
-    const headers = meta && meta.headers ? meta.headers : null;
-    headersEl.textContent = headers ? JSON.stringify(headers, null, 2) : "";
+    rows.forEach((row) => {
+      const expandable = hasDetails(row.details);
 
-    if (meta) {
-      if (meta.body) {
-        bodyEl.textContent = JSON.stringify(meta.body, null, 2);
-      } else if (meta.body_text) {
-        bodyEl.textContent = meta.body_text;
-      } else {
-        bodyEl.textContent = "";
+      const tr = document.createElement("tr");
+
+      const expandCell = document.createElement("td");
+      expandCell.className = "oauth-expand-cell";
+      let detailRow = null;
+      if (expandable) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "oauth-expand";
+        btn.setAttribute("aria-label", "Toggle details");
+        expandCell.appendChild(btn);
+
+        detailRow = document.createElement("tr");
+        detailRow.className = "oauth-detail-row";
+        const detailCell = document.createElement("td");
+        detailCell.colSpan = 5;
+        renderDetailContent(detailCell, row.details);
+        detailRow.appendChild(detailCell);
+
+        const setExpanded = (expanded) => {
+          detailRow.style.display = expanded ? "table-row" : "none";
+          btn.textContent = expanded ? "−" : "+";
+          if (expanded) {
+            expandedRows.add(row.key);
+          } else {
+            expandedRows.delete(row.key);
+          }
+        };
+
+        btn.addEventListener("click", () => {
+          setExpanded(detailRow.style.display === "none");
+        });
+
+        setExpanded(expandedRows.has(row.key));
       }
-    } else {
-      bodyEl.textContent = "";
-    }
+
+      const priorityCell = document.createElement("td");
+      priorityCell.textContent = String(row.priority);
+
+      const stepCell = document.createElement("td");
+      stepCell.textContent = row.step;
+
+      const urlCell = document.createElement("td");
+      urlCell.className = "mono oauth-url";
+      urlCell.textContent = row.url;
+
+      const statusCell = document.createElement("td");
+      const statusPill = document.createElement("span");
+      statusPill.className = "oauth-status oauth-status-" + row.status;
+      statusPill.textContent = row.status;
+      statusCell.appendChild(statusPill);
+
+      tr.appendChild(expandCell);
+      tr.appendChild(priorityCell);
+      tr.appendChild(stepCell);
+      tr.appendChild(urlCell);
+      tr.appendChild(statusCell);
+
+      tbody.appendChild(tr);
+      if (detailRow) tbody.appendChild(detailRow);
+    });
   }
 
   async function refreshOAuth() {
     const errEl = $("oauthErr");
     if (errEl) errEl.textContent = "";
     try {
-      const o = await fetchJSON("/api/oauth");
-      renderDiscoveryTable(o);
-      renderOAuthMetadata(o.metadata, o.error, o.pending, o.metadata_source);
-      if (o.error && errEl) {
-        errEl.textContent = o.error;
+      const payload = await fetchJSON("/api/oauth");
+      renderDiscoveryTable(payload);
+      if (payload.error && errEl) {
+        errEl.textContent = payload.error;
       }
     } catch (e) {
       if (errEl) errEl.textContent = "error: " + e;
       renderDiscoveryTable(null);
-      renderOAuthMetadata(null, e, false, "");
     }
   }
 

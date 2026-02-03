@@ -1,8 +1,11 @@
 package oauth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -12,27 +15,52 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 )
 
-func buildURLBundleFromPRMD(payload []byte, fetchedAt time.Time, sourceURL *url.URL) (hostbus.URLBundle, error) {
+func buildURLBundleFromPRMDWithAuthServerMetadata(
+	ctx context.Context,
+	client *http.Client,
+	payload []byte,
+	fetchedAt time.Time,
+	sourceURL *url.URL,
+	logger *slog.Logger,
+) (hostbus.URLBundle, *AuthServerMetadataFetchResult, error) {
 	var metadata oauthex.ProtectedResourceMetadata
 	if err := json.Unmarshal(payload, &metadata); err != nil {
-		return hostbus.URLBundle{}, fmt.Errorf("decode protected resource metadata: %w", err)
+		return hostbus.URLBundle{}, nil, fmt.Errorf("decode protected resource metadata: %w", err)
+	}
+
+	records := make([]hostbus.URLRecord, 0, 2+len(metadata.AuthorizationServers)*8)
+	records = append(records, urlRecordFromPRMDResource(metadata.Resource, 0))
+
+	for i, server := range metadata.AuthorizationServers {
+		records = append(records, urlRecordFromPRMDAuthServer(server, i))
+	}
+	if sourceURL != nil {
+		records = append(records, urlRecordFromPRMDSource(sourceURL, 0))
+	}
+
+	var authServerMetadataFetch *AuthServerMetadataFetchResult
+	if len(metadata.AuthorizationServers) > 0 {
+		derivedRecords, fetchResult := buildAuthServerMetadataURLRecords(
+			ctx,
+			client,
+			metadata.AuthorizationServers[0],
+			0,
+			logger,
+		)
+		authServerMetadataFetch = fetchResult
+		records = append(
+			records,
+			derivedRecords...,
+		)
 	}
 
 	bundle := hostbus.URLBundle{FetchedAt: fetchedAt}
-	bundle.URLs = append(bundle.URLs, urlRecordFromPRMDResource(metadata.Resource, 0))
-
-	for i, server := range metadata.AuthorizationServers {
-		bundle.URLs = append(bundle.URLs, urlRecordFromPRMDAuthServer(server, i))
-	}
-	if sourceURL != nil {
-		bundle.URLs = append(bundle.URLs, urlRecordFromPRMDSource(sourceURL, len(bundle.URLs)))
-	}
-
+	bundle.URLs = records
 	bundle.URLs = filterURLRecords(bundle.URLs)
 	if len(bundle.URLs) == 0 {
-		return hostbus.URLBundle{}, fmt.Errorf("no urls found in protected resource metadata")
+		return hostbus.URLBundle{}, authServerMetadataFetch, fmt.Errorf("no urls found in protected resource metadata")
 	}
-	return bundle, nil
+	return bundle, authServerMetadataFetch, nil
 }
 
 func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
@@ -67,6 +95,72 @@ func defaultPRMDTags(role string, index int) []hostbus.Tag {
 		{Key: hostbus.TagKeySource, Value: "oauth"},
 		{Key: hostbus.TagKeyRole, Value: role},
 		{Key: hostbus.TagKeyIndex, Value: fmt.Sprintf("%d", index)},
+	}
+}
+
+func buildAuthServerMetadataURLRecords(
+	ctx context.Context,
+	client *http.Client,
+	authServerRaw string,
+	authServerIndex int,
+	logger *slog.Logger,
+) ([]hostbus.URLRecord, *AuthServerMetadataFetchResult) {
+	issuerURL := parseURL(authServerRaw)
+	if issuerURL == nil {
+		return nil, &AuthServerMetadataFetchResult{IssuerURL: authServerRaw}
+	}
+	if client == nil {
+		return nil, &AuthServerMetadataFetchResult{IssuerURL: issuerURL.String()}
+	}
+
+	meta, fetchResult, err := FetchAuthServerMetadataWithResult(ctx, client, issuerURL.String())
+	if fetchResult == nil {
+		fetchResult = &AuthServerMetadataFetchResult{IssuerURL: issuerURL.String()}
+	}
+	if err != nil {
+		if logger != nil {
+			logger.WarnContext(ctx, "oauth auth-server metadata fetch failed",
+				slog.String("issuer", issuerURL.String()),
+				slog.Int("auth_server_index", authServerIndex),
+				slog.String("error", err.Error()),
+			)
+		}
+		return nil, fetchResult
+	}
+
+	records := make([]hostbus.URLRecord, 0, 6)
+	records = appendAuthServerMetadataRecord(records, meta.Issuer, "Auth server issuer", "issuer", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.AuthorizationEndpoint, "Auth server authorization endpoint", "authorization-endpoint", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.TokenEndpoint, "Auth server token endpoint", "token-endpoint", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.JWKSURI, "Auth server JWKS URI", "jwks-uri", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.IntrospectionEndpoint, "Auth server introspection endpoint", "introspection-endpoint", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.RegistrationEndpoint, "Auth server registration endpoint", "registration-endpoint", authServerIndex)
+	return records, fetchResult
+}
+
+func appendAuthServerMetadataRecord(
+	records []hostbus.URLRecord,
+	raw string,
+	description string,
+	role string,
+	authServerIndex int,
+) []hostbus.URLRecord {
+	parsed := parseURL(raw)
+	if parsed == nil {
+		return records
+	}
+	return append(records, hostbus.URLRecord{
+		URL:         parsed,
+		Description: description,
+		Tags:        defaultAuthServerMetadataTags(role, authServerIndex),
+	})
+}
+
+func defaultAuthServerMetadataTags(role string, authServerIndex int) []hostbus.Tag {
+	return []hostbus.Tag{
+		{Key: hostbus.TagKeySource, Value: "oauth"},
+		{Key: hostbus.TagKeyRole, Value: role},
+		{Key: hostbus.TagKeyIndex, Value: fmt.Sprintf("%d", authServerIndex)},
 	}
 }
 

@@ -107,11 +107,11 @@
 
     <section class="panel" id="panel-oauth" aria-hidden="true">
       <div class="grid">
-        <div class="card span-6">
+        <div class="card span-12">
           <div class="row">
             <div>
               <div class="muted small">OAuth discovery</div>
-              <div class="small muted">Ordered by discovery priority</div>
+              <div class="small muted">PRMD + auth server metadata discovery timeline</div>
             </div>
             <span style="flex:1"></span>
             <button id="refreshOAuth">Refresh</button>
@@ -120,30 +120,15 @@
           <table class="oauth-table" style="margin-top: 12px">
             <thead>
               <tr>
+                <th></th>
                 <th>Priority</th>
-                <th>Type</th>
+                <th>Step</th>
+                <th>URL</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody id="oauthDiscoveryRows"></tbody>
           </table>
-        </div>
-        <div class="card span-6">
-          <div class="muted small">OAuth metadata</div>
-          <div class="kv" style="margin-top: 8px">
-            <div class="muted">Status</div><div class="mono" id="oauthStatus">—</div>
-            <div class="muted">Fetched at</div><div class="mono" id="oauthFetchedAt">—</div>
-            <div class="muted">Source URL</div><div class="mono" id="oauthSourceUrl">—</div>
-            <div class="muted">Metadata source</div><div class="mono" id="oauthMetadataSource">—</div>
-          </div>
-          <details style="margin-top: 12px">
-            <summary class="muted">Headers</summary>
-            <pre class="pre mono" id="oauthHeaders" style="margin-top: 10px"></pre>
-          </details>
-          <details style="margin-top: 12px">
-            <summary class="muted">Body</summary>
-            <pre class="pre mono" id="oauthBody" style="margin-top: 10px"></pre>
-          </details>
         </div>
       </div>
     </section>
@@ -225,8 +210,8 @@
                 <thead>
                   <tr>
                     <th>Label</th>
-                    <th>URL</th>
                     <th>Description</th>
+                    <th>URL</th>
                   </tr>
                 </thead>
                 <tbody id="harpoonTargets"></tbody>

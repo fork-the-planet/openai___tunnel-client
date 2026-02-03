@@ -34,21 +34,39 @@ func (b *recordingBus) Publish(ctx context.Context, bundle hostbus.URLBundle) er
 func (b *recordingBus) Close() error { return nil }
 
 func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	authIssuer := server.URL + "/auth-internal"
 	payload, err := json.Marshal(oauthex.ProtectedResourceMetadata{
-		Resource: "https://resource.internal/",
+		Resource: server.URL + "/resource",
 		AuthorizationServers: []string{
-			"https://auth.internal/",
+			authIssuer,
 		},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(payload)
-	}))
-	defer server.Close()
+	})
+	metaPayload, err := json.Marshal(map[string]any{
+		"issuer":                 authIssuer,
+		"authorization_endpoint": authIssuer + "/authorize",
+		"token_endpoint":         authIssuer + "/token",
+		"jwks_uri":               authIssuer + "/jwks",
+		"introspection_endpoint": authIssuer + "/introspect",
+		"registration_endpoint":  authIssuer + "/register",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	mux.HandleFunc("/.well-known/oauth-authorization-server/auth-internal", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(metaPayload)
+	})
 
 	serverURL, err := url.Parse(server.URL)
 	if err != nil {
@@ -97,8 +115,31 @@ func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
 	if len(bus.bundles) != 1 {
 		t.Fatalf("expected 1 bundle, got %d", len(bus.bundles))
 	}
-	if len(bus.bundles[0].URLs) != 3 {
-		t.Fatalf("expected 3 urls, got %d", len(bus.bundles[0].URLs))
+	if len(bus.bundles[0].URLs) != 9 {
+		t.Fatalf("expected 9 urls, got %d", len(bus.bundles[0].URLs))
+	}
+	roles := make(map[string]bool, len(bus.bundles[0].URLs))
+	for _, record := range bus.bundles[0].URLs {
+		for _, tag := range record.Tags {
+			if tag.Key == hostbus.TagKeyRole {
+				roles[tag.Value] = true
+			}
+		}
+	}
+	for _, expected := range []string{
+		"prmd-resource",
+		"prmd-auth-server",
+		"prmd-source",
+		"issuer",
+		"authorization-endpoint",
+		"token-endpoint",
+		"jwks-uri",
+		"introspection-endpoint",
+		"registration-endpoint",
+	} {
+		if !roles[expected] {
+			t.Fatalf("expected role %q in published bundle", expected)
+		}
 	}
 }
 

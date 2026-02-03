@@ -126,10 +126,37 @@ h1 {
   font-weight: 600;
 }
 
+.oauth-expand-cell {
+  width: 34px;
+}
+
+.oauth-expand {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  line-height: 1;
+}
+
 .oauth-status {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+.oauth-status-fetched {
+  color: var(--ok);
+}
+
+.oauth-status-error {
+  color: var(--bad);
+}
+
+.oauth-status-pending,
+.oauth-status-tried,
+.oauth-status-skipped {
+  color: var(--muted);
 }
 
 .oauth-url {
@@ -137,17 +164,60 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.oauth-url.selected {
-  color: var(--ok);
+.oauth-detail-row td {
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+
+.oauth-detail-wrap {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+}
+
+.oauth-detail-title {
+  color: var(--muted);
+  font-size: 18px;
   font-weight: 600;
 }
 
-.oauth-url.tried {
-  color: var(--muted);
+.oauth-detail-kv {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 8px 12px;
 }
 
-.oauth-url.placeholder {
+.oauth-detail-collapse {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.oauth-detail-summary {
   color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.oauth-detail-empty {
+  margin-top: 10px;
+  border-radius: 999px;
+  min-height: 48px;
+  background: color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.oauth-detail-section,
+.oauth-detail-collapse {
+  display: grid;
+  gap: 6px;
+}
+
+.oauth-detail-pre {
+  margin: 6px 0 0 0;
+  max-height: 260px;
 }
 a { color: inherit; }
 
@@ -248,6 +318,21 @@ button:hover, .tab:hover { border-color: rgba(127,127,127,.55); }
   font-size: 12px;
   color: var(--muted);
   font-weight: 600;
+}
+
+.harpoon-table th:nth-child(1),
+.harpoon-table td:nth-child(1) {
+  width: 18%;
+}
+
+.harpoon-table th:nth-child(2),
+.harpoon-table td:nth-child(2) {
+  width: 47%;
+}
+
+.harpoon-table th:nth-child(3),
+.harpoon-table td:nth-child(3) {
+  width: 35%;
 }
 
 .harpoon-calls {

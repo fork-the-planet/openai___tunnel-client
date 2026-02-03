@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"encoding/json"
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/oauth"
@@ -13,10 +14,15 @@ type oauthStatusResponse struct {
 	Pending              bool                              `json:"pending,omitempty"`
 	WWWAuthenticateProbe *oauth.WWWAuthenticateProbeStatus `json:"www_authenticate_probe,omitempty"`
 	MetadataSource       string                            `json:"metadata_source,omitempty"`
+	AuthServerMetaMode   string                            `json:"auth_server_metadata_mode"`
+	AuthServerCount      int                               `json:"authorization_server_count"`
+	SelectedAuthServer   string                            `json:"selected_authorization_server,omitempty"`
 }
 
 func buildOAuthStatus(p routeParams) oauthStatusResponse {
-	out := oauthStatusResponse{}
+	out := oauthStatusResponse{
+		AuthServerMetaMode: "first authorization server only",
+	}
 
 	if p.MCPConfig != nil {
 		urls := oauth.BuildResourceMetadataURLs(p.MCPConfig.ServerURL)
@@ -43,6 +49,7 @@ func buildOAuthStatus(p routeParams) oauthStatusResponse {
 		}
 		if result != nil {
 			out.Metadata = result
+			out.SelectedAuthServer, out.AuthServerCount = deriveAuthServerSelection(result)
 		}
 		out.MetadataSource = deriveMetadataSource(result, probe)
 		return out
@@ -63,4 +70,21 @@ func deriveMetadataSource(
 		return "www_authenticate"
 	}
 	return "well_known"
+}
+
+func deriveAuthServerSelection(result *oauth.DiscoveryResult) (selected string, count int) {
+	if result == nil || len(result.Body) == 0 {
+		return "", 0
+	}
+	var payload struct {
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	if err := json.Unmarshal(result.Body, &payload); err != nil {
+		return "", 0
+	}
+	count = len(payload.AuthorizationServers)
+	if count == 0 {
+		return "", 0
+	}
+	return payload.AuthorizationServers[0], count
 }

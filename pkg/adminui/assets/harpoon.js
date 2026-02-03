@@ -92,9 +92,6 @@
         "<td class='mono'>" +
         (t.label || "—") +
         "</td>" +
-        "<td class='mono'>" +
-        (t.url || "—") +
-        "</td>" +
         "<td>" +
         (t.description || "—") +
         (t.source ? "<div class='muted small'>source: " + t.source + "</div>" : "") +
@@ -103,6 +100,9 @@
             t.inclusion_reason +
             "</div>"
           : "") +
+        "</td>" +
+        "<td class='mono'>" +
+        (t.url || "—") +
         "</td>";
       targetsEl.appendChild(row);
     });

@@ -100,8 +100,24 @@ func startOAuthDiscovery(p discoveryParams) error {
 					logger.WarnContext(fetchCtx, "OAuth discovery failed", slog.String("error", err.Error()))
 					return
 				}
+				if resp == nil {
+					err := errors.New("oauth discovery returned nil response")
+					p.State.Set(result, err, probe, candidateStrings)
+					logger.WarnContext(fetchCtx, "OAuth discovery failed", slog.String("error", err.Error()))
+					return
+				}
+				bundle, authServerMetaFetch, err := buildURLBundleFromPRMDWithAuthServerMetadata(
+					fetchCtx,
+					p.HTTPClient,
+					resp.Payload(),
+					start,
+					sourceURL,
+					logger,
+				)
+				if result != nil && authServerMetaFetch != nil {
+					result.AuthServerMetadata = authServerMetaFetch
+				}
 				p.State.Set(result, nil, probe, candidateStrings)
-				bundle, err := buildURLBundleFromPRMD(resp.Payload(), result.FetchedAt, sourceURL)
 				if err != nil {
 					logger.ErrorContext(fetchCtx, "OAuth discovery bundle build failed", slog.String("error", err.Error()))
 				} else {
