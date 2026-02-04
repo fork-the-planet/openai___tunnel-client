@@ -26,6 +26,17 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 - The admin UI Overview reports channel availability and reasons when channels are disabled.
 - It embeds the **harpoon MCP server** to provide a labeled, allowlisted outbound HTTP client for internal tooling.
 
+## Admin UI build notes
+
+The admin UI assets under `pkg/adminui/assets` are generated from the TypeScript/Svelte
+source in `adminui/`. To rebuild them locally:
+
+```bash
+./scripts/build_admin_ui.sh ./adminui ./pkg/adminui/assets
+# or
+make admin-ui
+```
+
 ## CLI
 
 - `tunnel-client` shows help and available subcommands.

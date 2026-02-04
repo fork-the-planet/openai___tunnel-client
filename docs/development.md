@@ -6,6 +6,9 @@ This document is for contributors working on `tunnel-client`.
 
 ```bash
 cd api/tunnel-client
+./scripts/build_admin_ui.sh ./adminui ./pkg/adminui/assets
+# or
+make admin-ui
 go build -o bin/tunnel-client ./cmd/client
 ```
 

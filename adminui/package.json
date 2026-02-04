@@ -1,0 +1,21 @@
+{
+  "name": "@openai/tunnel-client-adminui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "node ./scripts/build.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.0.2",
+    "svelte": "^4.2.19",
+    "typescript": "5.7.3",
+    "vite": "5.4.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
