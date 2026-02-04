@@ -376,11 +376,11 @@ func TestHarpoonToolSchemas(t *testing.T) {
 				"description": "HTTP method for the outbound request",
 				"enum": ["GET", "POST", "PUT"]
 			},
-			"headers": {
-				"type": "object",
-				"description": "HTTP headers to include in the request",
-				"default": {},
-				"propertyNames": {
+				"headers": {
+					"type": "object",
+					"description": "HTTP headers to include in the request (allowlisted: Accept Authorization Content-Type)",
+					"default": {},
+					"propertyNames": {
 					"type": "string",
 					"pattern": "^[!#$%&'*+.^_\u0060|~0-9A-Za-z-]+$"
 				}

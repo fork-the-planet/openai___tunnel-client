@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
 func TestListTargetsDoesNotExposeURLs(t *testing.T) {
@@ -333,6 +334,46 @@ func TestCallTargetPayloadCaptureEnabled(t *testing.T) {
 	require.Equal(t, `{"hello":"world"}`, snapshot[0].RequestBody)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte{0xff, 0x00, 0x01}), snapshot[0].ResponseBody)
 	require.True(t, snapshot[0].BodyIsBase64)
+}
+
+func TestCallTargetFiltersHeadersAndSetsStableUserAgent(t *testing.T) {
+	var receivedHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		Targets: []config.HarpoonTarget{{
+			Label:   "svc",
+			BaseURL: mustParseURL(t, server.URL),
+		}},
+	}
+	client := newTestServer(t, cfg)
+
+	_, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "svc",
+		Method: http.MethodPost,
+		Body:   `{"hello":"world"}`,
+		Headers: map[string]string{
+			"Accept":        "application/json",
+			"Authorization": "Bearer token",
+			"Content-Type":  "application/json",
+			"User-Agent":    "malicious-override",
+			"X-Trace-Id":    "trace-123",
+		},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "application/json", receivedHeaders.Get("Accept"))
+	require.Equal(t, "Bearer token", receivedHeaders.Get("Authorization"))
+	require.Equal(t, "application/json", receivedHeaders.Get("Content-Type"))
+	require.Equal(t, version.UserAgent, receivedHeaders.Get("User-Agent"))
+	require.Equal(t, "", receivedHeaders.Get("X-Trace-Id"))
 }
 
 func newTestServer(t *testing.T, cfg *config.HarpoonConfig) *Server {

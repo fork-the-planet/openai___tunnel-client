@@ -38,6 +38,11 @@ var (
 		http.MethodPost: {},
 		http.MethodPut:  {},
 	}
+	allowedOutboundHeaders = map[string]struct{}{
+		http.CanonicalHeaderKey("Accept"):        {},
+		http.CanonicalHeaderKey("Authorization"): {},
+		http.CanonicalHeaderKey("Content-Type"):  {},
+	}
 	listTargetsSchema       = buildListTargetsInputSchema()
 	listTargetsOutputSchema = buildListTargetsOutputSchema()
 )
@@ -49,12 +54,13 @@ type Server struct {
 	cfg           *config.HarpoonConfig
 	httpTransport http.RoundTripper
 	callBuffer    *CallBuffer
+	metrics       *serverMetrics
 }
 
 type callTargetRequest struct {
 	Label            string            `json:"label" jsonschema:"minLength=1,maxLength=64,pattern=^[a-z0-9][a-z0-9_-]{0\\,63}$,description=Allowlisted target label"`
 	Method           string            `json:"method" jsonschema:"enum=GET,enum=POST,enum=PUT,description=HTTP method for the outbound request"`
-	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request"`
+	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request (allowlisted: Accept Authorization Content-Type)"`
 	Body             string            `json:"body,omitempty" jsonschema:"description=Request body as a raw string"`
 	TimeoutMS        *int              `json:"timeout_ms,omitempty" jsonschema:"description=Request timeout in milliseconds"`
 	MaxResponseBytes *int              `json:"max_response_bytes,omitempty" jsonschema:"description=Maximum response bytes to read"`
@@ -139,7 +145,7 @@ func (listTargetsResponse) JSONSchemaExtend(schema *jsonschema.Schema) {
 }
 
 // NewServer constructs a harpoon MCP server.
-func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer, logger *slog.Logger) (*Server, error) {
+func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer, logger *slog.Logger, opts ...ServerOption) (*Server, error) {
 	if cfg == nil {
 		return nil, errors.New("harpoon: config is required")
 	}
@@ -152,12 +158,18 @@ func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer
 	if buffer == nil {
 		buffer = NewCallBuffer()
 	}
+	serverOpts := resolveServerOptions(opts...)
+	serverMetrics, err := newServerMetrics(serverOpts.meter)
+	if err != nil {
+		return nil, fmt.Errorf("harpoon: init metrics: %w", err)
+	}
 	return &Server{
 		logger:        logger.With(tclog.FieldComponent, tclog.ComponentHarpoon),
 		registry:      registry,
 		cfg:           cfg,
 		httpTransport: transport.CloneDefault(),
 		callBuffer:    buffer,
+		metrics:       serverMetrics,
 	}, nil
 }
 
@@ -260,41 +272,52 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	start := time.Now()
 
 	label := strings.TrimSpace(params.Label)
+	recordMetrics := func(statusCode int, outcome string, responseBytes int) {
+		s.recordCallMetrics(ctx, label, statusCode, outcome, responseBytes, start)
+	}
 	if label == "" {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, "label is required")
 	}
 
 	if _, ok := s.registry.Lookup(label); !ok {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, "unknown target")
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(params.Method))
 	if _, ok := allowedMethods[method]; !ok {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, "invalid method")
 	}
 
 	resolved, err := s.registry.Resolve(label)
 	if err != nil {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, "unknown target")
 	}
 
 	timeout, err := normalizeTimeout(params.TimeoutMS)
 	if err != nil {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, err.Error())
 	}
 
 	maxResponseBytes, err := s.normalizeMaxResponseBytes(params.MaxResponseBytes)
 	if err != nil {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, err.Error())
 	}
 
 	maxRedirects, followRedirects, err := s.normalizeRedirects(params.FollowRedirects, params.MaxRedirects)
 	if err != nil {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, err.Error())
 	}
 
 	bodyBytes := []byte(params.Body)
 	if len(bodyBytes) > maxResponseBytes {
+		recordMetrics(0, metricOutcomeInvalidInput, 0)
 		return nil, newToolError(label, "request body exceeds size limit")
 	}
 
@@ -303,13 +326,21 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 
 	req, err := http.NewRequestWithContext(ctx, method, resolved.String(), bytes.NewReader(bodyBytes))
 	if err != nil {
+		recordMetrics(0, metricOutcomeRequestError, 0)
 		return nil, newToolError(label, "request failed")
 	}
-	for key, value := range params.Headers {
-		if strings.TrimSpace(key) == "" {
-			continue
+	filteredHeaders, droppedHeaderCount := filterOutboundHeaders(params.Headers)
+	for key, values := range filteredHeaders {
+		for _, value := range values {
+			req.Header.Add(key, value)
 		}
-		req.Header.Set(key, value)
+	}
+	req.Header.Set("User-Agent", version.UserAgent)
+	if droppedHeaderCount > 0 {
+		logger.InfoContext(ctx, "harpoon request dropped non-allowlisted headers",
+			slog.String("label", label),
+			slog.Int("dropped_header_count", droppedHeaderCount),
+		)
 	}
 
 	client := &http.Client{Transport: s.httpTransport}
@@ -352,6 +383,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			startedAt: start,
 			params:    params,
 		})
+		recordMetrics(0, metricOutcomeRequestError, 0)
 		return nil, newToolError(label, responseMsg)
 	}
 	defer func() {
@@ -383,6 +415,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			params:       params,
 			responseBody: body,
 		})
+		recordMetrics(resp.StatusCode, metricOutcomeResponseReadError, len(body))
 		return nil, newToolError(label, "response read failed")
 	}
 	if tooLarge {
@@ -406,6 +439,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			params:       params,
 			responseBody: body,
 		})
+		recordMetrics(resp.StatusCode, metricOutcomeResponseTooLarge, len(body))
 		return nil, newToolError(label, "response exceeds size limit")
 	}
 
@@ -443,6 +477,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 			return nil
 		}(),
 	})
+	recordMetrics(resp.StatusCode, metricOutcomeSuccess, len(body))
 
 	return &callTargetResponse{
 		StatusCode: resp.StatusCode,
@@ -451,6 +486,27 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		BodySize:   len(body),
 		Truncated:  false,
 	}, nil
+}
+
+func filterOutboundHeaders(headers map[string]string) (http.Header, int) {
+	if len(headers) == 0 {
+		return http.Header{}, 0
+	}
+	out := make(http.Header)
+	dropped := 0
+	for key, value := range headers {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		canonical := http.CanonicalHeaderKey(trimmedKey)
+		if _, ok := allowedOutboundHeaders[canonical]; !ok {
+			dropped++
+			continue
+		}
+		out.Set(canonical, value)
+	}
+	return out, dropped
 }
 
 func allowedMethodsList() []string {

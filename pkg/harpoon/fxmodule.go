@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
@@ -41,6 +42,7 @@ type harpoonParams struct {
 
 	Lifecycle     fx.Lifecycle
 	Logger        *slog.Logger
+	MeterProvider *sdkmetric.MeterProvider `optional:"true"`
 	Config        *config.HarpoonConfig
 	Health        *config.HealthConfig
 	HealthSvc     health.Service
@@ -79,7 +81,11 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 		}
 	}
 	buffer := NewCallBuffer()
-	server, err := NewServer(p.Config, registry, buffer, logger)
+	serverOptions := make([]ServerOption, 0, 1)
+	if p.MeterProvider != nil {
+		serverOptions = append(serverOptions, WithMeter(p.MeterProvider.Meter("harpoon")))
+	}
+	server, err := NewServer(p.Config, registry, buffer, logger, serverOptions...)
 	if err != nil {
 		return harpoonOutputs{}, err
 	}
