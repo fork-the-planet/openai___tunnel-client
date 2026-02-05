@@ -58,9 +58,10 @@
   - Channel-qualified form: `--mcp.command="channel=bar,command=npx -y @org/bar-mcp"`
   - Behavior: spawns the command once and uses the child process stdin/stdout for MCP frames
   - Note: stdio transport does not support MCP sessions
+  - Note: when using `MCP_COMMAND` with multiple entries, separate entries with newlines so semicolons remain part of the command.
 - **Multiple entries**
   - Flags are repeatable; each entry can target a different channel.
-  - Environment variables accept semicolon- or newline-delimited entries.
+  - Environment variables accept newline-delimited entries.
   - Configuring both `--mcp.server-url` and `--mcp.command` is allowed as long as they target **different** channels.
   - If no `main` binding is configured, startup fails with `main channel is required`.
 - **Connection max TTL**

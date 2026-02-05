@@ -780,7 +780,7 @@ func TestLoadParsesEnvMCPEntries(t *testing.T) {
 		case "LOG_FORMAT":
 			return "struct-text", true
 		case "MCP_SERVER_URL":
-			return "https://main.example.com/mcp;channel=foo,url=https://foo.example.com/mcp", true
+			return "https://main.example.com/mcp\nchannel=foo,url=https://foo.example.com/mcp", true
 		default:
 			return "", false
 		}
@@ -793,6 +793,32 @@ func TestLoadParsesEnvMCPEntries(t *testing.T) {
 	}
 	if got := cfg.MCP.ChannelBindingFor(types.Channel("foo")); got == nil || got.ServerURL == nil {
 		t.Fatalf("expected foo binding from env, got %v", got)
+	}
+}
+
+func TestLoadAllowsSemicolonsInMCPCommandEnv(t *testing.T) {
+	cfg, err := Load(nil, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "CONTROL_PLANE_TUNNEL_ID":
+			return envTunnelID, true
+		case "LOG_FORMAT":
+			return "struct-text", true
+		case "MCP_COMMAND":
+			return `bash -c "echo a; echo b"`, true
+		default:
+			return "", false
+		}
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.Command != `bash -c "echo a; echo b"` {
+		t.Fatalf("expected MCP command to preserve semicolons, got %q", cfg.MCP.Command)
+	}
+	if got := cfg.MCP.CommandArgs; len(got) != 3 || got[0] != "bash" || got[1] != "-c" || got[2] != "echo a; echo b" {
+		t.Fatalf("unexpected MCP command args: %v", got)
 	}
 }
 

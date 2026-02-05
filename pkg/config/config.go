@@ -816,7 +816,7 @@ func resolveMCPEntries(fs *pflag.FlagSet, lookupEnv func(string) (string, bool),
 
 func splitMCPEnvEntries(raw string) []string {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ';' || r == '\n'
+		return r == '\n' || r == '\r'
 	})
 	out := make([]string, 0, len(fields))
 	for _, field := range fields {
