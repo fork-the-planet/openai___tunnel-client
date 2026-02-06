@@ -17,13 +17,13 @@ import (
 	tctransport "go.openai.org/api/tunnel-client/pkg/transport"
 )
 
-//go:embed testdata/server_cert.pem testdata/server_key.pem testdata/ca_bundle.pem
+//go:embed testdata/test_server_cert.pem testdata/test_server_key.pem testdata/test_ca_bundle.pem
 var tlsFixtures embed.FS
 
 func TestCABundleControlsTLSHandshake(t *testing.T) {
-	certPEM := mustReadFixture(t, "testdata/server_cert.pem")
-	keyPEM := mustReadFixture(t, "testdata/server_key.pem")
-	caPEM := mustReadFixture(t, "testdata/ca_bundle.pem")
+	certPEM := mustReadFixture(t, "testdata/test_server_cert.pem")
+	keyPEM := mustReadFixture(t, "testdata/test_server_key.pem")
+	caPEM := mustReadFixture(t, "testdata/test_ca_bundle.pem")
 
 	serverCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestCABundleControlsTLSHandshake(t *testing.T) {
 }
 
 func TestCABundleParsesMultipleCertificates(t *testing.T) {
-	caPEM := mustReadFixture(t, "testdata/ca_bundle.pem")
+	caPEM := mustReadFixture(t, "testdata/test_ca_bundle.pem")
 	certs := mustParsePEMCerts(t, caPEM)
 	if len(certs) < 2 {
 		t.Fatalf("expected multiple certificates in CA bundle, found %d", len(certs))
