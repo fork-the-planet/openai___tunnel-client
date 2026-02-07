@@ -9,8 +9,6 @@ BIN         = bin/$(OS)_$(ARCH)$(if $(GOARM),v$(GOARM),)/$(TARGET)
 ADMIN_UI_DIR := adminui
 ADMIN_UI_ASSETS_DIR := pkg/adminui/assets
 ADMIN_UI_BUILD_SCRIPT := scripts/build_admin_ui.sh
-PNPM        := $(if $(PNPM),$(PNPM),pnpm)
-PNPM_INSTALL_FLAGS := --ignore-workspace --config.shared-workspace-lockfile=false
 ifeq ($(OS),windows)
   BIN = bin/$(OS)_$(ARCH)$(if $(GOARM),v$(GOARM),)/$(TARGET).exe
 endif

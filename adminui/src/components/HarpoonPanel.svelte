@@ -3,11 +3,13 @@
   import { fetchJSON } from "../lib/api";
   import { formatBytes } from "../lib/format";
   import type {
+    BadgeKind,
     HarpoonCall,
     HarpoonCallsResponse,
     HarpoonStatusResponse,
     HarpoonTarget,
     HarpoonTargetsResponse,
+    ProxyRouteSummary,
   } from "../lib/types";
 
   export let active = false;
@@ -22,6 +24,10 @@
 
   let openCalls = new Set<string>();
   let responseView = new Map<string, boolean>();
+
+  $: proxyRoutes = status?.proxy_routes ?? [];
+  $: proxiedRoutes = proxyRoutes.filter((route) => routeMode(route) === "proxy").length;
+  $: directRoutes = proxyRoutes.filter((route) => routeMode(route) === "direct").length;
 
   $: if (active) {
     startPolling();
@@ -74,6 +80,26 @@
       return `Base64 payload:\n${body}`;
     }
     return tryPrettyJSON(body);
+  }
+
+  function routeMode(route?: ProxyRouteSummary): "proxy" | "direct" | "unknown" {
+    if (!route?.route_mode) return "unknown";
+    if (route.route_mode === "proxy") return "proxy";
+    if (route.route_mode === "direct") return "direct";
+    return "unknown";
+  }
+
+  function routeModeBadge(mode: "proxy" | "direct" | "unknown"): BadgeKind {
+    if (mode === "proxy") return "ok";
+    return "warn";
+  }
+
+  function routeProxyURL(route?: ProxyRouteSummary): string {
+    const mode = routeMode(route);
+    if (mode === "direct") {
+      return "direct";
+    }
+    return route?.proxy_url || "—";
   }
 
   async function refreshStatus(): Promise<boolean> {
@@ -142,6 +168,9 @@
       >
         Capture req/resp payloads: {captureEnabled ? "on" : "off"}
       </span>
+      <span class="badge warn">
+        Proxy routes: {proxyRoutes.length} ({proxiedRoutes} proxy / {directRoutes} direct)
+      </span>
     </div>
     <div class="small muted" style="margin-top: 6px">
       Harpoon is the embedded MCP server that makes outbound HTTP requests by label (not raw
@@ -183,10 +212,46 @@
         <div class="mono">{status?.max_redirects ?? "—"}</div>
       </div>
     </div>
+    <div class="card span-12">
+      <div class="muted small">Harpoon proxy routes</div>
+      <div class="harpoon-table-wrap">
+        <table class="harpoon-table harpoon-proxy-routes-table" style="margin-top: 12px">
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th>Mode</th>
+              <th>Proxy ID</th>
+              <th>Proxy URL</th>
+              <th>Proxy source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#if proxyRoutes.length === 0}
+              <tr>
+                <td colspan="5" class="muted">No harpoon proxy routes.</td>
+              </tr>
+            {:else}
+              {#each proxyRoutes as route}
+                {@const mode = routeMode(route)}
+                <tr>
+                  <td class="mono">{route.name || route.target || "—"}</td>
+                  <td>
+                    <span class={`badge ${routeModeBadge(mode)}`}>{mode}</span>
+                  </td>
+                  <td class="mono">{route.proxy_id || "—"}</td>
+                  <td class="mono">{routeProxyURL(route)}</td>
+                  <td class="mono">{route.proxy_source || "—"}</td>
+                </tr>
+              {/each}
+            {/if}
+          </tbody>
+        </table>
+      </div>
+    </div>
     <div class="card span-6">
       <div class="muted small">Targets</div>
       <div class="harpoon-table-wrap">
-        <table class="harpoon-table" style="margin-top: 12px">
+        <table class="harpoon-table harpoon-targets-table" style="margin-top: 12px">
           <thead>
             <tr>
               <th>Label</th>

@@ -1,15 +1,43 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy } from "svelte";
   import { fetchJSON } from "../lib/api";
   import { fmtUptime } from "../lib/format";
-  import type { StatusResponse } from "../lib/types";
+  import type { BadgeKind, ProxyRouteSummary, StatusResponse } from "../lib/types";
   import ChannelTable from "./ChannelTable.svelte";
+
+  export let active = false;
 
   let status: StatusResponse | null = null;
   let errorMessage = "";
   let refreshTimer: number | undefined;
 
   const warningHeading = "Warnings";
+
+  $: if (active) {
+    startPolling();
+  } else {
+    stopPolling();
+  }
+
+  function routeMode(route?: ProxyRouteSummary): "proxy" | "direct" | "unknown" {
+    if (!route?.route_mode) return "unknown";
+    if (route.route_mode === "proxy") return "proxy";
+    if (route.route_mode === "direct") return "direct";
+    return "unknown";
+  }
+
+  function routeModeBadge(mode: "proxy" | "direct" | "unknown"): BadgeKind {
+    if (mode === "proxy") return "ok";
+    return "warn";
+  }
+
+  function routeProxyURL(route?: ProxyRouteSummary): string {
+    const mode = routeMode(route);
+    if (mode === "direct") {
+      return "direct";
+    }
+    return route?.proxy_url || "—";
+  }
 
   async function refreshStatus(): Promise<void> {
     errorMessage = "";
@@ -28,16 +56,25 @@
     }
   }
 
-  onMount(() => {
+  function startPolling(): void {
+    if (refreshTimer) return;
     refreshStatus();
-    refreshTimer = window.setInterval(refreshStatus, 10000);
-    return () => {
-      if (refreshTimer) window.clearInterval(refreshTimer);
-    };
-  });
+    refreshTimer = window.setInterval(() => {
+      if (active) {
+        refreshStatus();
+      }
+    }, 10000);
+  }
+
+  function stopPolling(): void {
+    if (refreshTimer) {
+      window.clearInterval(refreshTimer);
+      refreshTimer = undefined;
+    }
+  }
 
   onDestroy(() => {
-    if (refreshTimer) window.clearInterval(refreshTimer);
+    stopPolling();
   });
 </script>
 
@@ -74,6 +111,20 @@
       <div class="mono">
         {status?.control_plane_max_inflight ?? "—"}
       </div>
+      <div class="muted">Proxy mode</div>
+      <div>
+        <span
+          class={`badge ${routeModeBadge(routeMode(status?.control_plane_route))}`}
+        >
+          {routeMode(status?.control_plane_route)}
+        </span>
+      </div>
+      <div class="muted">Proxy ID</div>
+      <div class="mono">{status?.control_plane_route?.proxy_id || "—"}</div>
+      <div class="muted">Proxy URL</div>
+      <div class="mono">{routeProxyURL(status?.control_plane_route)}</div>
+      <div class="muted">Proxy source</div>
+      <div class="mono">{status?.control_plane_route?.proxy_source || "—"}</div>
     </div>
   </div>
 
@@ -90,7 +141,7 @@
 
   <div class="card span-12">
     <div class="muted small">Channels</div>
-    <ChannelTable channels={status?.channels ?? []} />
+    <ChannelTable channels={status?.channels ?? []} mcpRoutes={status?.mcp_routes ?? []} />
   </div>
 
   <div class="card span-12">

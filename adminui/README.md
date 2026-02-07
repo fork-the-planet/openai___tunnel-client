@@ -46,3 +46,17 @@ From repo root:
 ```bash
 ./scripts/verify_admin_ui.sh
 ```
+
+## Run unit tests (Vitest)
+
+From `adminui`:
+
+```bash
+pnpm test
+```
+
+Bazel target:
+
+```bash
+bazel test //api/tunnel-client/adminui:vitest_test
+```

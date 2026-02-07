@@ -6,6 +6,7 @@
   import MetricsPanel from "./components/MetricsPanel.svelte";
   import OAuthPanel from "./components/OAuthPanel.svelte";
   import HarpoonPanel from "./components/HarpoonPanel.svelte";
+  import SystemPanel from "./components/SystemPanel.svelte";
   import LogsPanel from "./components/LogsPanel.svelte";
 
   const tabs = [
@@ -13,6 +14,7 @@
     { id: "metrics", label: "Metrics" },
     { id: "oauth", label: "OAuth" },
     { id: "harpoon", label: "Harpoon" },
+    { id: "system", label: "System" },
     { id: "logs", label: "Logs" },
   ];
 
@@ -100,7 +102,7 @@
 </div>
 
 <section class="panel" id="panel-overview" aria-hidden={activeTab !== "overview"}>
-  <OverviewPanel />
+  <OverviewPanel active={activeTab === "overview"} />
 </section>
 
 <section class="panel" id="panel-metrics" aria-hidden={activeTab !== "metrics"}>
@@ -113,6 +115,10 @@
 
 <section class="panel" id="panel-harpoon" aria-hidden={activeTab !== "harpoon"}>
   <HarpoonPanel active={activeTab === "harpoon"} />
+</section>
+
+<section class="panel" id="panel-system" aria-hidden={activeTab !== "system"}>
+  <SystemPanel active={activeTab === "system"} />
 </section>
 
 <section class="panel" id="panel-logs" aria-hidden={activeTab !== "logs"}>

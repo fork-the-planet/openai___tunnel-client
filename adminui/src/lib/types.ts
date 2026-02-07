@@ -1,5 +1,76 @@
 export type BadgeKind = "ok" | "warn" | "bad";
 
+export interface ProxyRouteSummary {
+  kind?: string;
+  name?: string;
+  target?: string;
+  route_mode?: string;
+  proxy_source?: string;
+  proxy_url?: string;
+  proxy_id?: string;
+}
+
+export interface ProxyIdentityRecord {
+  proxy_id?: string;
+  proxy_url?: string;
+  proxy_source?: string;
+}
+
+export interface ProxyCheckRecord {
+  timestamp?: string;
+  success?: boolean;
+  tcp_duration_ms?: number;
+  connect_duration_ms?: number;
+  error_phase?: string;
+  error_reason?: string;
+  http_status_category?: string;
+}
+
+export interface ProxyRouteHealthSummary {
+  route?: ProxyRouteSummary;
+  health_state?: string;
+  last_check?: string;
+  last_success?: string;
+  history?: ProxyCheckRecord[];
+}
+
+export interface SystemTrustSummary {
+  enabled?: boolean;
+  source?: string;
+  source_paths?: string[];
+  fallback_note?: string;
+}
+
+export interface CertificateMetadata {
+  cert_id?: string;
+  name?: string;
+  description?: string;
+  subject_cn?: string;
+  issuer_cn?: string;
+  not_before?: string;
+  not_after?: string;
+  source?: string;
+  parse_status?: string;
+}
+
+export interface ExtraBundleSummary {
+  path?: string;
+  cert_count?: number;
+  parse_errors?: number;
+  certificates?: CertificateMetadata[];
+}
+
+export interface TLSReport {
+  system_trust?: SystemTrustSummary;
+  extra_bundle?: ExtraBundleSummary;
+}
+
+export interface SystemResponse {
+  tls?: TLSReport;
+  proxy_identity_map?: ProxyIdentityRecord[];
+  proxy_health?: ProxyRouteHealthSummary[];
+}
+
 export interface StatusResponse {
   version?: string;
   started_at?: string;
@@ -12,6 +83,8 @@ export interface StatusResponse {
   mcp_server_url?: string;
   mcp_resource_metadata_urls?: string[];
   channels?: ChannelStatus[];
+  control_plane_route?: ProxyRouteSummary;
+  mcp_routes?: ProxyRouteSummary[];
   raw_http_logging_enabled?: boolean;
   tunnel_metadata?: TunnelMetadata;
   tunnel_metadata_error?: string;
@@ -132,6 +205,7 @@ export interface HarpoonStatusResponse {
   allow_plaintext_http?: boolean;
   max_response_bytes?: number;
   max_redirects?: number;
+  proxy_routes?: ProxyRouteSummary[];
 }
 
 export interface HarpoonTargetsResponse {

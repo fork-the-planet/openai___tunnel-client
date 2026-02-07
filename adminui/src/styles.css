@@ -20,6 +20,8 @@ pre,
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 h1 {
@@ -158,6 +160,8 @@ h1 {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .oauth-table th {
@@ -288,6 +292,81 @@ h1 {
   display: grid;
   grid-template-columns: 120px 1fr;
   gap: 6px 12px;
+}
+
+.system-expand-cell {
+  width: 96px;
+}
+
+.system-expand {
+  padding: 2px 8px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
+.system-history-row td {
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+
+.system-history-wrap {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+}
+
+.system-history-head {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto minmax(160px, 1fr);
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.system-history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.system-history-table th,
+.system-history-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.system-history-table th {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.system-certs-table {
+  min-width: 780px;
+}
+
+.system-proxy-map-table {
+  min-width: 740px;
+}
+
+.system-route-table {
+  min-width: 1320px;
+}
+
+.system-history-table {
+  min-width: 980px;
 }
 
 a {
@@ -435,19 +514,55 @@ button:hover,
   font-weight: 600;
 }
 
-.harpoon-table th:nth-child(1),
-.harpoon-table td:nth-child(1) {
+.harpoon-targets-table th:nth-child(1),
+.harpoon-targets-table td:nth-child(1) {
   width: 18%;
 }
 
-.harpoon-table th:nth-child(2),
-.harpoon-table td:nth-child(2) {
+.harpoon-targets-table th:nth-child(2),
+.harpoon-targets-table td:nth-child(2) {
   width: 47%;
 }
 
-.harpoon-table th:nth-child(3),
-.harpoon-table td:nth-child(3) {
+.harpoon-targets-table th:nth-child(3),
+.harpoon-targets-table td:nth-child(3) {
   width: 35%;
+}
+
+.harpoon-proxy-routes-table {
+  min-width: 1080px;
+}
+
+.harpoon-proxy-routes-table th:nth-child(1),
+.harpoon-proxy-routes-table td:nth-child(1) {
+  width: 16%;
+}
+
+.harpoon-proxy-routes-table th:nth-child(2),
+.harpoon-proxy-routes-table td:nth-child(2) {
+  width: 8%;
+}
+
+.harpoon-proxy-routes-table th:nth-child(3),
+.harpoon-proxy-routes-table td:nth-child(3) {
+  width: 30%;
+}
+
+.harpoon-proxy-routes-table th:nth-child(4),
+.harpoon-proxy-routes-table td:nth-child(4) {
+  width: 30%;
+}
+
+.harpoon-proxy-routes-table th:nth-child(5),
+.harpoon-proxy-routes-table td:nth-child(5) {
+  width: 16%;
+}
+
+.harpoon-proxy-routes-table td:nth-child(3),
+.harpoon-proxy-routes-table td:nth-child(4),
+.harpoon-proxy-routes-table td:nth-child(5) {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .harpoon-calls {
@@ -542,6 +657,10 @@ button:hover,
   }
 
   .channel-detail-kv {
+    grid-template-columns: 1fr;
+  }
+
+  .system-history-head {
     grid-template-columns: 1fr;
   }
 }
