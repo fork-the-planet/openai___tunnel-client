@@ -28,11 +28,16 @@ func buildURLBundleFromPRMDWithAuthServerMetadata(
 		return hostbus.URLBundle{}, nil, fmt.Errorf("decode protected resource metadata: %w", err)
 	}
 
-	records := make([]hostbus.URLRecord, 0, 2+len(metadata.AuthorizationServers)*8)
+	records := make([]hostbus.URLRecord, 0, 10)
 	records = append(records, urlRecordFromPRMDResource(metadata.Resource, 0))
 
-	for i, server := range metadata.AuthorizationServers {
-		records = append(records, urlRecordFromPRMDAuthServer(server, i))
+	if len(metadata.AuthorizationServers) > 0 {
+		records = append(records, urlRecordFromPRMDAuthServer(metadata.AuthorizationServers[0], 0))
+		if len(metadata.AuthorizationServers) > 1 && logger != nil {
+			logger.InfoContext(ctx, "oauth PRMD contains multiple authorization servers; only authorization_servers[0] is used",
+				slog.Int("authorization_server_count", len(metadata.AuthorizationServers)),
+			)
+		}
 	}
 	if sourceURL != nil {
 		records = append(records, urlRecordFromPRMDSource(sourceURL, 0))
@@ -64,8 +69,11 @@ func buildURLBundleFromPRMDWithAuthServerMetadata(
 }
 
 // BuildURLBundleFromPRMDWithAuthServerMetadata builds a Harpoon registration bundle
-// from Protected Resource Metadata payload and enriches it with auth-server metadata
-// endpoint records.
+// from Protected Resource Metadata payload.
+//
+// Contract: authorization_servers[0] is the source of truth. Additional
+// authorization_servers entries are intentionally ignored for registration and
+// auth-server metadata enrichment.
 func BuildURLBundleFromPRMDWithAuthServerMetadata(
 	ctx context.Context,
 	client *http.Client,

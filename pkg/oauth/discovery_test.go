@@ -406,6 +406,27 @@ func TestFetchOAuthMetadataRetriesTimeoutWithIncreasingRequestTimeout(t *testing
 	require.True(t, retryDeadlines[2].After(retryDeadlines[1]), "third retry deadline should be later than second")
 }
 
+func TestValidateProtectedResourceMetadataUsesAuthorizationServerIndexZero(t *testing.T) {
+	t.Parallel()
+
+	err := validateProtectedResourceMetadata([]byte(`{
+		"resource":"https://resource.internal/mcp",
+		"authorization_servers":["https://auth-0.internal",":://invalid"]
+	}`))
+	require.NoError(t, err)
+}
+
+func TestValidateProtectedResourceMetadataRejectsInvalidAuthorizationServerIndexZero(t *testing.T) {
+	t.Parallel()
+
+	err := validateProtectedResourceMetadata([]byte(`{
+		"resource":"https://resource.internal/mcp",
+		"authorization_servers":[":://invalid","https://auth-1.internal"]
+	}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "authorization server[0]")
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {

@@ -118,6 +118,7 @@ When an explicit proxy flag is set for a target, environment proxy variables (in
 
 **OAuth-protected MCP notes:**
 - Forwards inbound `Authorization` headers and discovery GETs through the tunnel-client; discovery payload `resource` and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
+- Uses `authorization_servers[0]` from PRMD as the only source of truth for auth-server metadata enrichment and Harpoon OAuth target registration.
 - The authorization server is not tunneled. If it is only reachable on-prem/behind a firewall and not accessible from the internet or the tunnel-client host, the OAuth flow can fail.
 
 ## Channels

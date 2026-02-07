@@ -21,7 +21,7 @@ type oauthStatusResponse struct {
 
 func buildOAuthStatus(p routeParams) oauthStatusResponse {
 	out := oauthStatusResponse{
-		AuthServerMetaMode: "first authorization server only",
+		AuthServerMetaMode: "authorization_servers[0] only (source of truth)",
 	}
 
 	if p.MCPConfig != nil {

@@ -39,8 +39,8 @@ func TestBuildURLBundleFromPRMD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build bundle: %v", err)
 	}
-	if len(bundle.URLs) != 4 {
-		t.Fatalf("expected 4 urls, got %d", len(bundle.URLs))
+	if len(bundle.URLs) != 3 {
+		t.Fatalf("expected 3 urls, got %d", len(bundle.URLs))
 	}
 
 	if got := bundle.URLs[0].URL.String(); got != "https://resource.internal/" {
@@ -49,10 +49,7 @@ func TestBuildURLBundleFromPRMD(t *testing.T) {
 	if got := bundle.URLs[1].URL.String(); got != "https://auth1.internal/" {
 		t.Fatalf("unexpected auth1 url: %q", got)
 	}
-	if got := bundle.URLs[2].URL.String(); got != "https://auth2.internal/" {
-		t.Fatalf("unexpected auth2 url: %q", got)
-	}
-	if got := bundle.URLs[3].URL.String(); got != "https://prmd.internal/.well-known/oauth-protected-resource" {
+	if got := bundle.URLs[2].URL.String(); got != "https://prmd.internal/.well-known/oauth-protected-resource" {
 		t.Fatalf("unexpected source url: %q", got)
 	}
 
@@ -185,23 +182,22 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataPartialFailure(t *testing.T
 		t.Fatalf("build expanded bundle: %v", err)
 	}
 
-	// Base PRMD records (resource + 2 auth-servers + source) plus 3 metadata-derived records from issuer-a.
-	if len(bundle.URLs) != 7 {
-		t.Fatalf("expected 7 urls, got %d", len(bundle.URLs))
+	// Base PRMD records (resource + first auth-server + source) plus 3 metadata-derived records from issuer-a.
+	if len(bundle.URLs) != 6 {
+		t.Fatalf("expected 6 urls, got %d", len(bundle.URLs))
 	}
 	assertURLRecord(t, bundle.URLs[0], server.URL+"/resource", "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], issuerA, "prmd-auth-server", "0")
-	assertURLRecord(t, bundle.URLs[2], issuerB, "prmd-auth-server", "1")
-	assertURLRecord(t, bundle.URLs[3], sourceURL.String(), "prmd-source", "0")
+	assertURLRecord(t, bundle.URLs[2], sourceURL.String(), "prmd-source", "0")
 	assertURLRecord(
 		t,
-		bundle.URLs[4],
+		bundle.URLs[3],
 		server.URL+"/.well-known/oauth-authorization-server/issuer-a",
 		"auth-server-metadata",
 		"0",
 	)
-	assertURLRecord(t, bundle.URLs[5], issuerA, "issuer", "0")
-	assertURLRecord(t, bundle.URLs[6], issuerA+"/token", "token-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[4], issuerA, "issuer", "0")
+	assertURLRecord(t, bundle.URLs[5], issuerA+"/token", "token-endpoint", "0")
 	if issuerARequests != 1 {
 		t.Fatalf("expected exactly one metadata request for first auth server, got %d", issuerARequests)
 	}
@@ -250,9 +246,9 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataUsesFirstAuthServerOnly(t *
 		t.Fatalf("build expanded bundle: %v", err)
 	}
 
-	// Base PRMD records (resource + two auth-servers + source), no auth-metadata-derived records.
-	if len(bundle.URLs) != 4 {
-		t.Fatalf("expected 4 urls, got %d", len(bundle.URLs))
+	// Base PRMD records (resource + first auth-server + source), no auth-metadata-derived records.
+	if len(bundle.URLs) != 3 {
+		t.Fatalf("expected 3 urls, got %d", len(bundle.URLs))
 	}
 	if issuerARequests != 1 {
 		t.Fatalf("expected exactly one metadata request for first auth server, got %d", issuerARequests)
@@ -260,6 +256,34 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataUsesFirstAuthServerOnly(t *
 	if issuerBRequests != 0 {
 		t.Fatalf("expected no metadata request for second auth server, got %d", issuerBRequests)
 	}
+}
+
+func TestBuildURLBundleFromPRMDIgnoresAuthorizationServersBeyondIndexZero(t *testing.T) {
+	payload, err := json.Marshal(oauthex.ProtectedResourceMetadata{
+		Resource:             "https://resource.internal/",
+		AuthorizationServers: []string{"https://auth1.internal/", "://not-a-url"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	bundle, _, err := buildURLBundleFromPRMDWithAuthServerMetadata(
+		context.Background(),
+		nil,
+		payload,
+		time.Unix(42, 0).UTC(),
+		mustParseURL(t, "https://prmd.internal/.well-known/oauth-protected-resource"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("build bundle: %v", err)
+	}
+	if len(bundle.URLs) != 3 {
+		t.Fatalf("expected 3 urls, got %d", len(bundle.URLs))
+	}
+	assertURLRecord(t, bundle.URLs[0], "https://resource.internal/", "prmd-resource", "0")
+	assertURLRecord(t, bundle.URLs[1], "https://auth1.internal/", "prmd-auth-server", "0")
+	assertURLRecord(t, bundle.URLs[2], "https://prmd.internal/.well-known/oauth-protected-resource", "prmd-source", "0")
 }
 
 func assertURLRecord(t *testing.T, record hostbus.URLRecord, expectedURL string, expectedRole string, expectedIndex string) {

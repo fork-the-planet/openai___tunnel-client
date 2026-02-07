@@ -239,10 +239,9 @@ func validateProtectedResourceMetadata(body []byte) error {
 	if metadata.Resource == "" {
 		return fmt.Errorf("protected resource metadata missing resource")
 	}
-	for _, server := range metadata.AuthorizationServers {
-		_, err := url.Parse(server)
-		if err != nil {
-			return fmt.Errorf("parse authorization server %q: %w", server, err)
+	if len(metadata.AuthorizationServers) > 0 {
+		if _, err := url.Parse(metadata.AuthorizationServers[0]); err != nil {
+			return fmt.Errorf("parse authorization server[0] %q: %w", metadata.AuthorizationServers[0], err)
 		}
 	}
 	return nil

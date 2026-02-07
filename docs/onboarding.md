@@ -39,6 +39,7 @@ For the full surface (flags, defaults, advanced knobs), see [`configuration.md`]
 
 - `Authorization` headers are forwarded through tunnel-service to your MCP server.
 - OAuth discovery GETs are forwarded to the tunnel-client; discovery payloads and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
+- `authorization_servers[0]` from PRMD is the only source of truth for auth-server metadata enrichment and Harpoon OAuth target registration.
 - The authorization server itself is not tunneled—if it is only reachable on-prem/behind a firewall and not accessible from the internet or the tunnel-client host, the OAuth flow can fail.
 
 ## 4) Run

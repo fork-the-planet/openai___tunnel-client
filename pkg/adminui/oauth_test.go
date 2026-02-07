@@ -50,7 +50,7 @@ func TestBuildOAuthStatusWithAttempts(t *testing.T) {
 	require.NotNil(t, out.Metadata)
 	require.Len(t, out.Metadata.Attempts, 1)
 	require.Equal(t, "https://example.com/override", out.DiscoveryURLs[0])
-	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
+	require.Equal(t, "authorization_servers[0] only (source of truth)", out.AuthServerMetaMode)
 	require.Equal(t, 2, out.AuthServerCount)
 	require.Equal(t, "https://auth-1.internal", out.SelectedAuthServer)
 }
@@ -78,7 +78,7 @@ func TestBuildOAuthStatusPendingUsesConfigURLs(t *testing.T) {
 	require.True(t, out.Pending)
 	require.NotEmpty(t, out.DiscoveryURLs)
 	require.Equal(t, expectedMetadataURLs(serverURL), out.DiscoveryURLs)
-	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
+	require.Equal(t, "authorization_servers[0] only (source of truth)", out.AuthServerMetaMode)
 	require.Equal(t, 0, out.AuthServerCount)
 	require.Empty(t, out.SelectedAuthServer)
 }
@@ -113,7 +113,7 @@ func TestBuildOAuthStatusErrorIncludesAttempts(t *testing.T) {
 	require.Equal(t, "boom", out.Error)
 	require.NotNil(t, out.Metadata)
 	require.Len(t, out.Metadata.Attempts, 1)
-	require.Equal(t, "first authorization server only", out.AuthServerMetaMode)
+	require.Equal(t, "authorization_servers[0] only (source of truth)", out.AuthServerMetaMode)
 }
 
 func expectedMetadataURLs(serverURL *url.URL) []string {
