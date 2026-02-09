@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -69,7 +68,6 @@ type processorParams struct {
 type mcpProcessor struct {
 	logger           *slog.Logger
 	channels         map[types.Channel]channelConfig
-	sessions         *sessionTracker
 	tunnelResponder  controlplane.Responder
 	connectionMaxTTL time.Duration
 	metrics          *processorMetrics
@@ -85,11 +83,10 @@ type channelFeatures struct {
 }
 
 type channelConfig struct {
-	transport  mcpclient.ForwardingTransport
-	features   channelFeatures
-	priority   int
-	routable   func() bool
-	streamable bool
+	transport mcpclient.ForwardingTransport
+	features  channelFeatures
+	priority  int
+	routable  func() bool
 }
 
 func (c channelConfig) isRoutable() bool {
@@ -174,16 +171,14 @@ func NewProcessor(p processorParams) (Processor, error) {
 			return nil, fmt.Errorf("dispatcher processor: non-main channel %q must not set supportsOAuth=true", channelName)
 		}
 
-		transportKind := resolveTransportKind(p.MCPConfig, channelName)
 		channels[channelName] = channelConfig{
 			transport: binding.Transport,
 			features: channelFeatures{
 				supportsMCP:   binding.SupportsMCP,
 				supportsOAuth: binding.SupportsOAuth,
 			},
-			priority:   binding.Priority,
-			routable:   binding.Routable,
-			streamable: transportKind == config.MCPTransportHTTPStreamable,
+			priority: binding.Priority,
+			routable: binding.Routable,
 		}
 	}
 
@@ -235,7 +230,6 @@ func NewProcessor(p processorParams) (Processor, error) {
 	return &mcpProcessor{
 		logger:           baseLogger,
 		channels:         channels,
-		sessions:         newSessionTracker(),
 		tunnelResponder:  p.TunnelResponder,
 		connectionMaxTTL: p.MCPConfig.ConnectionMaxTTL,
 		metrics:          processorMetrics,
@@ -382,14 +376,8 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 
 	headers := ensureDefaultAcceptHeader(cmd.Headers())
-	if channelCfg.streamable {
-		headers = p.applyStreamableSessionHeader(channel, cmd, headers)
-	}
 	statusCode, respHeader, err := conn.Write(ctx, headers, req)
 	statusCode = normalizeTransportStatusCode(statusCode, err)
-	if channelCfg.streamable {
-		p.captureStreamableSessionHeader(channel, respHeader)
-	}
 	if err != nil || statusCode >= http.StatusBadRequest {
 		status := statusCode
 		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
@@ -454,86 +442,6 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	logger.InfoContext(ctx, "dispatcher forwarded command to MCP server")
 
 	return nil
-}
-
-func resolveTransportKind(cfg *config.MCPConfig, channel types.Channel) config.MCPTransportKind {
-	if cfg == nil {
-		return ""
-	}
-	kind := cfg.TransportKind
-	if binding := cfg.ChannelBindingFor(channel); binding != nil {
-		if binding.TransportKind != "" {
-			kind = binding.TransportKind
-		}
-	}
-	if kind == "" {
-		kind = config.MCPTransportHTTPStreamable
-	}
-	return kind
-}
-
-type sessionTracker struct {
-	mu        sync.Mutex
-	byChannel map[types.Channel]string
-}
-
-func newSessionTracker() *sessionTracker {
-	return &sessionTracker{
-		byChannel: make(map[types.Channel]string),
-	}
-}
-
-func (s *sessionTracker) Record(channel types.Channel, sessionID string) {
-	if s == nil || sessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.byChannel[channel] = sessionID
-}
-
-func (s *sessionTracker) Get(channel types.Channel) (string, bool) {
-	if s == nil {
-		return "", false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sessionID, ok := s.byChannel[channel]
-	return sessionID, ok
-}
-
-func (p *mcpProcessor) applyStreamableSessionHeader(channel types.Channel, cmd controlplane.JsonRpcCommand, headers http.Header) http.Header {
-	if headers == nil {
-		headers = http.Header{}
-	}
-	if sessionID, ok := cmd.SessionID(); ok && sessionID != "" {
-		p.sessions.Record(channel, sessionID)
-		if headers.Get(mcpclient.HeaderSessionID) == "" {
-			clone := headers.Clone()
-			clone.Set(mcpclient.HeaderSessionID, sessionID)
-			return clone
-		}
-		return headers
-	}
-	if headers.Get(mcpclient.HeaderSessionID) != "" {
-		p.sessions.Record(channel, headers.Get(mcpclient.HeaderSessionID))
-		return headers
-	}
-	if cached, ok := p.sessions.Get(channel); ok {
-		clone := headers.Clone()
-		clone.Set(mcpclient.HeaderSessionID, cached)
-		return clone
-	}
-	return headers
-}
-
-func (p *mcpProcessor) captureStreamableSessionHeader(channel types.Channel, headers http.Header) {
-	if p == nil || p.sessions == nil {
-		return
-	}
-	if sessionID := mcpclient.SessionIDFromHeaders(headers); sessionID != nil {
-		p.sessions.Record(channel, *sessionID)
-	}
 }
 
 func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger *slog.Logger, cmd controlplane.OauthDiscoveryCommand, channel types.Channel) error {
