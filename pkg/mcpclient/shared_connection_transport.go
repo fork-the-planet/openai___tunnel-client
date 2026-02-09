@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -11,7 +12,6 @@ type sharedConnectionTransport struct {
 	base mcp.Transport
 	mu   sync.Mutex
 	conn mcp.Connection
-	err  error
 }
 
 // NewSharedConnectionTransport returns a transport wrapper that reuses the
@@ -32,10 +32,64 @@ func (t *sharedConnectionTransport) Connect(ctx context.Context) (mcp.Connection
 		return nil, nil
 	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.conn != nil || t.err != nil {
-		return t.conn, t.err
+	if t.conn != nil {
+		conn := t.conn
+		t.mu.Unlock()
+		return conn, nil
 	}
-	t.conn, t.err = t.base.Connect(ctx)
-	return t.conn, t.err
+	conn, err := t.base.Connect(ctx)
+	if err != nil {
+		t.mu.Unlock()
+		return nil, err
+	}
+	var sharedConn *sharedConnection
+	sharedConn = &sharedConnection{
+		base: conn,
+		onClose: func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if t.conn == sharedConn {
+				t.conn = nil
+			}
+		},
+	}
+	t.conn = sharedConn
+	t.mu.Unlock()
+	return sharedConn, nil
+}
+
+type sharedConnection struct {
+	base    mcp.Connection
+	onClose func()
+}
+
+func (c *sharedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	if c == nil || c.base == nil {
+		return nil, nil
+	}
+	return c.base.Read(ctx)
+}
+
+func (c *sharedConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
+	if c == nil || c.base == nil {
+		return nil
+	}
+	return c.base.Write(ctx, msg)
+}
+
+func (c *sharedConnection) Close() error {
+	if c == nil || c.base == nil {
+		return nil
+	}
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.base.Close()
+}
+
+func (c *sharedConnection) SessionID() string {
+	if c == nil || c.base == nil {
+		return ""
+	}
+	return c.base.SessionID()
 }
