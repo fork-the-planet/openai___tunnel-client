@@ -91,6 +91,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 		"jwks_uri":               issuer + "/jwks",
 		"introspection_endpoint": issuer + "/introspect",
 		"registration_endpoint":  issuer + "/register",
+		"revocation_endpoint":    issuer + "/revoke",
 	})
 	if err != nil {
 		t.Fatalf("marshal metadata body: %v", err)
@@ -128,11 +129,11 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 		"0",
 	)
 	assertURLRecord(t, bundle.URLs[4], issuer, "issuer", "0")
-	assertURLRecord(t, bundle.URLs[5], issuer+"/authorize", "authorization-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[6], issuer+"/token", "token-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[7], issuer+"/jwks", "jwks-uri", "0")
-	assertURLRecord(t, bundle.URLs[8], issuer+"/introspect", "introspection-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[9], issuer+"/register", "registration-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[5], issuer+"/token", "token-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[6], issuer+"/jwks", "jwks-uri", "0")
+	assertURLRecord(t, bundle.URLs[7], issuer+"/introspect", "introspection-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[8], issuer+"/register", "registration-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[9], issuer+"/revoke", "revocation-endpoint", "0")
 }
 
 func TestBuildURLBundleFromPRMDWithAuthServerMetadataPartialFailure(t *testing.T) {

@@ -23,6 +23,7 @@ type AuthServerMetadata struct {
 	JWKSURI               string
 	IntrospectionEndpoint string
 	RegistrationEndpoint  string
+	RevocationEndpoint    string
 }
 
 type AuthServerMetadataDocument string
@@ -75,6 +76,7 @@ type authServerMetadataJSON struct {
 	JWKSURI               string `json:"jwks_uri"`
 	IntrospectionEndpoint string `json:"introspection_endpoint"`
 	RegistrationEndpoint  string `json:"registration_endpoint"`
+	RevocationEndpoint    string `json:"revocation_endpoint"`
 }
 
 type authServerMetadataCandidate struct {
@@ -295,6 +297,7 @@ func fetchAuthServerMetadataDocument(
 		JWKSURI:               metadata.JWKSURI,
 		IntrospectionEndpoint: metadata.IntrospectionEndpoint,
 		RegistrationEndpoint:  metadata.RegistrationEndpoint,
+		RevocationEndpoint:    metadata.RevocationEndpoint,
 	}, response, nil
 }
 

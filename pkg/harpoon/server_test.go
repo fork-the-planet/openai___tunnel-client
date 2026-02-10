@@ -134,6 +134,55 @@ func TestCallTargetSupportsMethods(t *testing.T) {
 	}
 }
 
+func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/meta":
+			_, _ = w.Write([]byte(`{
+				"authorization_endpoint":"` + server.URL + `/authorize",
+				"token_endpoint":"` + server.URL + `/token"
+			}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, true, []Target{
+		{
+			Label:   "metadata",
+			BaseURL: mustParseURL(t, server.URL+"/meta"),
+		},
+		{
+			Label:   "token",
+			BaseURL: mustParseURL(t, server.URL+"/token"),
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+	}
+	client, err := NewServer(cfg, registry, NewCallBuffer(), logger)
+	require.NoError(t, err)
+
+	resp, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "metadata",
+		Method: http.MethodGet,
+	})
+	require.NoError(t, err)
+
+	decodedBody := decodeBody(t, resp.BodyBase64)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(decodedBody), &payload))
+	require.Equal(t, server.URL+"/authorize", payload["authorization_endpoint"])
+	require.Equal(t, "harpoon://token", payload["token_endpoint"])
+}
+
 func TestCallTargetUsesProxy(t *testing.T) {
 	targetCalled := make(chan struct{}, 1)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

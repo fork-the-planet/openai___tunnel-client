@@ -21,6 +21,7 @@ func TestFetchAuthServerMetadata(t *testing.T) {
 		"token_endpoint":         server.URL + "/token",
 		"jwks_uri":               server.URL + "/jwks",
 		"registration_endpoint":  server.URL + "/register",
+		"revocation_endpoint":    server.URL + "/revoke",
 		"introspection_endpoint": server.URL + "/introspect",
 	}
 	body, err := json.Marshal(payload)
@@ -58,6 +59,9 @@ func TestFetchAuthServerMetadata(t *testing.T) {
 	}
 	if meta.RegistrationEndpoint != server.URL+"/register" {
 		t.Fatalf("registration_endpoint mismatch: got %q", meta.RegistrationEndpoint)
+	}
+	if meta.RevocationEndpoint != server.URL+"/revoke" {
+		t.Fatalf("revocation_endpoint mismatch: got %q", meta.RevocationEndpoint)
 	}
 }
 

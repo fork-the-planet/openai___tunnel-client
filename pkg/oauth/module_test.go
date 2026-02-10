@@ -59,6 +59,7 @@ func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
 		"jwks_uri":               authIssuer + "/jwks",
 		"introspection_endpoint": authIssuer + "/introspect",
 		"registration_endpoint":  authIssuer + "/register",
+		"revocation_endpoint":    authIssuer + "/revoke",
 	})
 	if err != nil {
 		t.Fatalf("marshal metadata: %v", err)
@@ -132,11 +133,11 @@ func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
 		"prmd-source",
 		"auth-server-metadata",
 		"issuer",
-		"authorization-endpoint",
 		"token-endpoint",
 		"jwks-uri",
 		"introspection-endpoint",
 		"registration-endpoint",
+		"revocation-endpoint",
 	} {
 		if !roles[expected] {
 			t.Fatalf("expected role %q in published bundle", expected)

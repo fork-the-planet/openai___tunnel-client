@@ -157,7 +157,7 @@ func buildAuthServerMetadataURLRecords(
 		return nil, fetchResult
 	}
 
-	records := make([]hostbus.URLRecord, 0, 6)
+	records := make([]hostbus.URLRecord, 0, 7)
 	records = appendAuthServerMetadataRecord(
 		records,
 		fetchResult.SelectedURL,
@@ -166,11 +166,11 @@ func buildAuthServerMetadataURLRecords(
 		authServerIndex,
 	)
 	records = appendAuthServerMetadataRecord(records, meta.Issuer, "Auth server issuer", "issuer", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.AuthorizationEndpoint, "Auth server authorization endpoint", "authorization-endpoint", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.TokenEndpoint, "Auth server token endpoint", "token-endpoint", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.JWKSURI, "Auth server JWKS URI", "jwks-uri", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.IntrospectionEndpoint, "Auth server introspection endpoint", "introspection-endpoint", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.RegistrationEndpoint, "Auth server registration endpoint", "registration-endpoint", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.RevocationEndpoint, "Auth server revocation endpoint", "revocation-endpoint", authServerIndex)
 	return records, fetchResult
 }
 

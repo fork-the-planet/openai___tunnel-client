@@ -11,11 +11,11 @@ var oauthRoleTagMapping = map[string][]string{
 	"prmd-source":            {"protected-resource-metadata", "source-url"},
 	"auth-server-metadata":   {"auth-server-metadata"},
 	"issuer":                 {"auth-server-metadata", "issuer"},
-	"authorization-endpoint": {"auth-server-metadata", "authorization-endpoint"},
 	"token-endpoint":         {"auth-server-metadata", "token-endpoint"},
 	"jwks-uri":               {"auth-server-metadata", "jwks-uri"},
 	"introspection-endpoint": {"auth-server-metadata", "introspection-endpoint"},
 	"registration-endpoint":  {"auth-server-metadata", "registration-endpoint"},
+	"revocation-endpoint":    {"auth-server-metadata", "revocation-endpoint"},
 }
 
 func normalizeCategorySource(category, source string) (string, string) {
