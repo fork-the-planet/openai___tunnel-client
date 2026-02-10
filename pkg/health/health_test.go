@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 )
 
 func TestBuildHealthURLAssignsRandomPort(t *testing.T) {
@@ -154,6 +156,51 @@ func TestOkHandler(t *testing.T) {
 	res := rec.Result()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Contains(t, res.Header.Get("Content-Type"), "text/plain")
+}
+
+func TestReadinessHandler(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReadyWhenStateNil", func(t *testing.T) {
+		t.Parallel()
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+	})
+
+	t.Run("NotReadyWhenPending", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
+	})
+
+	t.Run("ReadyWhenDone", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(nil, nil, nil, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+	})
 }
 
 type fakeAddr struct{}

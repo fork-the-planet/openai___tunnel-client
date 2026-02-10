@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -81,7 +82,6 @@ func TestAppBoots(t *testing.T) {
 
 	endpoints := map[string]string{
 		"/healthz": "live",
-		"/readyz":  "ready",
 	}
 
 	for path, wantBody := range endpoints {
@@ -94,6 +94,8 @@ func TestAppBoots(t *testing.T) {
 		require.Equalf(t, http.StatusOK, resp.StatusCode, "%s response status", path)
 		require.Containsf(t, string(body), wantBody, "%s response body", path)
 	}
+
+	require.NoError(t, waitForReady(client, baseURL, 6*time.Second))
 
 	resp, err := client.Get(baseURL + "/metrics")
 	require.NoError(t, err)
@@ -128,6 +130,26 @@ func TestAppBoots(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist, "pid file removed on shutdown")
 	_, err = os.Stat(healthURLPath)
 	require.ErrorIs(t, err, os.ErrNotExist, "health URL file removed on shutdown")
+}
+
+func waitForReady(client *http.Client, baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		resp, err := client.Get(baseURL + "/readyz")
+		if err == nil {
+			body, readErr := io.ReadAll(resp.Body)
+			closeErr := resp.Body.Close()
+			if readErr == nil && closeErr == nil &&
+				resp.StatusCode == http.StatusOK &&
+				strings.Contains(string(body), "ready") {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("readyz never became ready within %s", timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

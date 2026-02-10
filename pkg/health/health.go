@@ -15,6 +15,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/metrics"
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/fx"
@@ -102,6 +103,7 @@ type healthParams struct {
 	Logger         *slog.Logger
 	MeterProvider  *sdkmetric.MeterProvider
 	AdminMux       *http.ServeMux `name:"admin_mux"`
+	OAuthState     *oauth.DiscoveryState
 }
 
 func newHealthService(p healthParams) (*healthService, error) {
@@ -112,7 +114,7 @@ func newHealthService(p healthParams) (*healthService, error) {
 	}
 
 	p.AdminMux.HandleFunc("/healthz", okHandler("live"))
-	p.AdminMux.HandleFunc("/readyz", okHandler("ready"))
+	p.AdminMux.HandleFunc("/readyz", readinessHandler(p.OAuthState))
 	p.AdminMux.Handle("/metrics", p.MetricExporter)
 
 	meter := p.MeterProvider.Meter("health")
@@ -142,7 +144,11 @@ func newHealthService(p healthParams) (*healthService, error) {
 		OnStart: func(ctx context.Context) error {
 			_, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 				observer.ObserveInt64(livenessGauge, 1)
-				observer.ObserveInt64(readinessGauge, 1)
+				if isReady(p.OAuthState) {
+					observer.ObserveInt64(readinessGauge, 1)
+				} else {
+					observer.ObserveInt64(readinessGauge, 0)
+				}
 				return nil
 			}, livenessGauge, readinessGauge)
 
@@ -226,10 +232,30 @@ func isUnspecifiedHost(host string) bool {
 	return ip != nil && ip.IsUnspecified()
 }
 
+func isReady(state *oauth.DiscoveryState) bool {
+	if state == nil {
+		return true
+	}
+	return state.IsDone()
+}
+
 func okHandler(status string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(status))
+	}
+}
+
+func readinessHandler(state *oauth.DiscoveryState) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if !isReady(state) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("oauth discovery pending"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	}
 }

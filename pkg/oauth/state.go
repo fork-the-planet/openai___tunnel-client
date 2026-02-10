@@ -41,6 +41,19 @@ func NewDiscoveryState() *DiscoveryState {
 	return &DiscoveryState{done: make(chan struct{})}
 }
 
+// IsDone reports whether the discovery process has completed.
+func (s *DiscoveryState) IsDone() bool {
+	if s == nil {
+		return true
+	}
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Set records the OAuth discovery result and signals waiters.
 func (s *DiscoveryState) Set(
 	result *DiscoveryResult,
