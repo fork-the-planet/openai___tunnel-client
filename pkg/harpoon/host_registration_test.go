@@ -96,6 +96,45 @@ func TestRegisterHostBundleDerivesCategoryAndTags(t *testing.T) {
 	}
 }
 
+func TestRegisterHostBundleIncludesGroupPublicTag(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, true, nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	classifier := hostclassifier.NewHostClassifier(config.HarpoonHostClassifierConfig{
+		IncludeSuffix:  []string{"internal"},
+		IncludePrivate: false,
+	})
+
+	bundle := hostbus.URLBundle{
+		URLs: []hostbus.URLRecord{
+			{
+				URL: mustParseURLForHostRegistration(t, "https://auth.internal/oauth"),
+				Tags: []hostbus.Tag{
+					{Key: hostbus.TagKeySource, Value: "oauth"},
+					{Key: hostbus.TagKeyRole, Value: "prmd-auth-server"},
+					{Key: hostbus.TagKeyIndex, Value: "0"},
+					{Key: hostbus.TagKeyGroup, Value: "auth-server:0"},
+				},
+			},
+		},
+	}
+
+	if err := registerHostBundle(bundle, classifier, registry, logger); err != nil {
+		t.Fatalf("register bundle: %v", err)
+	}
+
+	target, ok := registry.Lookup("oauth-prmd-auth-server-0")
+	if !ok {
+		t.Fatalf("expected label oauth-prmd-auth-server-0")
+	}
+	expectedTags := []string{"authorization-server", "group=auth-server:0", "protected-resource-metadata"}
+	if !reflect.DeepEqual(target.Tags, expectedTags) {
+		t.Fatalf("unexpected tags: got %v want %v", target.Tags, expectedTags)
+	}
+}
+
 func TestBuildAutoLabelUsesRoleIndex(t *testing.T) {
 	label := buildAutoLabel(hostbus.URLRecord{
 		Tags: []hostbus.Tag{{Key: hostbus.TagKeyRole, Value: "registration-endpoint"}, {Key: hostbus.TagKeyIndex, Value: "2"}},

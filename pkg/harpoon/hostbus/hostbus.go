@@ -30,6 +30,7 @@ const (
 	TagKeySource
 	TagKeyRole
 	TagKeyIndex
+	TagKeyGroup
 )
 
 // Tag associates a tag key with a value.

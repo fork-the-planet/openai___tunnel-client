@@ -106,6 +106,91 @@ func TestListTargetsFilters(t *testing.T) {
 	require.Len(t, empty.Targets, 3)
 }
 
+func TestListTargetsGroupTagSerialization(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, true, []Target{
+		{
+			Label:       "oauth-prmd-auth-server-0",
+			Description: "PRMD authorization server",
+			Category:    "oauth",
+			Source:      "oauth",
+			Tags:        []string{"authorization-server", "protected-resource-metadata", "group=auth-server:0"},
+			BaseURL:     mustParseURL(t, "https://auth.internal/prmd"),
+		},
+		{
+			Label:       "oauth-auth-server-metadata-0",
+			Description: "Auth server metadata URL",
+			Category:    "oauth",
+			Source:      "oauth",
+			Tags:        []string{"auth-server-metadata", "group=auth-server:0"},
+			BaseURL:     mustParseURL(t, "https://auth.internal/.well-known/oauth-authorization-server"),
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+	}
+	server, err := NewServer(cfg, registry, NewCallBuffer(), logger)
+	require.NoError(t, err)
+
+	unfiltered := server.listTargets(listTargetsRequest{})
+	unfilteredJSON, err := json.Marshal(unfiltered)
+	require.NoError(t, err)
+	require.JSONEq(t, `
+	{
+	  "targets": [
+	    {
+	      "label": "oauth-prmd-auth-server-0",
+	      "description": "PRMD authorization server",
+	      "category": "oauth",
+	      "source": "oauth",
+	      "tags": ["authorization-server", "group=auth-server:0", "protected-resource-metadata"],
+	      "allowed_methods": ["GET", "POST", "PUT"]
+	    },
+	    {
+	      "label": "oauth-auth-server-metadata-0",
+	      "description": "Auth server metadata URL",
+	      "category": "oauth",
+	      "source": "oauth",
+	      "tags": ["auth-server-metadata", "group=auth-server:0"],
+	      "allowed_methods": ["GET", "POST", "PUT"]
+	    }
+	  ]
+	}`,
+		string(unfilteredJSON),
+	)
+
+	filtered := server.listTargets(listTargetsRequest{Tags: []string{"group=auth-server:0"}})
+	filteredJSON, err := json.Marshal(filtered)
+	require.NoError(t, err)
+	require.JSONEq(t, `
+	{
+	  "targets": [
+	    {
+	      "label": "oauth-prmd-auth-server-0",
+	      "description": "PRMD authorization server",
+	      "category": "oauth",
+	      "source": "oauth",
+	      "tags": ["authorization-server", "group=auth-server:0", "protected-resource-metadata"],
+	      "allowed_methods": ["GET", "POST", "PUT"]
+	    },
+	    {
+	      "label": "oauth-auth-server-metadata-0",
+	      "description": "Auth server metadata URL",
+	      "category": "oauth",
+	      "source": "oauth",
+	      "tags": ["auth-server-metadata", "group=auth-server:0"],
+	      "allowed_methods": ["GET", "POST", "PUT"]
+	    }
+	  ]
+	}`,
+		string(filteredJSON),
+	)
+}
+
 func TestCallTargetSupportsMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(r.Method))

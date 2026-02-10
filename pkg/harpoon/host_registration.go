@@ -135,12 +135,18 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 				slog.Int("collision_count", collisionCount),
 			)
 		}
+		role := tagValue(record.Tags, hostbus.TagKeyRole)
+		tags := roleTags(role)
+		if group := normalizeToken(tagValue(record.Tags, hostbus.TagKeyGroup)); group != "" {
+			tags = append(tags, "group="+group)
+		}
+
 		target := Target{
 			Label:           label,
 			Description:     record.Description,
 			Category:        tagValue(record.Tags, hostbus.TagKeySource),
 			Source:          tagValue(record.Tags, hostbus.TagKeySource),
-			Tags:            roleTags(tagValue(record.Tags, hostbus.TagKeyRole)),
+			Tags:            tags,
 			InclusionReason: reason,
 			BaseURL:         record.URL,
 		}

@@ -92,6 +92,10 @@ func BuildURLBundleFromPRMDWithAuthServerMetadata(
 	)
 }
 
+func authServerGroup(index int) string {
+	return fmt.Sprintf("auth-server:%d", index)
+}
+
 func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
 	return hostbus.URLRecord{
 		URL:         parseURL(raw),
@@ -101,10 +105,12 @@ func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
 }
 
 func urlRecordFromPRMDAuthServer(raw string, index int) hostbus.URLRecord {
+	tags := defaultPRMDTags("prmd-auth-server", index)
+	tags = append(tags, hostbus.Tag{Key: hostbus.TagKeyGroup, Value: authServerGroup(index)})
 	return hostbus.URLRecord{
 		URL:         parseURL(raw),
 		Description: "PRMD authorization server",
-		Tags:        defaultPRMDTags("prmd-auth-server", index),
+		Tags:        tags,
 	}
 }
 
@@ -197,6 +203,7 @@ func defaultAuthServerMetadataTags(role string, authServerIndex int) []hostbus.T
 		{Key: hostbus.TagKeySource, Value: "oauth"},
 		{Key: hostbus.TagKeyRole, Value: role},
 		{Key: hostbus.TagKeyIndex, Value: fmt.Sprintf("%d", authServerIndex)},
+		{Key: hostbus.TagKeyGroup, Value: authServerGroup(authServerIndex)},
 	}
 }
 

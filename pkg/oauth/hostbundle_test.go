@@ -120,6 +120,9 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 
 	assertURLRecord(t, bundle.URLs[0], resource, "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], issuer, "prmd-auth-server", "0")
+	if got := tagValueForTest(bundle.URLs[1].Tags, hostbus.TagKeyGroup); got != "auth-server:0" {
+		t.Fatalf("unexpected group tag for prmd auth server: got %q", got)
+	}
 	assertURLRecord(t, bundle.URLs[2], sourceURL.String(), "prmd-source", "0")
 	assertURLRecord(
 		t,
@@ -128,6 +131,9 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 		"auth-server-metadata",
 		"0",
 	)
+	if got := tagValueForTest(bundle.URLs[3].Tags, hostbus.TagKeyGroup); got != "auth-server:0" {
+		t.Fatalf("unexpected group tag for auth-server metadata: got %q", got)
+	}
 	assertURLRecord(t, bundle.URLs[4], issuer, "issuer", "0")
 	assertURLRecord(t, bundle.URLs[5], issuer+"/token", "token-endpoint", "0")
 	assertURLRecord(t, bundle.URLs[6], issuer+"/jwks", "jwks-uri", "0")
