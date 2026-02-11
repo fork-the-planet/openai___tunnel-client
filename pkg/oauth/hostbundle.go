@@ -2,6 +2,8 @@ package oauth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,10 +31,11 @@ func buildURLBundleFromPRMDWithAuthServerMetadata(
 	}
 
 	records := make([]hostbus.URLRecord, 0, 10)
+	bundleGroupID := oauthBundleGroupID(metadata.Resource, metadata.AuthorizationServers, sourceURL)
 	records = append(records, urlRecordFromPRMDResource(metadata.Resource, 0))
 
 	if len(metadata.AuthorizationServers) > 0 {
-		records = append(records, urlRecordFromPRMDAuthServer(metadata.AuthorizationServers[0], 0))
+		records = append(records, urlRecordFromPRMDAuthServer(metadata.AuthorizationServers[0], 0, bundleGroupID))
 		if len(metadata.AuthorizationServers) > 1 && logger != nil {
 			logger.InfoContext(ctx, "oauth PRMD contains multiple authorization servers; only authorization_servers[0] is used",
 				slog.Int("authorization_server_count", len(metadata.AuthorizationServers)),
@@ -50,6 +53,7 @@ func buildURLBundleFromPRMDWithAuthServerMetadata(
 			client,
 			metadata.AuthorizationServers[0],
 			0,
+			bundleGroupID,
 			logger,
 		)
 		authServerMetadataFetch = fetchResult
@@ -92,8 +96,8 @@ func BuildURLBundleFromPRMDWithAuthServerMetadata(
 	)
 }
 
-func authServerGroup(index int) string {
-	return fmt.Sprintf("auth-server:%d", index)
+func authServerGroup(bundleGroupID string, index int) string {
+	return fmt.Sprintf("auth-server:%s:%d", bundleGroupID, index)
 }
 
 func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
@@ -104,9 +108,9 @@ func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
 	}
 }
 
-func urlRecordFromPRMDAuthServer(raw string, index int) hostbus.URLRecord {
+func urlRecordFromPRMDAuthServer(raw string, index int, bundleGroupID string) hostbus.URLRecord {
 	tags := defaultPRMDTags("prmd-auth-server", index)
-	tags = append(tags, hostbus.Tag{Key: hostbus.TagKeyGroup, Value: authServerGroup(index)})
+	tags = append(tags, hostbus.Tag{Key: hostbus.TagKeyGroup, Value: authServerGroup(bundleGroupID, index)})
 	return hostbus.URLRecord{
 		URL:         parseURL(raw),
 		Description: "PRMD authorization server",
@@ -138,6 +142,7 @@ func buildAuthServerMetadataURLRecords(
 	client *http.Client,
 	authServerRaw string,
 	authServerIndex int,
+	bundleGroupID string,
 	logger *slog.Logger,
 ) ([]hostbus.URLRecord, *AuthServerMetadataFetchResult) {
 	issuerURL := parseURL(authServerRaw)
@@ -170,13 +175,14 @@ func buildAuthServerMetadataURLRecords(
 		"Auth server metadata URL",
 		"auth-server-metadata",
 		authServerIndex,
+		bundleGroupID,
 	)
-	records = appendAuthServerMetadataRecord(records, meta.Issuer, "Auth server issuer", "issuer", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.TokenEndpoint, "Auth server token endpoint", "token-endpoint", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.JWKSURI, "Auth server JWKS URI", "jwks-uri", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.IntrospectionEndpoint, "Auth server introspection endpoint", "introspection-endpoint", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.RegistrationEndpoint, "Auth server registration endpoint", "registration-endpoint", authServerIndex)
-	records = appendAuthServerMetadataRecord(records, meta.RevocationEndpoint, "Auth server revocation endpoint", "revocation-endpoint", authServerIndex)
+	records = appendAuthServerMetadataRecord(records, meta.Issuer, "Auth server issuer", "issuer", authServerIndex, bundleGroupID)
+	records = appendAuthServerMetadataRecord(records, meta.TokenEndpoint, "Auth server token endpoint", "token-endpoint", authServerIndex, bundleGroupID)
+	records = appendAuthServerMetadataRecord(records, meta.JWKSURI, "Auth server JWKS URI", "jwks-uri", authServerIndex, bundleGroupID)
+	records = appendAuthServerMetadataRecord(records, meta.IntrospectionEndpoint, "Auth server introspection endpoint", "introspection-endpoint", authServerIndex, bundleGroupID)
+	records = appendAuthServerMetadataRecord(records, meta.RegistrationEndpoint, "Auth server registration endpoint", "registration-endpoint", authServerIndex, bundleGroupID)
+	records = appendAuthServerMetadataRecord(records, meta.RevocationEndpoint, "Auth server revocation endpoint", "revocation-endpoint", authServerIndex, bundleGroupID)
 	return records, fetchResult
 }
 
@@ -186,6 +192,7 @@ func appendAuthServerMetadataRecord(
 	description string,
 	role string,
 	authServerIndex int,
+	bundleGroupID string,
 ) []hostbus.URLRecord {
 	parsed := parseURL(raw)
 	if parsed == nil {
@@ -194,17 +201,33 @@ func appendAuthServerMetadataRecord(
 	return append(records, hostbus.URLRecord{
 		URL:         parsed,
 		Description: description,
-		Tags:        defaultAuthServerMetadataTags(role, authServerIndex),
+		Tags:        defaultAuthServerMetadataTags(role, authServerIndex, bundleGroupID),
 	})
 }
 
-func defaultAuthServerMetadataTags(role string, authServerIndex int) []hostbus.Tag {
+func defaultAuthServerMetadataTags(role string, authServerIndex int, bundleGroupID string) []hostbus.Tag {
 	return []hostbus.Tag{
 		{Key: hostbus.TagKeySource, Value: "oauth"},
 		{Key: hostbus.TagKeyRole, Value: role},
 		{Key: hostbus.TagKeyIndex, Value: fmt.Sprintf("%d", authServerIndex)},
-		{Key: hostbus.TagKeyGroup, Value: authServerGroup(authServerIndex)},
+		{Key: hostbus.TagKeyGroup, Value: authServerGroup(bundleGroupID, authServerIndex)},
 	}
+}
+
+func oauthBundleGroupID(resource string, authorizationServers []string, sourceURL *url.URL) string {
+	var key string
+	switch {
+	case sourceURL != nil:
+		key = sourceURL.String()
+	case resource != "":
+		key = resource
+	case len(authorizationServers) > 0:
+		key = authorizationServers[0]
+	default:
+		key = "default"
+	}
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:6])
 }
 
 func parseURL(raw string) *url.URL {

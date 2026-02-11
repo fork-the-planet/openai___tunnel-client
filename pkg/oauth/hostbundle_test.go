@@ -102,6 +102,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 	})
 
 	sourceURL := mustParseURL(t, server.URL+"/.well-known/oauth-protected-resource")
+	bundleGroupID := oauthBundleGroupID(resource, []string{issuer}, sourceURL)
 	bundle, _, err := buildURLBundleFromPRMDWithAuthServerMetadata(
 		context.Background(),
 		server.Client(),
@@ -120,7 +121,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 
 	assertURLRecord(t, bundle.URLs[0], resource, "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], issuer, "prmd-auth-server", "0")
-	if got := tagValueForTest(bundle.URLs[1].Tags, hostbus.TagKeyGroup); got != "auth-server:0" {
+	if got := tagValueForTest(bundle.URLs[1].Tags, hostbus.TagKeyGroup); got != "auth-server:"+bundleGroupID+":0" {
 		t.Fatalf("unexpected group tag for prmd auth server: got %q", got)
 	}
 	assertURLRecord(t, bundle.URLs[2], sourceURL.String(), "prmd-source", "0")
@@ -131,7 +132,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 		"auth-server-metadata",
 		"0",
 	)
-	if got := tagValueForTest(bundle.URLs[3].Tags, hostbus.TagKeyGroup); got != "auth-server:0" {
+	if got := tagValueForTest(bundle.URLs[3].Tags, hostbus.TagKeyGroup); got != "auth-server:"+bundleGroupID+":0" {
 		t.Fatalf("unexpected group tag for auth-server metadata: got %q", got)
 	}
 	assertURLRecord(t, bundle.URLs[4], issuer, "issuer", "0")
@@ -291,6 +292,17 @@ func TestBuildURLBundleFromPRMDIgnoresAuthorizationServersBeyondIndexZero(t *tes
 	assertURLRecord(t, bundle.URLs[0], "https://resource.internal/", "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], "https://auth1.internal/", "prmd-auth-server", "0")
 	assertURLRecord(t, bundle.URLs[2], "https://prmd.internal/.well-known/oauth-protected-resource", "prmd-source", "0")
+}
+
+func TestOAuthBundleGroupIDUsesSourceURLWhenAvailable(t *testing.T) {
+	sourceA := mustParseURL(t, "https://bundle-a.internal/.well-known/oauth-protected-resource")
+	sourceB := mustParseURL(t, "https://bundle-b.internal/.well-known/oauth-protected-resource")
+
+	groupA := authServerGroup(oauthBundleGroupID("https://resource.internal/", []string{"https://auth.internal/"}, sourceA), 0)
+	groupB := authServerGroup(oauthBundleGroupID("https://resource.internal/", []string{"https://auth.internal/"}, sourceB), 0)
+	if groupA == groupB {
+		t.Fatalf("expected distinct auth-server groups for different source urls, got %q", groupA)
+	}
 }
 
 func assertURLRecord(t *testing.T, record hostbus.URLRecord, expectedURL string, expectedRole string, expectedIndex string) {
