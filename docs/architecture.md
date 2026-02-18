@@ -59,5 +59,6 @@ flowchart LR
 - Forwards inbound `Authorization` headers to the MCP server via tunnel-client.
 - Handles OAuth discovery by queuing `oauth_discovery` commands; discovery GETs flow through the tunnel-client.
 - Rewrites `WWW-Authenticate` `resource_metadata` and discovery payload `resource` URLs to tunnel-service endpoints for the same `tunnel_id`.
-- Treats `authorization_servers[0]` as the only source of truth for auth-server metadata enrichment and Harpoon OAuth target registration.
+- Treats `authorization_servers[0]` as the only source of truth and metadata fetch target for auth-server metadata enrichment and Harpoon OAuth target registration.
+- Accepts metadata when the returned `issuer` differs from `authorization_servers[0]` (for example, external enterprise IdPs), while preserving mismatch diagnostics.
 - The authorization server itself is not tunneled; if it is firewalled/on-prem and unreachable from the internet or the tunnel-client host, the OAuth flow can fail.

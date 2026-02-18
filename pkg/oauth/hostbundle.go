@@ -167,6 +167,16 @@ func buildAuthServerMetadataURLRecords(
 		}
 		return nil, fetchResult
 	}
+	if logger != nil {
+		if mismatchAttempt := selectedIssuerMismatchAttempt(fetchResult); mismatchAttempt != nil {
+			logger.WarnContext(ctx, "oauth auth-server metadata issuer differs from authorization_servers[0]",
+				slog.String("expected_issuer_url", mismatchAttempt.ExpectedIssuerURL),
+				slog.String("metadata_issuer", mismatchAttempt.MetadataIssuer),
+				slog.String("selected_metadata_url", fetchResult.SelectedURL),
+				slog.Int("auth_server_index", authServerIndex),
+			)
+		}
+	}
 
 	records := make([]hostbus.URLRecord, 0, 7)
 	records = appendAuthServerMetadataRecord(
@@ -184,6 +194,19 @@ func buildAuthServerMetadataURLRecords(
 	records = appendAuthServerMetadataRecord(records, meta.RegistrationEndpoint, "Auth server registration endpoint", "registration-endpoint", authServerIndex, bundleGroupID)
 	records = appendAuthServerMetadataRecord(records, meta.RevocationEndpoint, "Auth server revocation endpoint", "revocation-endpoint", authServerIndex, bundleGroupID)
 	return records, fetchResult
+}
+
+func selectedIssuerMismatchAttempt(fetchResult *AuthServerMetadataFetchResult) *AuthServerMetadataAttempt {
+	if fetchResult == nil {
+		return nil
+	}
+	for i := range fetchResult.Attempts {
+		attempt := &fetchResult.Attempts[i]
+		if attempt.Selected && attempt.IssuerMismatch {
+			return attempt
+		}
+	}
+	return nil
 }
 
 func appendAuthServerMetadataRecord(

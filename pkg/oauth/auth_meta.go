@@ -41,16 +41,20 @@ const (
 )
 
 type AuthServerMetadataAttempt struct {
-	URL        string                      `json:"url,omitempty"`
-	Document   AuthServerMetadataDocument  `json:"document,omitempty"`
-	PathStyle  AuthServerMetadataPathStyle `json:"path_style,omitempty"`
-	Tried      bool                        `json:"tried,omitempty"`
-	Selected   bool                        `json:"selected,omitempty"`
-	StatusCode int                         `json:"status_code,omitempty"`
-	Error      string                      `json:"error,omitempty"`
-	Headers    http.Header                 `json:"headers,omitempty"`
-	Body       json.RawMessage             `json:"body,omitempty"`
-	BodyText   string                      `json:"body_text,omitempty"`
+	URL               string                      `json:"url,omitempty"`
+	Document          AuthServerMetadataDocument  `json:"document,omitempty"`
+	PathStyle         AuthServerMetadataPathStyle `json:"path_style,omitempty"`
+	Tried             bool                        `json:"tried,omitempty"`
+	Selected          bool                        `json:"selected,omitempty"`
+	StatusCode        int                         `json:"status_code,omitempty"`
+	Error             string                      `json:"error,omitempty"`
+	Warning           string                      `json:"warning,omitempty"`
+	IssuerMismatch    bool                        `json:"issuer_mismatch,omitempty"`
+	ExpectedIssuerURL string                      `json:"expected_issuer_url,omitempty"`
+	MetadataIssuer    string                      `json:"metadata_issuer,omitempty"`
+	Headers           http.Header                 `json:"headers,omitempty"`
+	Body              json.RawMessage             `json:"body,omitempty"`
+	BodyText          string                      `json:"body_text,omitempty"`
 }
 
 type AuthServerMetadataFetchResult struct {
@@ -137,6 +141,10 @@ func runFetchAuthServerMetadataPass(
 ) (*AuthServerMetadata, []error, discoveryFailureType) {
 	var errs []error
 	failureType := discoveryFailureTypeTimeoutOnly
+	var fallbackMeta *AuthServerMetadata
+	fallbackAttemptIndex := -1
+	fallbackSelectedURL := ""
+
 	for _, candidate := range candidates {
 		attempt := AuthServerMetadataAttempt{
 			URL:       candidate.URL,
@@ -162,11 +170,17 @@ func runFetchAuthServerMetadataPass(
 			continue
 		}
 
-		failureType = discoveryFailureTypeNonTimeout
 		if meta.Issuer != issuerURL {
-			attempt.Error = fmt.Sprintf("issuer mismatch: got %q want %q", meta.Issuer, issuerURL)
+			attempt.IssuerMismatch = true
+			attempt.ExpectedIssuerURL = issuerURL
+			attempt.MetadataIssuer = meta.Issuer
+			attempt.Warning = fmt.Sprintf("issuer mismatch: got %q want %q", meta.Issuer, issuerURL)
+			if fallbackMeta == nil {
+				fallbackMeta = meta
+				fallbackAttemptIndex = len(result.Attempts)
+				fallbackSelectedURL = candidate.URL
+			}
 			result.Attempts = append(result.Attempts, attempt)
-			errs = append(errs, fmt.Errorf("%s: %s", candidate.URL, attempt.Error))
 			continue
 		}
 
@@ -174,6 +188,12 @@ func runFetchAuthServerMetadataPass(
 		result.SelectedURL = candidate.URL
 		result.Attempts = append(result.Attempts, attempt)
 		return meta, errs, discoveryFailureTypeNotApplicable
+	}
+
+	if fallbackMeta != nil && fallbackAttemptIndex >= 0 {
+		result.Attempts[fallbackAttemptIndex].Selected = true
+		result.SelectedURL = fallbackSelectedURL
+		return fallbackMeta, errs, discoveryFailureTypeNotApplicable
 	}
 
 	return nil, errs, failureType

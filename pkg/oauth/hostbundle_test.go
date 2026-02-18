@@ -143,6 +143,113 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 	assertURLRecord(t, bundle.URLs[9], issuer+"/revoke", "revocation-endpoint", "0")
 }
 
+func TestBuildURLBundleFromPRMDWithAuthServerMetadataAcceptsIssuerMismatch(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	authServerURL := server.URL + "/issuer-a"
+	externalIssuer := "https://logondev.bcg.com/oauth2/aus2jrb9zi4O8hseE0h8"
+	payload, err := json.Marshal(oauthex.ProtectedResourceMetadata{
+		Resource:             server.URL + "/resource",
+		AuthorizationServers: []string{authServerURL},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	metaBody, err := json.Marshal(map[string]any{
+		"issuer":                 externalIssuer,
+		"authorization_endpoint": externalIssuer + "/authorize",
+		"token_endpoint":         externalIssuer + "/token",
+		"jwks_uri":               externalIssuer + "/jwks",
+		"introspection_endpoint": externalIssuer + "/introspect",
+		"registration_endpoint":  externalIssuer + "/register",
+		"revocation_endpoint":    externalIssuer + "/revoke",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata body: %v", err)
+	}
+	mux.HandleFunc("/.well-known/oauth-authorization-server/issuer-a", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(metaBody)
+	})
+
+	bundle, fetchResult, err := buildURLBundleFromPRMDWithAuthServerMetadata(
+		context.Background(),
+		server.Client(),
+		payload,
+		time.Unix(42, 0).UTC(),
+		mustParseURL(t, server.URL+"/.well-known/oauth-protected-resource"),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("build expanded bundle: %v", err)
+	}
+	if fetchResult == nil {
+		t.Fatalf("expected auth-server metadata fetch result")
+		return
+	}
+	result := fetchResult
+	if len(bundle.URLs) != 10 {
+		t.Fatalf("expected 10 urls, got %d", len(bundle.URLs))
+	}
+
+	urlByRole := map[string]string{}
+	for _, record := range bundle.URLs {
+		if record.URL == nil {
+			t.Fatalf("expected URL for role %q", tagValueForTest(record.Tags, hostbus.TagKeyRole))
+			return
+		}
+		urlByRole[tagValueForTest(record.Tags, hostbus.TagKeyRole)] = record.URL.String()
+	}
+	if got := urlByRole["auth-server-metadata"]; got != server.URL+"/.well-known/oauth-authorization-server/issuer-a" {
+		t.Fatalf("unexpected auth-server-metadata url: got %q", got)
+	}
+	if got := urlByRole["issuer"]; got != externalIssuer {
+		t.Fatalf("unexpected issuer url: got %q want %q", got, externalIssuer)
+	}
+	if got := urlByRole["token-endpoint"]; got != externalIssuer+"/token" {
+		t.Fatalf("unexpected token endpoint url: got %q", got)
+	}
+	if got := urlByRole["jwks-uri"]; got != externalIssuer+"/jwks" {
+		t.Fatalf("unexpected jwks uri: got %q", got)
+	}
+	if got := urlByRole["introspection-endpoint"]; got != externalIssuer+"/introspect" {
+		t.Fatalf("unexpected introspection endpoint: got %q", got)
+	}
+	if got := urlByRole["registration-endpoint"]; got != externalIssuer+"/register" {
+		t.Fatalf("unexpected registration endpoint: got %q", got)
+	}
+	if got := urlByRole["revocation-endpoint"]; got != externalIssuer+"/revoke" {
+		t.Fatalf("unexpected revocation endpoint: got %q", got)
+	}
+
+	if result.SelectedURL != server.URL+"/.well-known/oauth-authorization-server/issuer-a" {
+		t.Fatalf("unexpected selected metadata URL: got %q", result.SelectedURL)
+	}
+	if len(result.Attempts) == 0 {
+		t.Fatalf("expected auth-server metadata attempts")
+	}
+	selected := selectedAuthServerMetadataAttempt(t, result.Attempts)
+	if !selected.IssuerMismatch {
+		t.Fatalf("expected issuer mismatch diagnostics on selected metadata attempt")
+	}
+	if selected.ExpectedIssuerURL != authServerURL {
+		t.Fatalf(
+			"unexpected expected issuer URL diagnostic: got %q want %q",
+			selected.ExpectedIssuerURL,
+			authServerURL,
+		)
+	}
+	if selected.MetadataIssuer != externalIssuer {
+		t.Fatalf("unexpected metadata issuer diagnostic: got %q want %q", selected.MetadataIssuer, externalIssuer)
+	}
+	if selected.Error != "" {
+		t.Fatalf("did not expect hard error for issuer mismatch, got %q", selected.Error)
+	}
+}
+
 func TestBuildURLBundleFromPRMDWithAuthServerMetadataPartialFailure(t *testing.T) {
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
