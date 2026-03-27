@@ -124,3 +124,62 @@ func TestNewForwardingRoundTripperPanicsOnNil(t *testing.T) {
 
 	_ = NewForwardingRoundTripper(nil)
 }
+
+func TestForwardingRoundTripperRoundTripRejectsNilRequest(t *testing.T) {
+	t.Parallel()
+
+	rt := NewForwardingRoundTripper(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("base round tripper should not be called for nil request")
+		return nil, nil
+	}))
+
+	resp, err := rt.RoundTrip(nil)
+	if err == nil {
+		t.Fatal("expected error for nil request")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response for nil request, got %v", resp)
+	}
+	if !strings.Contains(err.Error(), "request is nil") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestForwardingRoundTripperRoundTripToleratesNilResponseWithoutError(t *testing.T) {
+	t.Parallel()
+
+	ctx, carrier, err := ContextWithHeaders(context.Background(), http.Header{"X-Test": {"forward-me"}})
+	if err != nil {
+		t.Fatalf("ContextWithHeaders: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	baseCalled := false
+	rt := NewForwardingRoundTripper(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		baseCalled = true
+		return nil, nil
+	}))
+
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip returned unexpected error: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response from base transport, got %#v", resp)
+	}
+	if !baseCalled {
+		t.Fatal("expected base round tripper to be called")
+	}
+
+	status, headers := carrier.ResponseStatusAndHeaders()
+	if status != 0 {
+		t.Fatalf("expected zero response status when response is nil, got %d", status)
+	}
+	if headers != nil {
+		t.Fatalf("expected nil response headers when response is nil, got %v", headers)
+	}
+}

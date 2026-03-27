@@ -1,6 +1,9 @@
 package internal
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 // ForwardingRoundTripper decorates the base RoundTripper so it can read request
 // headers from the context and capture the response headers for later use.
@@ -22,6 +25,10 @@ func NewForwardingRoundTripper(base http.RoundTripper) http.RoundTripper {
 // RoundTrip injects headers before issuing the request and records the response
 // headers after the call returns.
 func (f *ForwardingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("forwarding round tripper: request is nil")
+	}
+
 	carrier := CarrierFromContext(req.Context())
 	if carrier != nil {
 		carrier.ApplyRequestHeaders(req.Header)
@@ -30,7 +37,7 @@ func (f *ForwardingRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 	if err != nil {
 		return resp, err
 	}
-	if carrier != nil {
+	if carrier != nil && resp != nil {
 		carrier.StoreResponse(resp.StatusCode, resp.Header)
 	}
 	return resp, nil
