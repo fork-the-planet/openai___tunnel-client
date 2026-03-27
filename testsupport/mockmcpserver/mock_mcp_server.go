@@ -190,6 +190,7 @@ func (m *MockMCPServer) Start(t testing.TB) {
 	if m.useTLS {
 		scheme = "https"
 	}
+	listenerHost := listener.Addr().String()
 	metadataURL := fmt.Sprintf("%s://%s%s", scheme, listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
 	if m.protectOAuth {
 		protectedHandler = auth.RequireBearerToken(m.tokenVerifier(), &auth.RequireBearerTokenOptions{
@@ -239,6 +240,15 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		}
 		if m.injectKeepalivePings && req.Method == http.MethodGet && acceptsEventStream(req) {
 			w = &keepalivePingWriter{ResponseWriter: w}
+		}
+		// Proxy E2Es intentionally route synthetic remote hostnames through this
+		// loopback-backed mock server. Normalize the Host header back to the
+		// listener address so newer SDK localhost protections do not reject those
+		// test requests.
+		if localAddr, ok := req.Context().Value(http.LocalAddrContextKey).(net.Addr); ok && localAddr != nil {
+			if isLoopbackHost(localAddr.String()) && !isLoopbackHost(req.Host) {
+				req.Host = listenerHost
+			}
 		}
 		protectedHandler.ServeHTTP(w, req)
 	})
@@ -410,6 +420,18 @@ func (m *MockMCPServer) WaitForRequests(ctx context.Context, n int) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsedHost
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ReceivedRequests returns the recorded tool requests in order.
