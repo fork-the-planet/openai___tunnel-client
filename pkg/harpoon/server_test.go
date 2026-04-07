@@ -226,6 +226,7 @@ func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
 		case "/meta":
 			_, _ = w.Write([]byte(`{
 				"authorization_endpoint":"` + server.URL + `/authorize",
+				"registration_endpoint":"` + server.URL + `/register",
 				"token_endpoint":"` + server.URL + `/token"
 			}`))
 		default:
@@ -243,6 +244,10 @@ func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
 		{
 			Label:   "token",
 			BaseURL: mustParseURL(t, server.URL+"/token"),
+		},
+		{
+			Label:   "oauth-registration-endpoint-0",
+			BaseURL: mustParseURL(t, server.URL+"/register"),
 		},
 	})
 	require.NoError(t, err)
@@ -265,6 +270,7 @@ func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(decodedBody), &payload))
 	require.Equal(t, server.URL+"/authorize", payload["authorization_endpoint"])
+	require.Equal(t, "harpoon://oauth-registration-endpoint-0", payload["registration_endpoint"])
 	require.Equal(t, "harpoon://token", payload["token_endpoint"])
 }
 

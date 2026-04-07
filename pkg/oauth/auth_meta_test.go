@@ -244,7 +244,7 @@ func TestFetchAuthServerMetadataWithResultAcceptsIssuerMismatch(t *testing.T) {
 	defer server.Close()
 
 	issuerURL := server.URL
-	metadataIssuer := "https://logondev.bcg.com/oauth2/aus2jrb9zi4O8hseE0h8"
+	metadataIssuer := "https://idp.bigco-example.com/oauth2/aus2jrb9zi4O8hseE0h8"
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -304,7 +304,7 @@ func TestFetchAuthServerMetadataWithResultPrefersExactIssuerMatchOverMismatch(t 
 	defer server.Close()
 
 	issuerURL := server.URL + "/tenant/v2.0"
-	mismatchIssuer := "https://logondev.bcg.com/oauth2/aus2jrb9zi4O8hseE0h8"
+	mismatchIssuer := "https://idp.bigco-example.com/oauth2/aus2jrb9zi4O8hseE0h8"
 
 	appendOAuthPath := "/tenant/v2.0/.well-known/oauth-authorization-server"
 	prependOAuthPath := "/.well-known/oauth-authorization-server/tenant/v2.0"

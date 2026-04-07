@@ -19,6 +19,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/sdk/metric v1.38.0
 	go.uber.org/fx v1.23.0
+	golang.org/x/net v0.43.0
 )
 
 require (

@@ -149,7 +149,8 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataAcceptsIssuerMismatch(t *te
 	defer server.Close()
 
 	authServerURL := server.URL + "/issuer-a"
-	externalIssuer := "https://logondev.bcg.com/oauth2/aus2jrb9zi4O8hseE0h8"
+	externalIssuer := "https://idp.bigco-example.com/oauth2/aus2jrb9zi4O8hseE0h8"
+	registrationEndpoint := "https://location-mcp.internal.preproduction.smp.bigco-example.com/register"
 	payload, err := json.Marshal(oauthex.ProtectedResourceMetadata{
 		Resource:             server.URL + "/resource",
 		AuthorizationServers: []string{authServerURL},
@@ -164,7 +165,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataAcceptsIssuerMismatch(t *te
 		"token_endpoint":         externalIssuer + "/token",
 		"jwks_uri":               externalIssuer + "/jwks",
 		"introspection_endpoint": externalIssuer + "/introspect",
-		"registration_endpoint":  externalIssuer + "/register",
+		"registration_endpoint":  registrationEndpoint,
 		"revocation_endpoint":    externalIssuer + "/revoke",
 	})
 	if err != nil {
@@ -218,7 +219,7 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataAcceptsIssuerMismatch(t *te
 	if got := urlByRole["introspection-endpoint"]; got != externalIssuer+"/introspect" {
 		t.Fatalf("unexpected introspection endpoint: got %q", got)
 	}
-	if got := urlByRole["registration-endpoint"]; got != externalIssuer+"/register" {
+	if got := urlByRole["registration-endpoint"]; got != registrationEndpoint {
 		t.Fatalf("unexpected registration endpoint: got %q", got)
 	}
 	if got := urlByRole["revocation-endpoint"]; got != externalIssuer+"/revoke" {

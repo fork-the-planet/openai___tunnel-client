@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"go.uber.org/fx"
+	"golang.org/x/net/publicsuffix"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
@@ -18,6 +20,13 @@ import (
 )
 
 const autoRegistrationPrefix = "oauth"
+
+const (
+	oauthSource       = "oauth"
+	rolePRMDResource  = "prmd-resource"
+	rolePRMDSource    = "prmd-source"
+	registrationScope = "oauth-protected-resource-host"
+)
 
 type hostBusSubscriberOut struct {
 	fx.Out
@@ -98,16 +107,23 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 	if logger == nil {
 		return errors.New("logger is required")
 	}
+	oauthPolicy := newOAuthProtectedResourceHostPolicy(bundle)
 	for idx, record := range bundle.URLs {
 		if record.URL == nil {
 			logger.Info("harpoon host auto-registration skipped: missing url")
 			continue
 		}
-		private, reason := classifier.IsPrivateHost(record.URL.Hostname())
-		if !private {
+		role := tagValue(record.Tags, hostbus.TagKeyRole)
+		source := tagValue(record.Tags, hostbus.TagKeySource)
+		group := tagValue(record.Tags, hostbus.TagKeyGroup)
+		allowed, reason := shouldRegisterURLRecord(record, classifier, oauthPolicy)
+		if !allowed {
 			logger.Info("harpoon host auto-registration skipped: not private",
 				slog.String("url", safeURL(record.URL)),
 				slog.String("host", record.URL.Hostname()),
+				slog.String("source", source),
+				slog.String("role", role),
+				slog.String("group", group),
 			)
 			continue
 		}
@@ -115,6 +131,9 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 		if baseLabel == "" {
 			logger.Warn("harpoon host auto-registration skipped: empty label",
 				slog.String("url", safeURL(record.URL)),
+				slog.String("source", source),
+				slog.String("role", role),
+				slog.String("group", group),
 				slog.String("inclusion_reason", reason),
 			)
 			continue
@@ -124,6 +143,9 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 			logger.Warn("harpoon host auto-registration skipped: no available label",
 				slog.String("base_label", baseLabel),
 				slog.String("url", safeURL(record.URL)),
+				slog.String("source", source),
+				slog.String("role", role),
+				slog.String("group", group),
 				slog.String("inclusion_reason", reason),
 			)
 			continue
@@ -135,17 +157,16 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 				slog.Int("collision_count", collisionCount),
 			)
 		}
-		role := tagValue(record.Tags, hostbus.TagKeyRole)
 		tags := roleTags(role)
-		if group := normalizeToken(tagValue(record.Tags, hostbus.TagKeyGroup)); group != "" {
-			tags = append(tags, "group="+group)
+		if normalizedGroup := normalizeToken(group); normalizedGroup != "" {
+			tags = append(tags, "group="+normalizedGroup)
 		}
 
 		target := Target{
 			Label:           label,
 			Description:     record.Description,
-			Category:        tagValue(record.Tags, hostbus.TagKeySource),
-			Source:          tagValue(record.Tags, hostbus.TagKeySource),
+			Category:        source,
+			Source:          source,
 			Tags:            tags,
 			InclusionReason: reason,
 			BaseURL:         record.URL,
@@ -154,6 +175,9 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 			logger.Warn("harpoon host auto-registration failed",
 				slog.String("label", label),
 				slog.String("url", safeURL(record.URL)),
+				slog.String("source", source),
+				slog.String("role", role),
+				slog.String("group", group),
 				slog.String("inclusion_reason", reason),
 				slog.String("error", err.Error()),
 			)
@@ -163,10 +187,104 @@ func registerHostBundle(bundle hostbus.URLBundle, classifier *hostclassifier.Hos
 			slog.String("label", label),
 			slog.String("url", safeURL(record.URL)),
 			slog.String("source", target.Source),
+			slog.String("role", role),
+			slog.String("group", group),
 			slog.String("inclusion_reason", reason),
 		)
 	}
 	return nil
+}
+
+type oauthProtectedResourceHostPolicy struct {
+	hosts []oauthProtectedResourceHost
+}
+
+type oauthProtectedResourceHost struct {
+	host           string
+	allowSubdomain bool
+}
+
+func newOAuthProtectedResourceHostPolicy(bundle hostbus.URLBundle) oauthProtectedResourceHostPolicy {
+	seen := make(map[oauthProtectedResourceHost]struct{})
+	hosts := make([]oauthProtectedResourceHost, 0, len(bundle.URLs))
+	for _, record := range bundle.URLs {
+		if !isOAuthURLRecord(record) {
+			continue
+		}
+		switch normalizeToken(tagValue(record.Tags, hostbus.TagKeyRole)) {
+		case rolePRMDResource, rolePRMDSource:
+		default:
+			continue
+		}
+		host := normalizedHostname(record.URL)
+		policyHost, ok := newOAuthProtectedResourceHost(host)
+		if !ok {
+			continue
+		}
+		if _, ok := seen[policyHost]; ok {
+			continue
+		}
+		seen[policyHost] = struct{}{}
+		hosts = append(hosts, policyHost)
+	}
+	return oauthProtectedResourceHostPolicy{hosts: hosts}
+}
+
+func newOAuthProtectedResourceHost(host string) (oauthProtectedResourceHost, bool) {
+	if host == "" {
+		return oauthProtectedResourceHost{}, false
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return oauthProtectedResourceHost{host: host}, true
+	}
+	if _, err := publicsuffix.EffectiveTLDPlusOne(host); err != nil {
+		return oauthProtectedResourceHost{}, false
+	}
+	return oauthProtectedResourceHost{host: host, allowSubdomain: true}, true
+}
+
+func shouldRegisterURLRecord(record hostbus.URLRecord, classifier *hostclassifier.HostClassifier, oauthPolicy oauthProtectedResourceHostPolicy) (bool, string) {
+	if record.URL == nil {
+		return false, ""
+	}
+	private, reason := classifier.IsPrivateHost(record.URL.Hostname())
+	if private {
+		return true, reason
+	}
+	if oauthPolicy.allows(record) {
+		return true, registrationScope
+	}
+	return false, reason
+}
+
+func (p oauthProtectedResourceHostPolicy) allows(record hostbus.URLRecord) bool {
+	if len(p.hosts) == 0 || !isOAuthURLRecord(record) {
+		return false
+	}
+	host := normalizedHostname(record.URL)
+	if host == "" {
+		return false
+	}
+	for _, protectedResourceHost := range p.hosts {
+		if host == protectedResourceHost.host {
+			return true
+		}
+		if protectedResourceHost.allowSubdomain && strings.HasSuffix(host, "."+protectedResourceHost.host) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOAuthURLRecord(record hostbus.URLRecord) bool {
+	return normalizeToken(tagValue(record.Tags, hostbus.TagKeySource)) == oauthSource
+}
+
+func normalizedHostname(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(u.Hostname())), ".")
 }
 
 func buildAutoLabel(record hostbus.URLRecord, fallbackIndex int) string {
