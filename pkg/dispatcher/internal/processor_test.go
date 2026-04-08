@@ -1458,6 +1458,64 @@ func TestProcessorReturnsBadGatewayOnWriteErrorWithoutStatusCode(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, got.response.ResponseCode())
 }
 
+func TestProcessorLogsMCPUpstreamErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+	responder.tunnelServiceRequestID = types.TunnelServiceRequestID("req_ts_post")
+
+	callID, err := jsonrpc.MakeID("upstream-status")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusMethodNotAllowed,
+		headers: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+	}}
+
+	mcpConfig := newTestMCPConfig(t, time.Second)
+	serverURL, err := url.Parse("https://internal.example.com/mcp?token=secret")
+	require.NoError(t, err)
+	mcpConfig.ServerURL = serverURL
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       mcpConfig,
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("upstream-status-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-upstream-status",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+	got := responder.waitForResponse(t)
+	require.Equal(t, http.StatusMethodNotAllowed, got.response.ResponseCode())
+
+	logOutput := buf.String()
+	require.Contains(t, logOutput, "dispatcher received MCP upstream error; posted error response to control plane")
+	require.Contains(t, logOutput, "status_code=405")
+	require.Contains(t, logOutput, "request_id=upstream-status-request")
+	require.Contains(t, logOutput, "rpc_method=initialize")
+	require.Contains(t, logOutput, "mcp_server_host=internal.example.com")
+	require.Contains(t, logOutput, "mcp_server_path=/mcp")
+	require.Contains(t, logOutput, "mcp_server_query_redacted=true")
+	require.Contains(t, logOutput, "tunnel_request_id=req_ts_post")
+	require.NotContains(t, logOutput, "secret")
+}
+
 func TestProcessorNotificationAckPostFailureIsReturned(t *testing.T) {
 	t.Parallel()
 
@@ -2323,7 +2381,8 @@ func TestProcessorNormalizesZeroStatusCodeForNotificationAck(t *testing.T) {
 }
 
 type recordingResponder struct {
-	responses chan tunnelResponse
+	responses              chan tunnelResponse
+	tunnelServiceRequestID types.TunnelServiceRequestID
 }
 
 type recordingHostBus struct {
@@ -2356,7 +2415,7 @@ func (r *recordingResponder) PostResponse(ctx context.Context, requestID types.R
 
 	select {
 	case r.responses <- tunnelResponse{requestID: requestID, response: response, controlPlaneCommandRequestID: controlPlaneRequestID}:
-		return "", nil
+		return r.tunnelServiceRequestID, nil
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}

@@ -395,7 +395,8 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 		}
 
 		tunnelResponse := types.NewTunnelResponse(channel, encodedError, status, respHeader)
-		if tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, requestID, tunnelResponse); postErr != nil {
+		tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, requestID, tunnelResponse)
+		if postErr != nil {
 			attrs := []any{slog.String("error", postErr.Error())}
 			if tsRequestID != "" {
 				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
@@ -405,7 +406,26 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 		}
 
 		p.metrics.recordCommandLatencies(ctx, p.tunnelID, status, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
-		logger.WarnContext(ctx, "dispatcher received error from MCP server", slog.Int("status_code", status))
+		attrs := []any{
+			slog.Int("status_code", status),
+			slog.String("channel", channel.String()),
+			slog.String("rpc_method", req.Method),
+		}
+		attrs = append(attrs, mcpServerURLAttrs(p.mcpServerURL)...)
+		if err != nil {
+			attrs = append(attrs, slog.String("error", err.Error()))
+		}
+		if respHeader != nil {
+			attrs = append(attrs, slog.String("response_content_type", respHeader.Get("Content-Type")))
+		}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.WarnContext(
+			ctx,
+			"dispatcher received MCP upstream error; posted error response to control plane",
+			attrs...,
+		)
 		return nil
 	}
 
@@ -763,6 +783,21 @@ func normalizeTransportStatusCode(statusCode int, err error) int {
 		return http.StatusBadGateway
 	}
 	return http.StatusOK
+}
+
+func mcpServerURLAttrs(u *url.URL) []any {
+	if u == nil {
+		return nil
+	}
+	attrs := []any{
+		slog.String("mcp_server_scheme", u.Scheme),
+		slog.String("mcp_server_host", u.Host),
+		slog.String("mcp_server_path", u.EscapedPath()),
+	}
+	if u.RawQuery != "" {
+		attrs = append(attrs, slog.Bool("mcp_server_query_redacted", true))
+	}
+	return attrs
 }
 
 func requestKindAttributes(req *jsonrpc.Request) []attribute.KeyValue {
