@@ -53,6 +53,8 @@ const (
 	defaultLogLevel                           = "info"
 	defaultLogFormat                LogFormat = LogFormatUnset
 	defaultHealthListenAddr                   = ":8080"
+	defaultAdminUILogBufferEvents             = 2000
+	maxAdminUILogBufferEvents                 = 100000
 	defaultMCPConnectionMaxTTL                = 10 * time.Minute
 	defaultMCPMaxConcurrentRequests           = 10
 	DefaultHarpoonMaxResponseBytes            = 100 * 1024
@@ -96,6 +98,8 @@ type AdminUIConfig struct {
 	// OpenBrowser controls whether tunnel-client attempts to open the embedded UI
 	// in the default browser on startup.
 	OpenBrowser bool
+	// LogBufferEvents controls how many recent log events the admin UI keeps in memory.
+	LogBufferEvents int
 }
 
 // ControlPlaneConfig defines how the client reaches the tunnel control plane.
@@ -265,6 +269,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
 	_, _ = fmt.Fprintln(fs.Output(), "  ALLOW_REMOTE_UI\tSet to true to allow non-loopback access to the embedded web UI (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  ADMIN_UI_LOG_BUFFER_EVENTS\tRecent log-event capacity for the embedded web UI and export archive (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CA_BUNDLE\tPath to a PEM CA bundle used for outbound TLS connections (additive to system trust) (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_CERT\tPath (or env:VAR) to PEM client certificate for MCP mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_KEY\tPath (or env:VAR) to PEM client private key for MCP mTLS (optional)")
@@ -289,6 +294,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("health.url-file", "", "File to write the health base URL to after startup (env.HEALTH_URL_FILE)")
 	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
+	fs.Int("admin-ui.log-buffer-events", defaultAdminUILogBufferEvents, "Number of recent log events to keep in memory for the embedded web UI and export archive (env.ADMIN_UI_LOG_BUFFER_EVENTS, max 100000)")
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
 	fs.String("http-proxy", "", "Global outbound HTTP proxy (applies to control-plane, MCP, and Harpoon) (format <url|env:VAR>)")
 	fs.Duration("proxy.check-interval", defaultProxyCheckInterval, "Interval between proxy connectivity checks (env.PROXY_CHECK_INTERVAL)")
@@ -871,7 +877,18 @@ func buildAdminUIConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 		return AdminUIConfig{}, err
 	}
 
-	return AdminUIConfig{AllowRemote: allowRemote, OpenBrowser: openBrowser}, nil
+	logBufferEvents, err := getInt(fs, lookupEnv, "admin-ui.log-buffer-events", "ADMIN_UI_LOG_BUFFER_EVENTS", defaultAdminUILogBufferEvents)
+	if err != nil {
+		return AdminUIConfig{}, err
+	}
+	if logBufferEvents <= 0 {
+		return AdminUIConfig{}, errors.New("admin-ui.log-buffer-events must be greater than zero")
+	}
+	if logBufferEvents > maxAdminUILogBufferEvents {
+		return AdminUIConfig{}, fmt.Errorf("admin-ui.log-buffer-events must be <= %d", maxAdminUILogBufferEvents)
+	}
+
+	return AdminUIConfig{AllowRemote: allowRemote, OpenBrowser: openBrowser, LogBufferEvents: logBufferEvents}, nil
 }
 
 func resolveOpenWebUI(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (bool, error) {

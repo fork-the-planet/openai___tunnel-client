@@ -39,6 +39,7 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 		"LOG_FILE":                            "/tmp/log",
 		"LOG_HTTP_RAW_UNSAFE":                 "true",
 		"HEALTH_URL_FILE":                     "/tmp/health-url",
+		"ADMIN_UI_LOG_BUFFER_EVENTS":          "1234",
 		"PID_FILE":                            "/tmp/pid-file",
 		"MCP_SERVER_URL":                      "https://mcp.example",
 		"MCP_CONNECTION_MAX_TTL":              "30s",
@@ -83,6 +84,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	if cfg.Health.URLFile != "/tmp/health-url" {
 		t.Fatalf("unexpected health URL file: %s", cfg.Health.URLFile)
 	}
+	if cfg.AdminUI.LogBufferEvents != 1234 {
+		t.Fatalf("unexpected admin UI log buffer events: %d", cfg.AdminUI.LogBufferEvents)
+	}
 	if cfg.Process.PIDFile != "/tmp/pid-file" {
 		t.Fatalf("unexpected pid file: %s", cfg.Process.PIDFile)
 	}
@@ -110,6 +114,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"LOG_FILE":                            "/tmp/env",
 		"LOG_HTTP_RAW_UNSAFE":                 "true",
 		"HEALTH_URL_FILE":                     "/tmp/env-health",
+		"ADMIN_UI_LOG_BUFFER_EVENTS":          "111",
 		"PID_FILE":                            "/tmp/env-pid",
 		"MCP_SERVER_URL":                      "https://env-mcp",
 		"MCP_CONNECTION_MAX_TTL":              "45m",
@@ -124,6 +129,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"--log.file", "/tmp/flag",
 		"--log.http-raw-unsafe=false",
 		"--health.url-file", "/tmp/flag-health",
+		"--admin-ui.log-buffer-events=456",
 		"--pid.file", "/tmp/flag-pid",
 		"--mcp.server-url", "https://flag-mcp",
 		"--control-plane.poll-timeout=5s",
@@ -161,6 +167,9 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.Health.URLFile != "/tmp/flag-health" {
 		t.Fatalf("expected health URL file /tmp/flag-health, got %s", cfg.Health.URLFile)
+	}
+	if cfg.AdminUI.LogBufferEvents != 456 {
+		t.Fatalf("expected admin UI log buffer events 456, got %d", cfg.AdminUI.LogBufferEvents)
 	}
 	if cfg.Process.PIDFile != "/tmp/flag-pid" {
 		t.Fatalf("expected pid file /tmp/flag-pid, got %s", cfg.Process.PIDFile)

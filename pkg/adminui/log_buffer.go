@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +24,8 @@ var (
 	reCookie      = regexp.MustCompile(`(?i)(Cookie:\s*)([^\r\n]+)`)
 	reSetCookie   = regexp.MustCompile(`(?i)(Set-Cookie:\s*)([^\r\n]+)`)
 	reSkKey       = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{10,}\b`)
+	reQuerySecret = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access_token|refresh_token|id_token|client_secret|code|password|secret)=)([^&#\s]+)`)
+	reURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@`)
 )
 
 // LogEvent is the structured representation exposed by the admin UI.
@@ -73,6 +77,13 @@ func (b *LogBuffer) StartedAt() time.Time {
 		return time.Time{}
 	}
 	return b.startedAt
+}
+
+func (b *LogBuffer) Capacity() int {
+	if b == nil {
+		return 0
+	}
+	return b.capacity
 }
 
 // Handle implements go.openai.org/api/tunnel-client/pkg/log.Sink.
@@ -143,6 +154,24 @@ func (b *LogBuffer) Recent(limit int) []LogEvent {
 	return out
 }
 
+func (b *LogBuffer) Since(since time.Time, limit int) []LogEvent {
+	if b == nil {
+		return nil
+	}
+	events := b.Recent(limit)
+	if since.IsZero() {
+		return events
+	}
+	out := make([]LogEvent, 0, len(events))
+	for _, ev := range events {
+		if ev.Time.IsZero() || ev.Time.Before(since) {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 func (b *LogBuffer) Subscribe(ctx context.Context) <-chan LogEvent {
 	if b == nil {
 		ch := make(chan LogEvent)
@@ -199,6 +228,11 @@ func addAttr(dst map[string]any, attr slog.Attr) {
 		return
 	}
 
+	if isSensitiveAttrKey(attr.Key) {
+		dst[attr.Key] = "[REDACTED]"
+		return
+	}
+
 	switch attr.Value.Kind() {
 	case slog.KindGroup:
 		group := make(map[string]any)
@@ -252,7 +286,11 @@ func redactAny(v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, vv := range t {
-			out[k] = redactAny(vv)
+			if isSensitiveAttrKey(k) {
+				out[k] = "[REDACTED]"
+			} else {
+				out[k] = redactAny(vv)
+			}
 		}
 		return out
 	case []any:
@@ -262,7 +300,46 @@ func redactAny(v any) any {
 		}
 		return out
 	default:
-		return v
+		return redactReflectValue(reflect.ValueOf(v), v)
+	}
+}
+
+func redactReflectValue(rv reflect.Value, fallback any) any {
+	if !rv.IsValid() {
+		return fallback
+	}
+	switch rv.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if rv.IsNil() {
+			return fallback
+		}
+		return redactReflectValue(rv.Elem(), rv.Elem().Interface())
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return fallback
+		}
+		out := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			key := iter.Key().String()
+			if isSensitiveAttrKey(key) {
+				out[key] = "[REDACTED]"
+				continue
+			}
+			out[key] = redactReflectValue(iter.Value(), iter.Value().Interface())
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		out := make([]any, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			item := rv.Index(i)
+			out = append(out, redactReflectValue(item, item.Interface()))
+		}
+		return out
+	case reflect.String:
+		return redactString(rv.String())
+	default:
+		return fallback
 	}
 }
 
@@ -275,5 +352,29 @@ func redactString(s string) string {
 	s = reCookie.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = reSetCookie.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = reSkKey.ReplaceAllString(s, `sk-REDACTED`)
+	s = reQuerySecret.ReplaceAllString(s, `${1}[REDACTED]`)
+	s = reURLUserInfo.ReplaceAllString(s, `${1}[REDACTED]@`)
 	return s
+}
+
+func isSensitiveAttrKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	switch normalized {
+	case "authorization",
+		"cookie",
+		"set_cookie",
+		"x_tunnel_shard_token",
+		"shard_token",
+		"api_key",
+		"apikey",
+		"access_token",
+		"refresh_token",
+		"id_token",
+		"client_secret",
+		"password",
+		"secret":
+		return true
+	default:
+		return false
+	}
 }

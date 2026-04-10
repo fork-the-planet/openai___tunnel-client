@@ -26,6 +26,21 @@
   let healthInterval: number | undefined;
   let readyInterval: number | undefined;
 
+  function normalizeTab(tabID: string): string {
+    return tabs.some((tab) => tab.id === tabID) ? tabID : "overview";
+  }
+
+  function updateTabFromHash(): void {
+    activeTab = normalizeTab(window.location.hash.replace(/^#/, ""));
+  }
+
+  function selectTab(tabID: string): void {
+    activeTab = normalizeTab(tabID);
+    if (window.location.hash !== `#${activeTab}`) {
+      window.history.replaceState(null, "", `#${activeTab}`);
+    }
+  }
+
   async function refreshHealth(): Promise<void> {
     try {
       const text = (await fetchText("/healthz")).trim();
@@ -52,14 +67,17 @@
   }
 
   onMount(() => {
+    updateTabFromHash();
     refreshHealth();
     refreshReady();
     healthInterval = window.setInterval(refreshHealth, 5000);
     readyInterval = window.setInterval(refreshReady, 5000);
+    window.addEventListener("hashchange", updateTabFromHash);
 
     return () => {
       if (healthInterval) window.clearInterval(healthInterval);
       if (readyInterval) window.clearInterval(readyInterval);
+      window.removeEventListener("hashchange", updateTabFromHash);
     };
   });
 
@@ -90,7 +108,7 @@
       data-tab={tab.id}
       role="tab"
       aria-selected={activeTab === tab.id}
-      on:click={() => (activeTab = tab.id)}
+      on:click={() => selectTab(tab.id)}
     >
       {tab.label}
     </button>

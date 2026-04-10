@@ -14,8 +14,11 @@
   let paused = false;
   let errorMessage = "";
   let streamConnected = false;
+  let curlExportURL = "/api/logs/export?minutes=30";
   let logsContainer: HTMLDivElement | null = null;
   let eventSource: EventSource | null = null;
+
+  $: curlExportCommand = `curl -fsSJO "${curlExportURL}"`;
 
   const levelOrder = (lvl: string): number => {
     switch ((lvl || "").toLowerCase()) {
@@ -114,6 +117,14 @@
     pausedSnapshot = [];
   }
 
+  function downloadRecentLogs(): void {
+    window.location.assign("/api/logs/export?minutes=30");
+  }
+
+  function updateCurlExportURL(): void {
+    curlExportURL = new URL("/api/logs/export?minutes=30", window.location.href).toString();
+  }
+
   function updateConnection(next: boolean): void {
     if (streamConnected === next) return;
     streamConnected = next;
@@ -149,6 +160,7 @@
 
   onMount(async () => {
     updateConnection(false);
+    updateCurlExportURL();
     await loadInitialLogs();
     startStream();
   });
@@ -176,7 +188,11 @@
         <label><input type="checkbox" bind:checked={showAttrs} /> show attrs</label>
       </div>
       <button type="button" on:click={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</button>
+      <button type="button" on:click={downloadRecentLogs}>Download recent logs</button>
       <button type="button" on:click={clearLogs}>Clear</button>
+    </div>
+    <div class="small muted" style="margin-top: 8px">
+      CLI export: <code class="mono">{curlExportCommand}</code>
     </div>
     <div class="row" style="margin-top: 10px">
       <input bind:value={filterText} placeholder="filter (substring)…" />

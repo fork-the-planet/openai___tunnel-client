@@ -51,6 +51,86 @@ func TestLogBufferRedactsBearerToken(t *testing.T) {
 	require.NotContains(t, got[0].Attrs["dump"], "sk-proj-")
 }
 
+func TestLogBufferRedactsSensitiveAttrKeysAndQueryParams(t *testing.T) {
+	t.Parallel()
+
+	b := NewLogBufferWithCapacity(10)
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "oauth callback https://example.test/cb?code=abc123&state=ok", 0)
+	r.AddAttrs(
+		slog.String("Authorization", "Bearer sk-proj-abcdefg1234567890"),
+		slog.Any("headers", map[string]any{
+			"Cookie":      "session=secret-cookie",
+			"ContentType": "application/json",
+		}),
+		slog.String("safe_url", "https://example.test/token?client_secret=s3cr3t&scope=mcp"),
+	)
+	b.Handle(context.Background(), r)
+
+	got := b.Recent(1)
+	require.Len(t, got, 1)
+	require.Equal(t, "[REDACTED]", got[0].Attrs["Authorization"])
+	require.Equal(t, "[REDACTED]", got[0].Attrs["headers"].(map[string]any)["Cookie"])
+	require.Contains(t, got[0].Message, "code=[REDACTED]")
+	require.Contains(t, got[0].Attrs["safe_url"], "client_secret=[REDACTED]")
+	require.NotContains(t, got[0].Message, "abc123")
+	require.NotContains(t, got[0].Attrs["safe_url"], "s3cr3t")
+}
+
+func TestLogBufferRedactsNamedMapAndSliceValues(t *testing.T) {
+	t.Parallel()
+
+	type headerMap map[string][]string
+	type oauthAttrs map[string]any
+
+	b := NewLogBufferWithCapacity(10)
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "structured request", 0)
+	r.AddAttrs(
+		slog.Any("headers", headerMap{
+			"Authorization": {"Bearer sk-proj-secretsecret123456"},
+			"X-Trace":       {"safe"},
+		}),
+		slog.Any("oauth", oauthAttrs{
+			"callback": "https://client.example/cb?code=oauth-secret-code&state=ok",
+			"nested":   []any{"Authorization: Bearer sk-proj-nested123456"},
+		}),
+	)
+	b.Handle(context.Background(), r)
+
+	got := b.Recent(1)
+	require.Len(t, got, 1)
+	gotHeaders, ok := got[0].Attrs["headers"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "[REDACTED]", gotHeaders["Authorization"])
+	require.Equal(t, []any{"safe"}, gotHeaders["X-Trace"])
+	gotOAuth, ok := got[0].Attrs["oauth"].(map[string]any)
+	require.True(t, ok)
+	require.Contains(t, gotOAuth["callback"], "code=[REDACTED]")
+	require.Equal(t, []any{"Authorization: Bearer [REDACTED]"}, gotOAuth["nested"])
+}
+
+func TestLogBufferSinceFiltersByTimestamp(t *testing.T) {
+	t.Parallel()
+
+	b := NewLogBufferWithCapacity(10)
+	now := time.Now()
+	for _, tc := range []struct {
+		t   time.Time
+		msg string
+	}{
+		{t: now.Add(-31 * time.Minute), msg: "old"},
+		{t: now.Add(-30 * time.Minute), msg: "edge"},
+		{t: now.Add(-1 * time.Minute), msg: "new"},
+	} {
+		r := slog.NewRecord(tc.t, slog.LevelInfo, tc.msg, 0)
+		b.Handle(context.Background(), r)
+	}
+
+	got := b.Since(now.Add(-30*time.Minute), 10)
+	require.Len(t, got, 2)
+	require.Equal(t, "edge", got[0].Message)
+	require.Equal(t, "new", got[1].Message)
+}
+
 func TestLogBufferSubscribeIsBestEffort(t *testing.T) {
 	t.Parallel()
 

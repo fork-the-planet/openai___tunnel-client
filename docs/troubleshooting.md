@@ -26,6 +26,26 @@
   - control-plane connectivity errors
   - MCP server connectivity errors
 
+## Export recent logs
+
+- The admin UI logs panel can download a redacted support archive from `/api/logs/export?minutes=30`.
+- To save the same archive into the current working directory without using a browser:
+
+```bash
+curl -fsSJO "http://127.0.0.1:8080/api/logs/export?minutes=30"
+```
+
+- To capture one archive every five minutes until stopped:
+
+```bash
+while :; do
+  curl -fsSJO "http://127.0.0.1:8080/api/logs/export?minutes=30"
+  sleep 300
+done
+```
+
+- The archive contains `manifest.json`, `README.txt`, and `tunnel-client.logs.ndjson`. The archive is redacted before it is returned.
+
 ## MCP connectivity issues
 
 - Verify `MCP_SERVER_URL` is reachable from where `tunnel-client` runs.

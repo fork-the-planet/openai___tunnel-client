@@ -27,7 +27,8 @@ import (
 var Module = fx.Module(
 	"adminui",
 	fx.Provide(
-		NewLogBuffer,
+		newConfiguredLogBuffer,
+		NewRuntimeSnapshotProvider,
 		func(buf *LogBuffer) tclog.Sink { return buf },
 	),
 	fx.Invoke(registerRoutes),
@@ -41,6 +42,7 @@ type routeParams struct {
 	Lifecycle     fx.Lifecycle
 	Logger        *slog.Logger
 	Buffer        *LogBuffer
+	Runtime       RuntimeSnapshotProvider
 	HealthService health.Service
 	LoggingConfig *config.LoggingConfig
 	ControlPlane  *config.ControlPlaneConfig
@@ -111,6 +113,7 @@ func registerRoutes(p routeParams) error {
 		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
+	gmux.HandleFunc("/api/logs/export", handleLogsExport(p.Buffer, p.Runtime))
 	gmux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer, streamCtx))
 	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig, p.ProxyHealth))
 	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg))
@@ -125,6 +128,14 @@ func registerRoutes(p routeParams) error {
 	}
 
 	return nil
+}
+
+func newConfiguredLogBuffer(cfg *config.AdminUIConfig) *LogBuffer {
+	capacity := defaultLogCapacity
+	if cfg != nil && cfg.LogBufferEvents > 0 {
+		capacity = cfg.LogBufferEvents
+	}
+	return NewLogBufferWithCapacity(capacity)
 }
 
 func buildStatus(p routeParams) statusResponse {
