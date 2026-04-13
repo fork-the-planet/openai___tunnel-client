@@ -576,6 +576,48 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 	defer cancel()
 
 	req := cmd.Message().(*jsonrpc.Request)
+	postTerminalErrorResponse := func(cause error) {
+		if cause == nil {
+			return
+		}
+
+		statusCode := http.StatusBadGateway
+		encodedError, err := buildJSONRPCErrorResponse(req, statusCode, cause)
+		if err != nil {
+			logger.ErrorContext(ctx, "failed to encode terminal error response for control plane", slog.String("error", err.Error()))
+			return
+		}
+
+		tunnelResponse := types.NewTunnelResponse(channel, encodedError, statusCode, jsonRPCResponseHeaders(ctx, logger, responseHeaders))
+		tsRequestID, err := p.tunnelResponder.PostResponse(ttlCtx, cmd.RequestID(), tunnelResponse)
+		if err != nil {
+			attrs := []any{slog.String("error", err.Error())}
+			if tsRequestID != "" {
+				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				if errors.Is(ttlCtx.Err(), context.DeadlineExceeded) {
+					logger.InfoContext(ctx, "MCP connection TTL reached while delivering terminal error response", attrs...)
+				} else {
+					logger.DebugContext(ctx, "MCP connection context canceled while delivering terminal error response", attrs...)
+				}
+			} else {
+				logger.ErrorContext(ctx, "failed to post terminal error response to control plane", attrs...)
+			}
+			return
+		}
+
+		p.metrics.recordCommandLatencies(ctx, p.tunnelID, statusCode, metricAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+
+		attrs := []any{
+			slog.Int("status_code", statusCode),
+			slog.String("error", cause.Error()),
+		}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.WarnContext(ctx, "dispatcher posted terminal downstream error response to control plane", attrs...)
+	}
 
 	for {
 		msg, readErr := conn.Read(ttlCtx)
@@ -583,6 +625,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			switch {
 			case errors.Is(readErr, mcp.ErrConnectionClosed) || errors.Is(readErr, io.EOF):
 				logger.DebugContext(ctx, "MCP connection closed while reading response", slog.String("error", readErr.Error()))
+				postTerminalErrorResponse(readErr)
 			case errors.Is(readErr, context.DeadlineExceeded), errors.Is(readErr, context.Canceled):
 				if errors.Is(ttlCtx.Err(), context.DeadlineExceeded) {
 					logger.InfoContext(ctx, "MCP connection TTL reached; stopping response forwarding")
@@ -591,12 +634,15 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 				}
 			default:
 				logger.ErrorContext(ctx, "failed to read response from MCP server", slog.String("error", readErr.Error()))
+				postTerminalErrorResponse(readErr)
 			}
 			return
 		}
 		if msg == nil {
 			// Defensive: a nil message without an error would otherwise spin forever.
-			logger.ErrorContext(ctx, "received nil message from MCP server without error")
+			err := errors.New("received nil message from MCP server without error")
+			logger.ErrorContext(ctx, err.Error())
+			postTerminalErrorResponse(err)
 			return
 		}
 
@@ -621,7 +667,11 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 
 		encodedResponse, err := jsonrpc.EncodeMessage(response)
 		if err != nil || len(encodedResponse) == 0 {
+			if err == nil {
+				err = errors.New("encoded response from MCP server was empty")
+			}
 			logger.ErrorContext(ctx, "failed to encode response from MCP server", slog.String("error", err.Error()))
+			postTerminalErrorResponse(err)
 			return
 		}
 
@@ -638,23 +688,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		// Ensure final JSON-RPC responses present as application/json to the control plane,
 		// even if the upstream server labeled them differently, unless the upstream
 		// response is already an SSE stream.
-		contentType := ""
-		if responseHeaders != nil {
-			contentType = responseHeaders.Get("Content-Type")
-		}
-		if contentType == "" || !isSSEContentType(contentType) {
-			if responseHeaders == nil {
-				responseHeaders = http.Header{}
-			} else {
-				responseHeaders = responseHeaders.Clone()
-			}
-			originalValue := contentType
-			if originalValue == "" {
-				originalValue = "<empty>"
-			}
-			logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", originalValue), slog.String("new", "application/json"))
-			responseHeaders.Set("Content-Type", "application/json")
-		}
+		responseHeaders = jsonRPCResponseHeaders(ctx, logger, responseHeaders)
 
 		tunnelResponse := types.NewTunnelResponse(channel, encodedResponse, responseCode, responseHeaders)
 
@@ -679,6 +713,29 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		logger.DebugContext(ctx, "dispatcher delivered response to control plane", slog.Bool("finalResponse", finalResponse))
 		return
 	}
+}
+
+func jsonRPCResponseHeaders(ctx context.Context, logger *slog.Logger, responseHeaders http.Header) http.Header {
+	contentType := ""
+	if responseHeaders != nil {
+		contentType = responseHeaders.Get("Content-Type")
+	}
+
+	headers := http.Header{}
+	if responseHeaders != nil {
+		headers = responseHeaders.Clone()
+	}
+
+	if contentType == "" || !isSSEContentType(contentType) {
+		originalValue := contentType
+		if originalValue == "" {
+			originalValue = "<empty>"
+		}
+		logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", originalValue), slog.String("new", "application/json"))
+		headers.Set("Content-Type", "application/json")
+	}
+
+	return headers
 }
 
 func (p *mcpProcessor) forwardNotification(ctx context.Context, logger *slog.Logger, cmd controlplane.JsonRpcCommand, responseCode int, responseHeaders http.Header, notifyMsg *jsonrpc.Request, channel types.Channel) error {

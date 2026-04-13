@@ -46,6 +46,25 @@ func decodeJSONRPCResponse(t *testing.T, raw json.RawMessage) *jsonrpc.Response 
 	return resp
 }
 
+func assertTerminalJSONRPCErrorResponse(t *testing.T, responder *recordingResponder, cmd *fakePolledCommand, wantStatus int, wantSubstrings ...string) *jsonrpc.Response {
+	t.Helper()
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeJSONRPCResponse, got.response.Type())
+	require.Equal(t, wantStatus, got.response.ResponseCode())
+	require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
+
+	resp := decodeJSONRPCResponse(t, got.response.Payload())
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Error)
+	for _, want := range wantSubstrings {
+		require.Contains(t, resp.Error.Error(), want)
+	}
+
+	return resp
+}
+
 func TestProcessorForwardResponses(t *testing.T) {
 	t.Parallel()
 
@@ -1623,12 +1642,7 @@ func TestProcessorForwardResponsesStopsOnEOF(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", io.EOF.Error())
 }
 
 func TestProcessorForwardResponsesStopsOnNilMessage(t *testing.T) {
@@ -1668,12 +1682,7 @@ func TestProcessorForwardResponsesStopsOnNilMessage(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "received nil message from MCP server without error")
 }
 
 func TestProcessorForwardResponsesStopsOnConnectionClosed(t *testing.T) {
@@ -1711,12 +1720,7 @@ func TestProcessorForwardResponsesStopsOnConnectionClosed(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", mcp.ErrConnectionClosed.Error())
 }
 
 func TestProcessorForwardResponsesStopsOnEncodeError(t *testing.T) {
@@ -1757,12 +1761,7 @@ func TestProcessorForwardResponsesStopsOnEncodeError(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "invalid character")
 }
 
 func TestProcessorForwardResponsesStopsOnReadError(t *testing.T) {
@@ -1800,12 +1799,7 @@ func TestProcessorForwardResponsesStopsOnReadError(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "read failed")
 }
 
 func TestProcessorForwardResponsesPostFailureStopsForwarding(t *testing.T) {
