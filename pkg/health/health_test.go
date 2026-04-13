@@ -288,6 +288,40 @@ func TestReadinessHandler(t *testing.T) {
 		require.Equal(t, "ready", rec.Body.String())
 	})
 
+	t.Run("ReadyWhenOAuthDiscoveryIsNotAdvertisedAndWWWAuthenticateProbeGets400", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(&oauth.DiscoveryResult{
+			Attempts: []oauth.DiscoveryAttempt{
+				{
+					URL:        "http://localhost:3001/.well-known/oauth-protected-resource/mcp",
+					Source:     oauth.DiscoverySourceWellKnownPath,
+					Tried:      true,
+					StatusCode: http.StatusNotFound,
+				},
+				{
+					URL:        "http://localhost:3001/.well-known/oauth-protected-resource",
+					Source:     oauth.DiscoverySourceWellKnownRoot,
+					Tried:      true,
+					StatusCode: http.StatusNotFound,
+				},
+			},
+		}, errors.New("oauth discovery invalid metadata from http://localhost:3001/.well-known/oauth-protected-resource: decode protected resource metadata: invalid character '<' looking for beginning of value"), &oauth.WWWAuthenticateProbeStatus{
+			Attempted: true,
+			Error:     "oauth discovery: WWW-Authenticate probe GET got status 400",
+		}, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state, nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Equal(t, "ready", rec.Body.String())
+	})
+
 	t.Run("ReadyButExplicitWhenMCPInitializeRequiresAuth", func(t *testing.T) {
 		t.Parallel()
 

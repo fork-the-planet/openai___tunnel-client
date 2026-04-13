@@ -263,7 +263,7 @@ func readinessStatus(oauthState *oauth.DiscoveryState, probeState *mcpclient.Pro
 	}
 	if oauthState != nil {
 		if result, probe, _, err, ok := oauthState.Wait(10 * time.Millisecond); ok && err != nil {
-			if !isOptionalOAuthDiscoveryFailure(result, probe, err) {
+			if !oauth.IsOptionalDiscoveryFailure(result, probe, err) {
 				return http.StatusServiceUnavailable, "oauth discovery failed: " + sanitizeReadinessError(err)
 			}
 		}
@@ -287,40 +287,4 @@ func sanitizeReadinessError(err error) string {
 		return ""
 	}
 	return strings.TrimSpace(err.Error())
-}
-
-func isOptionalOAuthDiscoveryFailure(
-	result *oauth.DiscoveryResult,
-	probe *oauth.WWWAuthenticateProbeStatus,
-	err error,
-) bool {
-	if err == nil {
-		return false
-	}
-	errText := strings.ToLower(strings.TrimSpace(err.Error()))
-	if strings.Contains(errText, "oauth discovery disabled for transport") {
-		return true
-	}
-	if strings.Contains(errText, "oauth discovery server url is not configured") {
-		return true
-	}
-	if result == nil || !allDiscoveryAttemptsNotFound(result.Attempts) {
-		return false
-	}
-	if probe == nil || !probe.Attempted {
-		return false
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(probe.Error)), "got status 200")
-}
-
-func allDiscoveryAttemptsNotFound(attempts []oauth.DiscoveryAttempt) bool {
-	if len(attempts) == 0 {
-		return false
-	}
-	for _, attempt := range attempts {
-		if !attempt.Tried || attempt.StatusCode != http.StatusNotFound {
-			return false
-		}
-	}
-	return true
 }
