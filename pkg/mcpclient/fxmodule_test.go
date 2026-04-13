@@ -238,8 +238,8 @@ func TestRunStartupProbeMarksFailureWhenConnectHangs(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected probe state to complete")
 	}
-	if err == nil || !strings.Contains(err.Error(), "mcp startup probe failed") {
-		t.Fatalf("expected startup probe failure, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "mcp probe timed out after") {
+		t.Fatalf("expected startup probe timeout, got %v", err)
 	}
 }
 

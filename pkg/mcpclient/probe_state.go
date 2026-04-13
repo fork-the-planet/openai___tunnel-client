@@ -1,6 +1,8 @@
 package mcpclient
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -74,4 +76,33 @@ func IsAuthRequiredProbeError(err error) bool {
 	return strings.Contains(msg, "unauthorized") ||
 		strings.Contains(msg, "401") ||
 		strings.Contains(msg, "www-authenticate")
+}
+
+// ProbeTimeoutError reports that the startup probe did not complete before the deadline.
+type ProbeTimeoutError struct {
+	Timeout time.Duration
+	Cause   error
+}
+
+func (e *ProbeTimeoutError) Error() string {
+	return fmt.Sprintf("mcp probe timed out after %s: %v", e.Timeout, e.Cause)
+}
+
+func (e *ProbeTimeoutError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func NewProbeTimeoutError(timeout time.Duration, cause error) error {
+	return &ProbeTimeoutError{
+		Timeout: timeout,
+		Cause:   cause,
+	}
+}
+
+func IsTimeoutProbeError(err error) bool {
+	var timeoutErr *ProbeTimeoutError
+	return errors.As(err, &timeoutErr)
 }

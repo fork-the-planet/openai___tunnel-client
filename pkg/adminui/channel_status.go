@@ -219,6 +219,13 @@ func applyMainChannelProbeStatus(status *ChannelStatus, probeState *mcpclient.Pr
 			}
 			return
 		}
+		if mcpclient.IsTimeoutProbeError(err) {
+			status.ProbeStatus = "timeout"
+			if status.Reason == "" {
+				status.Reason = "initial mcp probe timed out"
+			}
+			return
+		}
 		status.ProbeStatus = "failed"
 		status.Enabled = false
 		if status.Reason == "" {

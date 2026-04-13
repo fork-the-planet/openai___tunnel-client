@@ -1,10 +1,12 @@
 package adminui
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -155,6 +157,42 @@ func TestBuildStatusIncludesMainChannelProbeFailure(t *testing.T) {
 	require.Equal(t, "failed", out.Channels[0].ProbeStatus)
 	require.Contains(t, out.Channels[0].ProbeError, "connection refused")
 	require.Equal(t, "initial mcp probe failed", out.Channels[0].Reason)
+}
+
+func TestBuildStatusIncludesMainChannelProbeTimeoutWithoutDisablingChannel(t *testing.T) {
+	buffer := NewLogBufferWithCapacity(1)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	registry, err := harpoon.NewRegistry(logger, false, nil)
+	require.NoError(t, err)
+
+	serverURL, err := url.Parse("https://example.com/mcp")
+	require.NoError(t, err)
+
+	probeState := mcpclient.NewProbeState()
+	probeState.Set(mcpclient.NewProbeTimeoutError(2*time.Second, context.DeadlineExceeded))
+
+	out := buildStatus(routeParams{
+		Buffer: buffer,
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
+		HarpoonReg:    registry,
+		MCPProbeState: probeState,
+	})
+
+	require.Len(t, out.Channels, 2)
+	require.True(t, out.Channels[0].Enabled)
+	require.Equal(t, "timeout", out.Channels[0].ProbeStatus)
+	require.Contains(t, out.Channels[0].ProbeError, "mcp probe timed out")
+	require.Equal(t, "initial mcp probe timed out", out.Channels[0].Reason)
 }
 
 type assertiveError string

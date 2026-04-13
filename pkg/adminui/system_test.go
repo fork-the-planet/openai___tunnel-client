@@ -1,8 +1,10 @@
 package adminui
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
@@ -77,6 +79,19 @@ func TestBuildSystemIncludesMainChannelProbeStatus(t *testing.T) {
 	system := buildSystem(routeParams{MCPProbeState: probeState})
 	if system.MainChannelProbeStatus != "auth-required" {
 		t.Fatalf("expected auth-required probe status, got %q", system.MainChannelProbeStatus)
+	}
+	if system.MainChannelProbeError == "" {
+		t.Fatalf("expected probe error to be surfaced")
+	}
+}
+
+func TestBuildSystemIncludesMainChannelProbeTimeout(t *testing.T) {
+	probeState := mcpclient.NewProbeState()
+	probeState.Set(mcpclient.NewProbeTimeoutError(2*time.Second, context.DeadlineExceeded))
+
+	system := buildSystem(routeParams{MCPProbeState: probeState})
+	if system.MainChannelProbeStatus != "timeout" {
+		t.Fatalf("expected timeout probe status, got %q", system.MainChannelProbeStatus)
 	}
 	if system.MainChannelProbeError == "" {
 		t.Fatalf("expected probe error to be surfaced")

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -322,6 +324,25 @@ func TestReadinessHandler(t *testing.T) {
 		res := rec.Result()
 		require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
 		require.Contains(t, rec.Body.String(), "mcp probe failed")
+	})
+
+	t.Run("ReadyWhenMCPProbeTimesOut", func(t *testing.T) {
+		t.Parallel()
+
+		oauthState := oauth.NewDiscoveryState()
+		oauthState.Set(nil, nil, nil, nil)
+
+		probeState := mcpclient.NewProbeState()
+		probeState.Set(mcpclient.NewProbeTimeoutError(2*time.Second, context.DeadlineExceeded))
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(oauthState, probeState)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Contains(t, rec.Body.String(), "probe timed out")
 	})
 
 }

@@ -198,12 +198,12 @@ func runStartupProbe(
 
 	select {
 	case <-probeCtx.Done():
-		err := fmt.Errorf("mcp startup probe failed: %w", probeCtx.Err())
+		err := NewProbeTimeoutError(timeout, probeCtx.Err())
 		if probeState != nil {
 			probeState.Set(err)
 		}
 		if logger != nil {
-			logger.ErrorContext(ctx, "mcp startup probe failed", slog.String("error", err.Error()))
+			logger.ErrorContext(ctx, "mcp probe timed out", slog.Duration("timeout", timeout), slog.String("error", err.Error()))
 		}
 	case res := <-resultCh:
 		if res.err != nil {

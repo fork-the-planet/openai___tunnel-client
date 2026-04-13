@@ -38,6 +38,9 @@ func buildSystem(p routeParams) systemResponse {
 			} else if mcpclient.IsAuthRequiredProbeError(err) {
 				response.MainChannelProbeStatus = "auth-required"
 				response.MainChannelProbeError = err.Error()
+			} else if mcpclient.IsTimeoutProbeError(err) {
+				response.MainChannelProbeStatus = "timeout"
+				response.MainChannelProbeError = err.Error()
 			} else {
 				response.MainChannelProbeStatus = "failed"
 				response.MainChannelProbeError = err.Error()
