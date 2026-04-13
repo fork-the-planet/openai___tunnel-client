@@ -116,6 +116,51 @@ func TestBuildOAuthStatusErrorIncludesAttempts(t *testing.T) {
 	require.Equal(t, "authorization_servers[0] only (source of truth)", out.AuthServerMetaMode)
 }
 
+func TestBuildOAuthStatusSuppressesOptionalDiscoveryFailure(t *testing.T) {
+	t.Parallel()
+
+	serverURL := mustParseURL(t, "http://localhost:3001/mcp")
+	state := oauth.NewDiscoveryState()
+	state.Set(&oauth.DiscoveryResult{
+		Attempts: []oauth.DiscoveryAttempt{
+			{
+				URL:        "http://localhost:3001/.well-known/oauth-protected-resource/mcp",
+				Source:     oauth.DiscoverySourceWellKnownPath,
+				Tried:      true,
+				StatusCode: 404,
+			},
+			{
+				URL:        "http://localhost:3001/.well-known/oauth-protected-resource",
+				Source:     oauth.DiscoverySourceWellKnownRoot,
+				Tried:      true,
+				StatusCode: 404,
+			},
+		},
+	}, errors.New("oauth discovery invalid metadata from http://localhost:3001/.well-known/oauth-protected-resource: decode protected resource metadata: invalid character '<' looking for beginning of value"), &oauth.WWWAuthenticateProbeStatus{
+		Attempted: true,
+		Error:     "oauth discovery: WWW-Authenticate probe GET got status 200",
+	}, []string{"http://localhost:3001/.well-known/oauth-protected-resource/mcp"})
+
+	out := buildOAuthStatus(routeParams{
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
+		OAuthState: state,
+	})
+
+	require.Empty(t, out.Error)
+	require.Equal(t, "not_advertised", out.MetadataSource)
+	require.NotNil(t, out.Metadata)
+	require.Len(t, out.Metadata.Attempts, 2)
+}
+
 func expectedMetadataURLs(serverURL *url.URL) []string {
 	urls := oauth.BuildResourceMetadataURLs(serverURL)
 	out := make([]string, 0, len(urls))

@@ -47,13 +47,19 @@ func buildOAuthStatus(p routeParams) oauthStatusResponse {
 		}
 		out.WWWAuthenticateProbe = probe
 		if err != nil {
-			out.Error = err.Error()
+			if oauth.IsOptionalDiscoveryFailure(result, probe, err) {
+				out.MetadataSource = "not_advertised"
+			} else {
+				out.Error = err.Error()
+			}
 		}
 		if result != nil {
 			out.Metadata = result
 			out.SelectedAuthServer, out.AuthServerCount = deriveAuthServerSelection(result)
 		}
-		out.MetadataSource = deriveMetadataSource(result, probe)
+		if out.MetadataSource == "" {
+			out.MetadataSource = deriveMetadataSource(result, probe)
+		}
 		return out
 	}
 
