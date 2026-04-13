@@ -590,6 +590,7 @@ func TestLoadRejectsEmptyControlPlaneAPIKeyFile(t *testing.T) {
 
 func TestLoadRejectsNonPositiveMCPConnectionTTL(t *testing.T) {
 	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
 		"--mcp.server-url", "https://mcp.default",
 		"--mcp.connection-max-ttl=0s",
 	}
@@ -719,6 +720,9 @@ func TestLoadRequiresTunnelID(t *testing.T) {
 
 func TestLoadRequiresMCPServerURL(t *testing.T) {
 	_, err := Load(nil, func(key string) (string, bool) {
+		if key == "CONTROL_PLANE_TUNNEL_ID" {
+			return envTunnelID, true
+		}
 		if key == "OPENAI_API_KEY" {
 			return "key", true
 		}
@@ -730,7 +734,26 @@ func TestLoadRequiresMCPServerURL(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when MCP server URL missing")
 	}
-	if !strings.Contains(err.Error(), "main channel is required") {
+	if !strings.Contains(err.Error(), "set --mcp.server-url or --mcp.command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadPrioritizesTunnelIDErrorBeforeMissingMCPBinding(t *testing.T) {
+	_, err := Load(nil, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "LOG_FORMAT":
+			return "struct-text", true
+		default:
+			return "", false
+		}
+	})
+	if err == nil {
+		t.Fatalf("expected error when tunnel id and MCP binding are both missing")
+	}
+	if !strings.Contains(err.Error(), "tunnel ID is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -937,7 +960,7 @@ func TestLoadRejectsMissingMainChannel(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when main channel binding missing")
 	}
-	if !strings.Contains(err.Error(), "main channel is required") {
+	if !strings.Contains(err.Error(), "add channel=main") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

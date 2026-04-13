@@ -341,12 +341,12 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		return nil, err
 	}
 
-	mcp, err := buildMCPConfig(fs, lookupEnv, globalProxy, globalProxySource)
+	controlPlane, err := buildControlPlaneConfig(fs, lookupEnv, globalProxy, globalProxySource)
 	if err != nil {
 		return nil, err
 	}
 
-	controlPlane, err := buildControlPlaneConfig(fs, lookupEnv, globalProxy, globalProxySource)
+	mcp, err := buildMCPConfig(fs, lookupEnv, globalProxy, globalProxySource)
 	if err != nil {
 		return nil, err
 	}
@@ -1116,8 +1116,11 @@ func parseMCPChannelBindings(commandEntries, serverEntries []string, lookupEnv f
 		}
 	}
 
+	if len(bindings) == 0 {
+		return nil, errors.New("main channel is required; set --mcp.server-url or --mcp.command, or MCP_SERVER_URL or MCP_COMMAND")
+	}
 	if _, ok := seen[types.DefaultChannel]; !ok {
-		return nil, errors.New("main channel is required")
+		return nil, errors.New("main channel is required; add channel=main to one --mcp.server-url or --mcp.command entry")
 	}
 	return bindings, nil
 }

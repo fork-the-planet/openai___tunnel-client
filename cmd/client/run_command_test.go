@@ -33,3 +33,47 @@ func TestRunHelpIsScoped(t *testing.T) {
 	require.Contains(t, output, "control-plane.base-url")
 	require.NotContains(t, output, "Commands:")
 }
+
+func TestRunReportsTunnelIDBeforeMissingMCPBinding(t *testing.T) {
+	t.Parallel()
+
+	root := newRootCommand(func(key string) (string, bool) {
+		switch key {
+		case "LOG_FORMAT":
+			return "struct-text", true
+		case "OPENAI_API_KEY":
+			return "dummy-key", true
+		default:
+			return "", false
+		}
+	}, io.Discard, io.Discard)
+
+	root.SetArgs([]string{"run"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tunnel ID is required")
+}
+
+func TestRunReportsHowToConfigureMainMCPChannel(t *testing.T) {
+	t.Parallel()
+
+	root := newRootCommand(func(key string) (string, bool) {
+		switch key {
+		case "LOG_FORMAT":
+			return "struct-text", true
+		case "OPENAI_API_KEY":
+			return "dummy-key", true
+		case "CONTROL_PLANE_TUNNEL_ID":
+			return "tunnel_0123456789abcdef0123456789abcdef", true
+		default:
+			return "", false
+		}
+	}, io.Discard, io.Discard)
+
+	root.SetArgs([]string{"run"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "set --mcp.server-url or --mcp.command")
+}
