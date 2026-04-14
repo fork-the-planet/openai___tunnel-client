@@ -16,6 +16,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
+	"go.openai.org/api/tunnel-client/pkg/metrics"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/proxy"
 	"go.openai.org/api/tunnel-client/pkg/proxyhealth"
@@ -38,25 +39,26 @@ var Module = fx.Module(
 type routeParams struct {
 	fx.In
 
-	AdminMux      *http.ServeMux `name:"admin_mux"`
-	Lifecycle     fx.Lifecycle
-	Logger        *slog.Logger
-	Buffer        *LogBuffer
-	Runtime       RuntimeSnapshotProvider
-	HealthService health.Service
-	LoggingConfig *config.LoggingConfig
-	ControlPlane  *config.ControlPlaneConfig
-	MCPConfig     *config.MCPConfig
-	HarpoonConfig *config.HarpoonConfig
-	AdminUIConfig *config.AdminUIConfig
-	MetadataState *controlplane.MetadataState
-	OAuthState    *oauth.DiscoveryState
-	HarpoonBuffer *harpoon.CallBuffer
-	HarpoonReg    *harpoon.Registry
-	StdioInfo     mcpclient.ChannelStdioRuntimeInfoProvider `optional:"true"`
-	MCPProbeState *mcpclient.ProbeState                     `optional:"true"`
-	ProxyHealth   proxyhealth.Snapshotter                   `optional:"true"`
-	TLSBundle     *tlsconfig.Bundle
+	AdminMux       *http.ServeMux `name:"admin_mux"`
+	Lifecycle      fx.Lifecycle
+	Logger         *slog.Logger
+	Buffer         *LogBuffer
+	Runtime        RuntimeSnapshotProvider
+	MetricExporter metrics.MetricsExporter
+	HealthService  health.Service
+	LoggingConfig  *config.LoggingConfig
+	ControlPlane   *config.ControlPlaneConfig
+	MCPConfig      *config.MCPConfig
+	HarpoonConfig  *config.HarpoonConfig
+	AdminUIConfig  *config.AdminUIConfig
+	MetadataState  *controlplane.MetadataState
+	OAuthState     *oauth.DiscoveryState
+	HarpoonBuffer  *harpoon.CallBuffer
+	HarpoonReg     *harpoon.Registry
+	StdioInfo      mcpclient.ChannelStdioRuntimeInfoProvider `optional:"true"`
+	MCPProbeState  *mcpclient.ProbeState                     `optional:"true"`
+	ProxyHealth    proxyhealth.Snapshotter                   `optional:"true"`
+	TLSBundle      *tlsconfig.Bundle
 }
 
 type statusResponse struct {
@@ -114,7 +116,7 @@ func registerRoutes(p routeParams) error {
 		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
-	gmux.HandleFunc("/api/logs/export", handleLogsExport(p.Buffer, p.Runtime))
+	gmux.HandleFunc("/api/logs/export", handleLogsExport(p.Buffer, p.Runtime, NewMetricsSnapshotProvider(p.MetricExporter)))
 	gmux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer, streamCtx))
 	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig, p.ProxyHealth))
 	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg))

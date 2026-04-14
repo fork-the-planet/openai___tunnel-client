@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log/slog"
@@ -108,6 +111,18 @@ func TestAppBoots(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "metrics response status")
 	require.Contains(t, string(metricsBody), "liveness", "metrics should include liveness gauge")
 
+	resp, err = client.Get(baseURL + "/api/logs/export?minutes=30")
+	require.NoError(t, err)
+	exportBody, readErr := io.ReadAll(resp.Body)
+	closeErr = resp.Body.Close()
+	require.NoError(t, readErr)
+	require.NoError(t, closeErr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "logs export response status")
+	exportFiles := readTarGzFiles(t, exportBody)
+	require.Contains(t, exportFiles, "tunnel-client.logs.ndjson")
+	require.Contains(t, exportFiles, "tunnel-client.metrics.prom")
+	require.Contains(t, exportFiles["tunnel-client.metrics.prom"], "liveness")
+
 	resp, err = client.Get(baseURL + "/ui")
 	require.NoError(t, err)
 	uiBody, uiReadErr := io.ReadAll(resp.Body)
@@ -161,4 +176,28 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatalf("parse URL %q: %v", raw, err)
 	}
 	return parsed
+}
+
+func readTarGzFiles(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, gz.Close())
+	}()
+
+	tr := tar.NewReader(gz)
+	files := map[string]string{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		body, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		files[hdr.Name] = string(body)
+	}
+	return files
 }

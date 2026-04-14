@@ -44,7 +44,9 @@ while :; do
 done
 ```
 
-- The archive contains `manifest.json`, `README.txt`, and `tunnel-client.logs.ndjson`. The archive is redacted before it is returned.
+- The archive contains `manifest.json`, `README.txt`, `tunnel-client.logs.ndjson`, and `tunnel-client.metrics.prom`.
+- `tunnel-client.metrics.prom` is a point-in-time Prometheus text snapshot captured from `/metrics` at export time.
+- The archive is redacted before it is returned.
 
 ## MCP connectivity issues
 

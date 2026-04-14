@@ -16,6 +16,7 @@ import (
 const (
 	defaultLogExportWindow = 30 * time.Minute
 	maxLogExportWindow     = 24 * time.Hour
+	metricsSnapshotFile    = "tunnel-client.metrics.prom"
 )
 
 type logExportManifest struct {
@@ -25,6 +26,7 @@ type logExportManifest struct {
 	Window            string           `json:"window"`
 	EventCount        int              `json:"event_count"`
 	LogBufferCapacity int              `json:"log_buffer_capacity"`
+	MetricsBytes      int              `json:"metrics_bytes"`
 	Redacted          bool             `json:"redacted"`
 	Files             []string         `json:"files"`
 	Runtime           logExportRuntime `json:"runtime"`
@@ -35,8 +37,16 @@ type logExportRuntime struct {
 	Environment map[string]string `json:"environment"`
 }
 
+type metricsSnapshot struct {
+	Filename string
+	Body     []byte
+}
+
 // RuntimeSnapshotProvider returns redacted runtime metadata for support log exports.
 type RuntimeSnapshotProvider func() logExportRuntime
+
+// MetricsSnapshotProvider returns a point-in-time Prometheus text snapshot for support log exports.
+type MetricsSnapshotProvider func() (metricsSnapshot, error)
 
 func NewRuntimeSnapshotProvider() RuntimeSnapshotProvider {
 	return func() logExportRuntime {
@@ -44,13 +54,45 @@ func NewRuntimeSnapshotProvider() RuntimeSnapshotProvider {
 	}
 }
 
-func handleLogsExport(buf *LogBuffer, runtime RuntimeSnapshotProvider) http.HandlerFunc {
+func NewMetricsSnapshotProvider(exporter http.Handler) MetricsSnapshotProvider {
+	return func() (metricsSnapshot, error) {
+		if exporter == nil {
+			return metricsSnapshot{}, nil
+		}
+
+		req, err := http.NewRequest(http.MethodGet, "/metrics", nil)
+		if err != nil {
+			return metricsSnapshot{}, fmt.Errorf("create metrics snapshot request: %w", err)
+		}
+
+		rec := &snapshotResponseWriter{header: make(http.Header)}
+		exporter.ServeHTTP(rec, req)
+		if rec.statusCode == 0 {
+			rec.statusCode = http.StatusOK
+		}
+		if rec.statusCode != http.StatusOK {
+			return metricsSnapshot{}, fmt.Errorf("capture metrics snapshot: unexpected status %d", rec.statusCode)
+		}
+
+		return metricsSnapshot{
+			Filename: metricsSnapshotFile,
+			Body:     bytes.Clone(rec.body.Bytes()),
+		}, nil
+	}
+}
+
+func handleLogsExport(buf *LogBuffer, runtime RuntimeSnapshotProvider, metrics MetricsSnapshotProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		window := parseExportWindow(r)
 		now := time.Now().UTC()
 		events := buf.Since(now.Add(-window), buf.Capacity())
+		snapshot, err := callMetricsSnapshot(metrics)
+		if err != nil {
+			http.Error(w, "capture metrics snapshot", http.StatusInternalServerError)
+			return
+		}
 
-		archive, err := buildLogsArchive(events, now, window, buf.Capacity(), callRuntimeSnapshot(runtime))
+		archive, err := buildLogsArchive(events, now, window, buf.Capacity(), callRuntimeSnapshot(runtime), snapshot)
 		if err != nil {
 			http.Error(w, "build logs archive", http.StatusInternalServerError)
 			return
@@ -73,10 +115,26 @@ func callRuntimeSnapshot(runtime RuntimeSnapshotProvider) logExportRuntime {
 	return runtime()
 }
 
-func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, logBufferCapacity int, runtime logExportRuntime) ([]byte, error) {
+func callMetricsSnapshot(metrics MetricsSnapshotProvider) (metricsSnapshot, error) {
+	if metrics == nil {
+		return metricsSnapshot{}, nil
+	}
+	return metrics()
+}
+
+func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, logBufferCapacity int, runtime logExportRuntime, snapshot metricsSnapshot) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
+
+	files := []string{
+		"manifest.json",
+		"README.txt",
+		"tunnel-client.logs.ndjson",
+	}
+	if snapshot.Filename != "" {
+		files = append(files, snapshot.Filename)
+	}
 
 	manifest := logExportManifest{
 		GeneratedAt:       now,
@@ -85,19 +143,16 @@ func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, lo
 		Window:            window.String(),
 		EventCount:        len(events),
 		LogBufferCapacity: logBufferCapacity,
+		MetricsBytes:      len(snapshot.Body),
 		Redacted:          true,
-		Files: []string{
-			"manifest.json",
-			"README.txt",
-			"tunnel-client.logs.ndjson",
-		},
-		Runtime: runtime,
+		Files:             files,
+		Runtime:           runtime,
 	}
 
 	if err := writeTarJSON(tw, "manifest.json", manifest); err != nil {
 		return nil, err
 	}
-	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes redacted argv plus tunnel-client-related environment variables and env: references discovered in argv.\n")); err != nil {
+	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes redacted argv plus tunnel-client-related environment variables and env: references discovered in argv.\nThe Prometheus snapshot is captured at export time from /metrics.\n")); err != nil {
 		return nil, err
 	}
 
@@ -110,6 +165,11 @@ func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, lo
 	}
 	if err := writeTarFile(tw, "tunnel-client.logs.ndjson", logs.Bytes()); err != nil {
 		return nil, err
+	}
+	if snapshot.Filename != "" {
+		if err := writeTarFile(tw, snapshot.Filename, snapshot.Body); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tw.Close(); err != nil {
@@ -306,6 +366,30 @@ func isSensitiveRuntimeKey(key string) bool {
 		}
 	}
 	return strings.HasSuffix(normalized, "_api_key") || strings.HasSuffix(normalized, "_private_key")
+}
+
+type snapshotResponseWriter struct {
+	header     http.Header
+	body       bytes.Buffer
+	statusCode int
+}
+
+func (w *snapshotResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *snapshotResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func (w *snapshotResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
 }
 
 func writeTarJSON(tw *tar.Writer, name string, v any) error {

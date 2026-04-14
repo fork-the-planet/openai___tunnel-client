@@ -26,6 +26,7 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 - Metadata is accepted even when `issuer` differs from `authorization_servers[0]` (external IdP issuer URLs are supported), with mismatch diagnostics preserved in logs/state.
 - It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) and a lightweight **admin UI** (`/ui`) for operational status.
 - The admin UI Overview reports channel availability and reasons when channels are disabled.
+- The admin UI log export returns a redacted support bundle with recent logs plus a point-in-time Prometheus snapshot from `/metrics`.
 - It embeds the **harpoon MCP server** to provide a labeled, allowlisted outbound HTTP client for internal tooling.
 
 ## Admin UI build notes

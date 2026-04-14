@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,11 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 				"OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret123456",
 			},
 		)
+	}, func() (metricsSnapshot, error) {
+		return metricsSnapshot{
+			Filename: metricsSnapshotFile,
+			Body:     []byte("# HELP test_metric test\n# TYPE test_metric counter\ntest_metric 7\n"),
+		}, nil
 	})(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -48,17 +54,21 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Contains(t, files, "manifest.json")
 	require.Contains(t, files, "README.txt")
 	require.Contains(t, files, "tunnel-client.logs.ndjson")
+	require.Contains(t, files, metricsSnapshotFile)
 
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "sk-REDACTED")
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "Authorization: Bearer [REDACTED]")
 	require.Contains(t, files["tunnel-client.logs.ndjson"], `"api_key":"[REDACTED]"`)
 	require.NotContains(t, files["tunnel-client.logs.ndjson"], "secretvalue")
+	require.Contains(t, files[metricsSnapshotFile], "test_metric 7")
 
 	var manifest logExportManifest
 	require.NoError(t, json.Unmarshal([]byte(files["manifest.json"]), &manifest))
 	require.True(t, manifest.Redacted)
 	require.Equal(t, 1, manifest.EventCount)
 	require.Equal(t, 10, manifest.LogBufferCapacity)
+	require.Equal(t, len(files[metricsSnapshotFile]), manifest.MetricsBytes)
+	require.Contains(t, manifest.Files, metricsSnapshotFile)
 	require.Contains(t, manifest.Runtime.Argv, "--control-plane.api-key=env:OPENAI_TUNNEL_KEY_PROD")
 	require.Equal(t, "[REDACTED]", manifest.Runtime.Environment["OPENAI_TUNNEL_KEY_PROD"])
 }
@@ -69,12 +79,32 @@ func TestBuildLogsArchiveFiltersBeforeCallSite(t *testing.T) {
 	now := time.Now().UTC()
 	archive, err := buildLogsArchive([]LogEvent{
 		{Seq: 7, Time: now, Level: "INFO", Message: "hello"},
-	}, now, 30*time.Minute, 2000, logExportRuntime{Argv: []string{"tunnel-client", "run"}})
+	}, now, 30*time.Minute, 2000, logExportRuntime{Argv: []string{"tunnel-client", "run"}}, metricsSnapshot{
+		Filename: metricsSnapshotFile,
+		Body:     []byte("commands_poll_cycles_total 42\n"),
+	})
 	require.NoError(t, err)
 
 	files := readTarGzForTest(t, archive)
 	require.Contains(t, files["tunnel-client.logs.ndjson"], `"seq":7`)
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "hello")
+	require.Equal(t, "commands_poll_cycles_total 42\n", files[metricsSnapshotFile])
+}
+
+func TestBuildLogsArchiveOmitsMetricsFileWhenSnapshotUnavailable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	archive, err := buildLogsArchive(nil, now, 15*time.Minute, 128, logExportRuntime{}, metricsSnapshot{})
+	require.NoError(t, err)
+
+	files := readTarGzForTest(t, archive)
+	require.NotContains(t, files, metricsSnapshotFile)
+
+	var manifest logExportManifest
+	require.NoError(t, json.Unmarshal([]byte(files["manifest.json"]), &manifest))
+	require.Zero(t, manifest.MetricsBytes)
+	require.NotContains(t, manifest.Files, metricsSnapshotFile)
 }
 
 func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T) {
@@ -120,6 +150,45 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 	require.Equal(t, "[REDACTED]", got.Environment["OPENAI_TUNNEL_KEY_PROD"])
 	require.NotContains(t, got.Environment, "UNRELATED_SECRET")
 	require.NotContains(t, got.Environment, "should-not-be-exported-because-not-relevant")
+}
+
+func TestHandleLogsExportReturnsInternalServerErrorWhenMetricsSnapshotFails(t *testing.T) {
+	t.Parallel()
+
+	buf := NewLogBufferWithCapacity(4)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/logs/export?minutes=30", nil)
+
+	handleLogsExport(buf, nil, func() (metricsSnapshot, error) {
+		return metricsSnapshot{}, errors.New("boom")
+	})(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Body.String(), "capture metrics snapshot")
+}
+
+func TestNewMetricsSnapshotProviderCapturesHandlerOutput(t *testing.T) {
+	t.Parallel()
+
+	provider := NewMetricsSnapshotProvider(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("queue_depth 3\n"))
+	}))
+
+	got, err := provider()
+	require.NoError(t, err)
+	require.Equal(t, metricsSnapshotFile, got.Filename)
+	require.Equal(t, []byte("queue_depth 3\n"), got.Body)
+}
+
+func TestNewMetricsSnapshotProviderRejectsUnexpectedStatus(t *testing.T) {
+	t.Parallel()
+
+	provider := NewMetricsSnapshotProvider(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+
+	_, err := provider()
+	require.EqualError(t, err, "capture metrics snapshot: unexpected status 503")
 }
 
 func readTarGzForTest(t *testing.T, data []byte) map[string]string {
