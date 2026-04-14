@@ -116,7 +116,18 @@ func registerRoutes(p routeParams) error {
 		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
-	gmux.HandleFunc("/api/logs/export", handleLogsExport(p.Buffer, p.Runtime, NewMetricsSnapshotProvider(p.MetricExporter)))
+	gmux.HandleFunc("/api/logs/export", handleLogsExport(
+		p.Buffer,
+		p.Runtime,
+		NewMetricsSnapshotProvider(p.MetricExporter),
+		func() logExportAdminSnapshots {
+			return logExportAdminSnapshots{
+				Status: buildStatus(p),
+				System: buildSystem(p),
+				OAuth:  buildOAuthStatus(p),
+			}
+		},
+	))
 	gmux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer, streamCtx))
 	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig, p.ProxyHealth))
 	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg))

@@ -36,6 +36,9 @@ const (
 	// talks directly to tunnel-service (e.g. poll, post response).
 	FieldTunnelServiceRequestID = "tunnel_request_id"
 
+	// FieldTunnelID is the stable structured logging key for the configured tunnel identifier.
+	FieldTunnelID = "tunnel_id"
+
 	ComponentHealth       = "health"
 	ComponentDispatcher   = "dispatcher"
 	ComponentControlPlane = "controlplane"

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -42,11 +43,20 @@ type metricsSnapshot struct {
 	Body     []byte
 }
 
+type logExportAdminSnapshots struct {
+	Status statusResponse      `json:"status"`
+	System systemResponse      `json:"system"`
+	OAuth  oauthStatusResponse `json:"oauth"`
+}
+
 // RuntimeSnapshotProvider returns redacted runtime metadata for support log exports.
 type RuntimeSnapshotProvider func() logExportRuntime
 
 // MetricsSnapshotProvider returns a point-in-time Prometheus text snapshot for support log exports.
 type MetricsSnapshotProvider func() (metricsSnapshot, error)
+
+// AdminSnapshotProvider returns the current support-facing admin API snapshots for export bundles.
+type AdminSnapshotProvider func() logExportAdminSnapshots
 
 func NewRuntimeSnapshotProvider() RuntimeSnapshotProvider {
 	return func() logExportRuntime {
@@ -81,7 +91,12 @@ func NewMetricsSnapshotProvider(exporter http.Handler) MetricsSnapshotProvider {
 	}
 }
 
-func handleLogsExport(buf *LogBuffer, runtime RuntimeSnapshotProvider, metrics MetricsSnapshotProvider) http.HandlerFunc {
+func handleLogsExport(
+	buf *LogBuffer,
+	runtime RuntimeSnapshotProvider,
+	metrics MetricsSnapshotProvider,
+	adminSnapshots AdminSnapshotProvider,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		window := parseExportWindow(r)
 		now := time.Now().UTC()
@@ -92,7 +107,15 @@ func handleLogsExport(buf *LogBuffer, runtime RuntimeSnapshotProvider, metrics M
 			return
 		}
 
-		archive, err := buildLogsArchive(events, now, window, buf.Capacity(), callRuntimeSnapshot(runtime), snapshot)
+		archive, err := buildLogsArchive(
+			events,
+			now,
+			window,
+			buf.Capacity(),
+			callRuntimeSnapshot(runtime),
+			snapshot,
+			callAdminSnapshots(adminSnapshots),
+		)
 		if err != nil {
 			http.Error(w, "build logs archive", http.StatusInternalServerError)
 			return
@@ -122,7 +145,22 @@ func callMetricsSnapshot(metrics MetricsSnapshotProvider) (metricsSnapshot, erro
 	return metrics()
 }
 
-func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, logBufferCapacity int, runtime logExportRuntime, snapshot metricsSnapshot) ([]byte, error) {
+func callAdminSnapshots(adminSnapshots AdminSnapshotProvider) logExportAdminSnapshots {
+	if adminSnapshots == nil {
+		return logExportAdminSnapshots{}
+	}
+	return adminSnapshots()
+}
+
+func buildLogsArchive(
+	events []LogEvent,
+	now time.Time,
+	window time.Duration,
+	logBufferCapacity int,
+	runtime logExportRuntime,
+	snapshot metricsSnapshot,
+	adminSnapshots logExportAdminSnapshots,
+) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -135,7 +173,7 @@ func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, lo
 	if snapshot.Filename != "" {
 		files = append(files, snapshot.Filename)
 	}
-
+	files = append(files, "admin/status.json", "admin/system.json", "admin/oauth.json")
 	manifest := logExportManifest{
 		GeneratedAt:       now,
 		WindowStart:       now.Add(-window),
@@ -152,7 +190,7 @@ func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, lo
 	if err := writeTarJSON(tw, "manifest.json", manifest); err != nil {
 		return nil, err
 	}
-	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes redacted argv plus tunnel-client-related environment variables and env: references discovered in argv.\nThe Prometheus snapshot is captured at export time from /metrics.\n")); err != nil {
+	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes redacted argv plus tunnel-client-related environment variables and env: references discovered in argv.\nThe Prometheus snapshot is captured at export time from /metrics when available.\nadmin/status.json, admin/system.json, and admin/oauth.json mirror the current admin API snapshots at export time.\n")); err != nil {
 		return nil, err
 	}
 
@@ -170,6 +208,15 @@ func buildLogsArchive(events []LogEvent, now time.Time, window time.Duration, lo
 		if err := writeTarFile(tw, snapshot.Filename, snapshot.Body); err != nil {
 			return nil, err
 		}
+	}
+	if err := writeTarRedactedJSON(tw, "admin/status.json", adminSnapshots.Status); err != nil {
+		return nil, err
+	}
+	if err := writeTarRedactedJSON(tw, "admin/system.json", adminSnapshots.System); err != nil {
+		return nil, err
+	}
+	if err := writeTarRedactedJSON(tw, "admin/oauth.json", adminSnapshots.OAuth); err != nil {
+		return nil, err
 	}
 
 	if err := tw.Close(); err != nil {
@@ -399,6 +446,57 @@ func writeTarJSON(tw *tar.Writer, name string, v any) error {
 	}
 	data = append(data, '\n')
 	return writeTarFile(tw, name, data)
+}
+
+func writeTarRedactedJSON(tw *tar.Writer, name string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal %s for redaction: %w", name, err)
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode %s for redaction: %w", name, err)
+	}
+
+	return writeTarJSON(tw, name, redactSnapshotJSONValue(payload))
+}
+
+func redactSnapshotJSONValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return redactSnapshotString(t)
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, vv := range t {
+			if isSensitiveAttrKey(k) {
+				out[k] = "[REDACTED]"
+				continue
+			}
+			out[k] = redactSnapshotJSONValue(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, vv := range t {
+			out = append(out, redactSnapshotJSONValue(vv))
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func redactSnapshotString(s string) string {
+	parsed, err := url.Parse(s)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return redactString(s)
+	}
+
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func writeTarFile(tw *tar.Writer, name string, data []byte) error {

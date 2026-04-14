@@ -19,6 +19,7 @@ type loggerParams struct {
 
 	Lifecycle     fx.Lifecycle
 	Config        *config.LoggingConfig
+	ControlPlane  *config.ControlPlaneConfig
 	DefaultWriter io.Writer `optional:"true"`
 	Sink          Sink      `optional:"true"`
 }
@@ -31,6 +32,9 @@ func newLogger(p loggerParams) (*slog.Logger, error) {
 
 	if p.Sink != nil && logger != nil {
 		logger = slog.New(newTeeHandler(logger.Handler(), p.Sink))
+	}
+	if logger != nil && p.ControlPlane != nil && p.ControlPlane.TunnelID != "" {
+		logger = logger.With(slog.String(FieldTunnelID, p.ControlPlane.TunnelID.String()))
 	}
 
 	if closer != nil {

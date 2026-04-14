@@ -44,8 +44,9 @@ while :; do
 done
 ```
 
-- The archive contains `manifest.json`, `README.txt`, `tunnel-client.logs.ndjson`, and `tunnel-client.metrics.prom`.
+- The archive contains `manifest.json`, `README.txt`, `tunnel-client.logs.ndjson`, `tunnel-client.metrics.prom`, `admin/status.json`, `admin/system.json`, and `admin/oauth.json`.
 - `tunnel-client.metrics.prom` is a point-in-time Prometheus text snapshot captured from `/metrics` at export time.
+- The `admin/*.json` files are point-in-time copies of `/api/status`, `/api/system`, and `/api/oauth` at export time, so support can review the configured `tunnel_id`, route state, probe status, and OAuth discovery state alongside the log stream.
 - The archive is redacted before it is returned.
 
 ## MCP connectivity issues

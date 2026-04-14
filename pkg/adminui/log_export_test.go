@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 )
 
 func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
@@ -30,20 +32,39 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/logs/export?minutes=30", nil)
-	handleLogsExport(buf, func() logExportRuntime {
-		return collectLogExportRuntime(
-			[]string{"tunnel-client", "run", "--control-plane.api-key=env:OPENAI_TUNNEL_KEY_PROD"},
-			[]string{
-				"CONTROL_PLANE_TUNNEL_ID=tunnel_0123456789abcdef0123456789abcdef",
-				"OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret123456",
-			},
-		)
-	}, func() (metricsSnapshot, error) {
-		return metricsSnapshot{
-			Filename: metricsSnapshotFile,
-			Body:     []byte("# HELP test_metric test\n# TYPE test_metric counter\ntest_metric 7\n"),
-		}, nil
-	})(rec, req)
+	handleLogsExport(
+		buf,
+		func() logExportRuntime {
+			return collectLogExportRuntime(
+				[]string{"tunnel-client", "run", "--control-plane.api-key=env:OPENAI_TUNNEL_KEY_PROD"},
+				[]string{
+					"CONTROL_PLANE_TUNNEL_ID=tunnel_0123456789abcdef0123456789abcdef",
+					"OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret123456",
+				},
+			)
+		},
+		func() (metricsSnapshot, error) {
+			return metricsSnapshot{
+				Filename: metricsSnapshotFile,
+				Body:     []byte("# HELP test_metric test\n# TYPE test_metric counter\ntest_metric 7\n"),
+			}, nil
+		},
+		func() logExportAdminSnapshots {
+			return logExportAdminSnapshots{
+				Status: statusResponse{
+					ControlPlaneTunnelID: "tunnel_0123456789abcdef0123456789abcdef",
+					MCPServerURL:         "https://example.test/mcp",
+				},
+				System: systemResponse{
+					MainChannelProbeStatus: "ok",
+				},
+				OAuth: oauthStatusResponse{
+					DiscoveryURLs: []string{"https://example.test/.well-known/oauth-protected-resource/mcp"},
+					Pending:       true,
+				},
+			}
+		},
+	)(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "application/gzip", rec.Header().Get("Content-Type"))
@@ -55,6 +76,9 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Contains(t, files, "README.txt")
 	require.Contains(t, files, "tunnel-client.logs.ndjson")
 	require.Contains(t, files, metricsSnapshotFile)
+	require.Contains(t, files, "admin/status.json")
+	require.Contains(t, files, "admin/system.json")
+	require.Contains(t, files, "admin/oauth.json")
 
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "sk-REDACTED")
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "Authorization: Bearer [REDACTED]")
@@ -71,6 +95,23 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Contains(t, manifest.Files, metricsSnapshotFile)
 	require.Contains(t, manifest.Runtime.Argv, "--control-plane.api-key=env:OPENAI_TUNNEL_KEY_PROD")
 	require.Equal(t, "[REDACTED]", manifest.Runtime.Environment["OPENAI_TUNNEL_KEY_PROD"])
+	require.Contains(t, manifest.Files, "admin/status.json")
+	require.Contains(t, manifest.Files, "admin/system.json")
+	require.Contains(t, manifest.Files, "admin/oauth.json")
+
+	var status statusResponse
+	require.NoError(t, json.Unmarshal([]byte(files["admin/status.json"]), &status))
+	require.Equal(t, "tunnel_0123456789abcdef0123456789abcdef", status.ControlPlaneTunnelID)
+	require.Equal(t, "https://example.test/mcp", status.MCPServerURL)
+
+	var system systemResponse
+	require.NoError(t, json.Unmarshal([]byte(files["admin/system.json"]), &system))
+	require.Equal(t, "ok", system.MainChannelProbeStatus)
+
+	var oauth oauthStatusResponse
+	require.NoError(t, json.Unmarshal([]byte(files["admin/oauth.json"]), &oauth))
+	require.Equal(t, []string{"https://example.test/.well-known/oauth-protected-resource/mcp"}, oauth.DiscoveryURLs)
+	require.True(t, oauth.Pending)
 }
 
 func TestBuildLogsArchiveFiltersBeforeCallSite(t *testing.T) {
@@ -82,29 +123,85 @@ func TestBuildLogsArchiveFiltersBeforeCallSite(t *testing.T) {
 	}, now, 30*time.Minute, 2000, logExportRuntime{Argv: []string{"tunnel-client", "run"}}, metricsSnapshot{
 		Filename: metricsSnapshotFile,
 		Body:     []byte("commands_poll_cycles_total 42\n"),
-	})
+	}, logExportAdminSnapshots{})
 	require.NoError(t, err)
 
 	files := readTarGzForTest(t, archive)
 	require.Contains(t, files["tunnel-client.logs.ndjson"], `"seq":7`)
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "hello")
 	require.Equal(t, "commands_poll_cycles_total 42\n", files[metricsSnapshotFile])
+	require.Contains(t, files, "admin/status.json")
+	require.Contains(t, files, "admin/system.json")
+	require.Contains(t, files, "admin/oauth.json")
 }
 
 func TestBuildLogsArchiveOmitsMetricsFileWhenSnapshotUnavailable(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	archive, err := buildLogsArchive(nil, now, 15*time.Minute, 128, logExportRuntime{}, metricsSnapshot{})
+	archive, err := buildLogsArchive(nil, now, 15*time.Minute, 128, logExportRuntime{}, metricsSnapshot{}, logExportAdminSnapshots{})
 	require.NoError(t, err)
 
 	files := readTarGzForTest(t, archive)
 	require.NotContains(t, files, metricsSnapshotFile)
+	require.Contains(t, files, "admin/status.json")
+	require.Contains(t, files, "admin/system.json")
+	require.Contains(t, files, "admin/oauth.json")
 
 	var manifest logExportManifest
 	require.NoError(t, json.Unmarshal([]byte(files["manifest.json"]), &manifest))
 	require.Zero(t, manifest.MetricsBytes)
 	require.NotContains(t, manifest.Files, metricsSnapshotFile)
+}
+
+func TestBuildLogsArchiveRedactsAdminSnapshots(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	archive, err := buildLogsArchive(nil, now, 15*time.Minute, 128, logExportRuntime{}, metricsSnapshot{}, logExportAdminSnapshots{
+		Status: statusResponse{
+			MCPServerURL:            "https://alice:secret@example.test/mcp?code=secret-code&access_token=secret-token",
+			MCPResourceMetadataURLs: []string{"https://alice:secret@example.test/.well-known/oauth-protected-resource/mcp?resource_metadata=secret-code"},
+		},
+		OAuth: oauthStatusResponse{
+			DiscoveryURLs: []string{"https://alice:secret@example.test/.well-known/oauth-protected-resource/mcp?resource_metadata=secret-code"},
+			Metadata: &oauth.DiscoveryResult{
+				URL:        "https://alice:secret@example.test/.well-known/oauth-protected-resource/mcp?code=secret-code",
+				Headers:    http.Header{"Authorization": []string{"Bearer secret-bearer"}, "Set-Cookie": []string{"sid=session-secret"}},
+				Body:       json.RawMessage(`{"access_token":"secret-access-token","issuer":"https://example.test/issuer"}`),
+				BodyText:   "metadata available",
+				StatusCode: http.StatusOK,
+			},
+			WWWAuthenticateProbe: &oauth.WWWAuthenticateProbeStatus{
+				Attempted: true,
+				URL:       "https://alice:secret@example.test/mcp?code=secret-code",
+				Error:     "authorization failed for https://alice:secret@example.test/mcp?code=secret-code",
+			},
+			SelectedAuthServer: "https://alice:secret@example.test/auth?access_token=secret-token",
+		},
+	})
+	require.NoError(t, err)
+
+	files := readTarGzForTest(t, archive)
+
+	require.NotContains(t, files["admin/status.json"], "alice:secret@")
+	require.NotContains(t, files["admin/status.json"], "secret-token")
+	require.NotContains(t, files["admin/status.json"], "secret-code")
+	require.Contains(t, files["admin/status.json"], `"mcp_server_url": "https://example.test/mcp"`)
+	require.Contains(t, files["admin/status.json"], `"mcp_resource_metadata_urls": [`)
+	require.Contains(t, files["admin/status.json"], `https://example.test/.well-known/oauth-protected-resource/mcp`)
+
+	require.NotContains(t, files["admin/oauth.json"], "alice:secret@")
+	require.NotContains(t, files["admin/oauth.json"], "secret-bearer")
+	require.NotContains(t, files["admin/oauth.json"], "session-secret")
+	require.NotContains(t, files["admin/oauth.json"], "secret-access-token")
+	require.NotContains(t, files["admin/oauth.json"], "secret-token")
+	require.NotContains(t, files["admin/oauth.json"], "secret-code")
+	require.Contains(t, files["admin/oauth.json"], `"Authorization": "[REDACTED]"`)
+	require.Contains(t, files["admin/oauth.json"], `"Set-Cookie": "[REDACTED]"`)
+	require.Contains(t, files["admin/oauth.json"], `"access_token": "[REDACTED]"`)
+	require.Contains(t, files["admin/oauth.json"], "https://example.test/.well-known/oauth-protected-resource/mcp")
+	require.Contains(t, files["admin/oauth.json"], `"selected_authorization_server": "https://example.test/auth"`)
 }
 
 func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T) {
@@ -161,7 +258,7 @@ func TestHandleLogsExportReturnsInternalServerErrorWhenMetricsSnapshotFails(t *t
 
 	handleLogsExport(buf, nil, func() (metricsSnapshot, error) {
 		return metricsSnapshot{}, errors.New("boom")
-	})(rec, req)
+	}, nil)(rec, req)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Body.String(), "capture metrics snapshot")
