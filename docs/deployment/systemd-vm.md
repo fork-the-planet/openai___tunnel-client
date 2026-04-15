@@ -20,7 +20,7 @@ Restart=always
 RestartSec=2
 
 # Prefer an EnvironmentFile or a secrets manager; shown inline for clarity.
-Environment=CONTROL_PLANE_TUNNEL_ID=tunnel_<abc>
+Environment=CONTROL_PLANE_TUNNEL_ID=tunnel_0123456789abcdef0123456789abcdef
 Environment=MCP_SERVER_URL=https://mcp.internal.example.com/mcp
 Environment=CONTROL_PLANE_API_KEY=sk-...
 Environment=HEALTH_LISTEN_ADDR=127.0.0.1:8080

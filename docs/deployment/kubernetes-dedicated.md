@@ -22,7 +22,7 @@ spec:
           image: tunnel-client:latest
           env:
             - name: CONTROL_PLANE_TUNNEL_ID
-              value: tunnel_<abc>
+              value: tunnel_0123456789abcdef0123456789abcdef
             - name: MCP_SERVER_URL
               value: http://mcp-server.default.svc.cluster.local:3000/mcp
             - name: CONTROL_PLANE_API_KEY

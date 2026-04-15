@@ -19,7 +19,7 @@ spec:
       image: tunnel-client:latest
       env:
         - name: CONTROL_PLANE_TUNNEL_ID
-          value: tunnel_<abc>
+          value: tunnel_0123456789abcdef0123456789abcdef
         - name: CONTROL_PLANE_BASE_URL
           value: https://api.openai.com
         - name: MCP_SERVER_URL

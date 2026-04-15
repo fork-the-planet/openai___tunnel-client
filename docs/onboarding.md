@@ -29,9 +29,12 @@ Example:
 
 ```bash
 export CONTROL_PLANE_API_KEY="sk-..."        # preferred
-export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+export CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef"
 export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 ```
+
+`CONTROL_PLANE_TUNNEL_ID` must match the control-plane validator: `tunnel_` followed by 32
+lowercase letters or digits.
 
 For the full surface (flags, defaults, advanced knobs), see [`configuration.md`](configuration.md).
 

@@ -282,7 +282,7 @@ Used with `tunnel-client admin tunnels ...`:
 
 ```bash
 export CONTROL_PLANE_API_KEY="sk-..."
-export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+export CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef"
 export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 
 ./bin/tunnel-client run --log.level=info --log.format=struct-text
@@ -292,7 +292,7 @@ export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 
 ```bash
 export CONTROL_PLANE_API_KEY="sk-..."
-export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+export CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef"
 
 ./bin/tunnel-client run \
   --mcp.command "python -m my_mcp_server --stdio" \
@@ -304,7 +304,7 @@ export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
 
 ```bash
 ./bin/tunnel-client run \
-  --control-plane.tunnel-id=tunnel_<abc> \
+  --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef \
   --control-plane.api-key=file:/run/secrets/control-plane-api-key \
   --mcp.server-url=https://mcp.internal.example.com/mcp \
   --log.level=info \
@@ -319,7 +319,7 @@ proxy root CA bundle (additive to system trust) and keep TLS verification enable
 ```bash
 ./bin/tunnel-client run \
   --ca-bundle /etc/ssl/proxy-root.pem \
-  --control-plane.tunnel-id "tunnel_<abc>" \
+  --control-plane.tunnel-id "tunnel_0123456789abcdef0123456789abcdef" \
   --mcp.server-url "https://mcp.internal.example.com/mcp"
 ```
 
@@ -331,7 +331,7 @@ proxy root CA bundle (additive to system trust) and keep TLS verification enable
   --control-plane.http-proxy "env:CONTROL_PROXY_URL" \
   --mcp.server-url "channel=main,url=https://mcp.internal.example.com/mcp,http-proxy=http://mcp-proxy.internal:8080" \
   --harpoon.http-proxy "http://harpoon-proxy.internal:8080" \
-  --control-plane.tunnel-id "tunnel_<abc>" \
+  --control-plane.tunnel-id "tunnel_0123456789abcdef0123456789abcdef" \
   --control-plane.api-key "env:CONTROL_PLANE_API_KEY"
 ```
 
@@ -339,7 +339,7 @@ proxy root CA bundle (additive to system trust) and keep TLS verification enable
 
 ```bash
 ./bin/tunnel-client run \
-  --control-plane.tunnel-id "tunnel_<abc>" \
+  --control-plane.tunnel-id "tunnel_0123456789abcdef0123456789abcdef" \
   --control-plane.api-key "env:CONTROL_PLANE_API_KEY" \
   --mcp.client-cert "/etc/tunnel-client/mtls/default-client.crt" \
   --mcp.client-key "/etc/tunnel-client/mtls/default-client.key" \
@@ -351,7 +351,7 @@ proxy root CA bundle (additive to system trust) and keep TLS verification enable
 
 ```bash
 export CONTROL_PLANE_API_KEY="sk-..."
-export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+export CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef"
 
 ./bin/tunnel-client run \
   --mcp.server-url="channel=main,url=https://mcp.internal.example.com/mcp" \
