@@ -24,7 +24,7 @@
   - Flag: `--control-plane.tunnel-id`
   - Env: `CONTROL_PLANE_TUNNEL_ID`
   - Required: yes
-  - Allowed characters: `A–Z a–z 0–9 _ -`
+  - Format: `tunnel_` followed by 32 lowercase hexadecimal characters (for example `tunnel_0123456789abcdef0123456789abcdef`)
 - **API key**
   - Flag: `--control-plane.api-key=env:VARNAME` or `--control-plane.api-key=file:/path/to/secret`
   - Env (preferred): `CONTROL_PLANE_API_KEY`

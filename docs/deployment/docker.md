@@ -15,7 +15,7 @@ DOCKER_BUILDKIT=1 docker build \
 ```bash
 docker run --rm \
   -e CONTROL_PLANE_API_KEY="sk-..." \
-  -e CONTROL_PLANE_TUNNEL_ID="my-tunnel" \
+  -e CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef" \
   -e MCP_SERVER_URL="https://mcp.internal.example.com/mcp" \
   -e LOG_LEVEL="info" \
   -e LOG_FORMAT="json" \

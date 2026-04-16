@@ -25,9 +25,14 @@
 
 ## Client never becomes “healthy/ready”
 
-- `/healthz` and `/readyz` report basic process status. If the process is running but not making progress, check logs for:
-  - control-plane connectivity errors
-  - MCP server connectivity errors
+- `/healthz` is liveness only. A `200 live` response means the process is up.
+- `/readyz` includes startup gating:
+  - `503 oauth discovery pending` while OAuth discovery is still in flight.
+  - `503 oauth discovery failed: ...` when required OAuth discovery fails.
+  - `503 mcp probe failed: ...` when the MCP startup probe fails.
+  - `200 ready (mcp initialize requires auth: ...)` when the MCP endpoint is reachable but requires auth during `initialize`.
+  - `200 ready (mcp startup probe timed out: ...)` when the probe times out but startup should continue.
+- If the process is live but `/readyz` stays non-`200`, check logs for OAuth discovery and MCP connectivity details.
 
 ## Export recent logs
 
