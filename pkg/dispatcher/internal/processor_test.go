@@ -1214,6 +1214,7 @@ func TestProcessorConnectFailureReturnsTerminalErrorResponseAndRecordsLatency(t 
 	require.NoError(t, processor.Process(context.Background(), cmd))
 
 	resp := responder.waitForResponse(t)
+	elapsedAtResponseMS := float64(time.Since(enqueuedAt) / time.Millisecond)
 	require.Equal(t, cmd.id, resp.requestID)
 	require.Equal(t, types.ResponseTypeJSONRPCResponse, resp.response.Type())
 	require.Equal(t, http.StatusBadGateway, resp.response.ResponseCode())
@@ -1237,7 +1238,7 @@ func TestProcessorConnectFailureReturnsTerminalErrorResponseAndRecordsLatency(t 
 
 	enqueuedDP := dpByType["enqueue_to_response"]
 	require.EqualValues(t, 1, enqueuedDP.Count)
-	require.InDelta(t, float64(time.Since(enqueuedAt)/time.Millisecond), enqueuedDP.Sum, 250)
+	require.InDelta(t, elapsedAtResponseMS, enqueuedDP.Sum, 250)
 
 	pollDP := dpByType["poll_to_response"]
 	require.EqualValues(t, 1, pollDP.Count)
