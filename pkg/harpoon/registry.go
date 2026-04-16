@@ -13,6 +13,7 @@ import (
 var labelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 const defaultRegistryLimit = 10000
+const defaultRedirectExplainCacheLimit = 256
 
 // Target describes a registered outbound HTTP target.
 type Target struct {
@@ -27,12 +28,40 @@ type Target struct {
 
 // Registry stores allowed targets keyed by label.
 type Registry struct {
-	logger         *slog.Logger
-	allowPlaintext bool
-	limit          int
-	mu             sync.RWMutex
-	targets        map[string]Target
-	ordered        []Target
+	logger            *slog.Logger
+	allowPlaintext    bool
+	limit             int
+	mu                sync.RWMutex
+	targets           map[string]Target
+	ordered           []Target
+	targetURLKeys     map[string]struct{}
+	explainCacheLimit int
+	explainCache      map[string]redirectExplainCacheEntry
+	explainCacheOrder []string
+}
+
+type redirectMismatchDetails struct {
+	Kind           redirectMismatchKind
+	ExpectedURL    string
+	ExpectedScheme string
+	ActualScheme   string
+	Reason         string
+}
+
+type redirectMismatchKind string
+
+const (
+	redirectMismatchSchemeHTTPToHTTPS redirectMismatchKind = "scheme_mismatch_http_to_https"
+	redirectMismatchSchemeHTTPSToHTTP redirectMismatchKind = "scheme_mismatch_https_to_http"
+	redirectMismatchPath              redirectMismatchKind = "path_mismatch"
+	redirectMismatchQuery             redirectMismatchKind = "query_mismatch"
+	redirectMismatchHost              redirectMismatchKind = "host_mismatch"
+	redirectMismatchOther             redirectMismatchKind = "not_allowlisted_other"
+)
+
+type redirectExplainCacheEntry struct {
+	hasDetails bool
+	details    redirectMismatchDetails
 }
 
 // NewRegistry constructs a registry seeded with the provided targets and a default limit.
@@ -49,11 +78,15 @@ func NewRegistryWithLimit(logger *slog.Logger, allowPlaintext bool, targets []Ta
 		return nil, errors.New("harpoon: registry limit must be positive")
 	}
 	registry := &Registry{
-		logger:         logger,
-		allowPlaintext: allowPlaintext,
-		limit:          limit,
-		targets:        make(map[string]Target, len(targets)),
-		ordered:        make([]Target, 0, len(targets)),
+		logger:            logger,
+		allowPlaintext:    allowPlaintext,
+		limit:             limit,
+		targets:           make(map[string]Target, len(targets)),
+		ordered:           make([]Target, 0, len(targets)),
+		targetURLKeys:     make(map[string]struct{}, len(targets)),
+		explainCacheLimit: defaultRedirectExplainCacheLimit,
+		explainCache:      make(map[string]redirectExplainCacheEntry),
+		explainCacheOrder: make([]string, 0, defaultRedirectExplainCacheLimit),
 	}
 	for _, target := range targets {
 		if err := registry.RegisterTarget(target); err != nil {
@@ -118,6 +151,8 @@ func (r *Registry) RegisterTarget(target Target) error {
 	}
 	r.targets[label] = cleanTarget
 	r.ordered = append(r.ordered, cleanTarget)
+	r.targetURLKeys[normalized.String()] = struct{}{}
+	r.clearExplainCacheLocked()
 	return nil
 }
 
@@ -205,8 +240,208 @@ func (r *Registry) AllowsURL(candidate *url.URL) bool {
 	return false
 }
 
+// ExplainBlockedRedirect classifies why a redirect target missed the allow list.
+func (r *Registry) ExplainBlockedRedirect(candidate *url.URL) *redirectMismatchDetails {
+	if r == nil || candidate == nil {
+		return nil
+	}
+	if candidate.Scheme == "" || candidate.Host == "" {
+		return &redirectMismatchDetails{Kind: redirectMismatchOther, Reason: "redirect target not in allow list"}
+	}
+	if hasTraversal(candidate.Path) {
+		return &redirectMismatchDetails{Kind: redirectMismatchOther, Reason: "redirect target not in allow list"}
+	}
+
+	candidateKey, err := normalizedURLKey(candidate)
+	if err != nil {
+		return &redirectMismatchDetails{Kind: redirectMismatchOther, Reason: "redirect target not in allow list"}
+	}
+	candidateMatch := analyzeRedirectURL(candidate)
+
+	r.mu.RLock()
+	if _, ok := r.targetURLKeys[candidateKey]; ok {
+		r.mu.RUnlock()
+		r.storeRedirectExplanation(candidateKey, nil)
+		return nil
+	}
+	if cached, ok := r.explainCache[candidateKey]; ok {
+		r.mu.RUnlock()
+		return cloneRedirectMismatchDetails(cached)
+	}
+
+	var pathMismatch *Target
+	var queryMismatch *Target
+	var hostMismatch *Target
+	hostMismatchCount := 0
+	var result *redirectMismatchDetails
+
+	for _, target := range r.ordered {
+		if target.BaseURL == nil {
+			continue
+		}
+		targetMatch := analyzeRedirectURL(target.BaseURL)
+		if targetMatch.host == candidateMatch.host &&
+			targetMatch.comparablePath == candidateMatch.comparablePath &&
+			targetMatch.query == candidateMatch.query &&
+			targetMatch.scheme != candidateMatch.scheme {
+			result = &redirectMismatchDetails{
+				Kind:           schemeMismatchKind(targetMatch.scheme, candidateMatch.scheme),
+				ExpectedURL:    target.BaseURL.String(),
+				ExpectedScheme: targetMatch.scheme,
+				ActualScheme:   candidateMatch.scheme,
+				Reason:         "redirect target not in allow list",
+			}
+			break
+		}
+
+		if pathMismatch == nil &&
+			targetMatch.host == candidateMatch.host &&
+			targetMatch.scheme == candidateMatch.scheme &&
+			targetMatch.query == candidateMatch.query &&
+			targetMatch.exactPath != candidateMatch.exactPath {
+			targetCopy := target
+			pathMismatch = &targetCopy
+		}
+
+		if queryMismatch == nil &&
+			targetMatch.host == candidateMatch.host &&
+			targetMatch.scheme == candidateMatch.scheme &&
+			targetMatch.comparablePath == candidateMatch.comparablePath &&
+			targetMatch.query != candidateMatch.query {
+			targetCopy := target
+			queryMismatch = &targetCopy
+		}
+
+		if targetMatch.host != candidateMatch.host &&
+			targetMatch.scheme == candidateMatch.scheme &&
+			targetMatch.comparablePath == candidateMatch.comparablePath &&
+			targetMatch.query == candidateMatch.query {
+			targetCopy := target
+			hostMismatch = &targetCopy
+			hostMismatchCount++
+		}
+	}
+	r.mu.RUnlock()
+
+	if result == nil && pathMismatch != nil {
+		result = &redirectMismatchDetails{
+			Kind:        redirectMismatchPath,
+			ExpectedURL: pathMismatch.BaseURL.String(),
+			Reason:      "redirect target not in allow list",
+		}
+	}
+	if result == nil && queryMismatch != nil {
+		result = &redirectMismatchDetails{
+			Kind:        redirectMismatchQuery,
+			ExpectedURL: queryMismatch.BaseURL.String(),
+			Reason:      "redirect target not in allow list",
+		}
+	}
+	if result == nil && hostMismatch != nil && hostMismatchCount == 1 {
+		result = &redirectMismatchDetails{
+			Kind:        redirectMismatchHost,
+			ExpectedURL: hostMismatch.BaseURL.String(),
+			Reason:      "redirect target not in allow list",
+		}
+	}
+	if result == nil {
+		result = &redirectMismatchDetails{
+			Kind:   redirectMismatchOther,
+			Reason: "redirect target not in allow list",
+		}
+	}
+	r.storeRedirectExplanation(candidateKey, result)
+	return result
+}
+
 func isHTTPS(u *url.URL) bool {
 	return strings.EqualFold(u.Scheme, "https")
+}
+
+type redirectURLMatch struct {
+	scheme         string
+	host           string
+	exactPath      string
+	comparablePath string
+	query          string
+}
+
+func analyzeRedirectURL(raw *url.URL) redirectURLMatch {
+	exactPath := raw.EscapedPath()
+	if exactPath == "" {
+		exactPath = "/"
+	}
+	return redirectURLMatch{
+		scheme:         strings.ToLower(raw.Scheme),
+		host:           strings.ToLower(raw.Host),
+		exactPath:      exactPath,
+		comparablePath: comparableRedirectPath(exactPath),
+		query:          raw.RawQuery,
+	}
+}
+
+func comparableRedirectPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	trimmed := strings.TrimRight(path, "/")
+	if trimmed == "" {
+		return "/"
+	}
+	return trimmed
+}
+
+func schemeMismatchKind(expectedScheme, actualScheme string) redirectMismatchKind {
+	switch {
+	case expectedScheme == "http" && actualScheme == "https":
+		return redirectMismatchSchemeHTTPToHTTPS
+	case expectedScheme == "https" && actualScheme == "http":
+		return redirectMismatchSchemeHTTPSToHTTP
+	default:
+		return redirectMismatchOther
+	}
+}
+
+func (r *Registry) storeRedirectExplanation(candidateKey string, details *redirectMismatchDetails) {
+	if r == nil || candidateKey == "" {
+		return
+	}
+	entry := redirectExplainCacheEntry{}
+	if details != nil {
+		entry.hasDetails = true
+		entry.details = *details
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.explainCache[candidateKey]; !exists {
+		r.explainCacheOrder = append(r.explainCacheOrder, candidateKey)
+		for len(r.explainCacheOrder) > r.effectiveExplainCacheLimit() {
+			evictedKey := r.explainCacheOrder[0]
+			r.explainCacheOrder = r.explainCacheOrder[1:]
+			delete(r.explainCache, evictedKey)
+		}
+	}
+	r.explainCache[candidateKey] = entry
+}
+
+func cloneRedirectMismatchDetails(entry redirectExplainCacheEntry) *redirectMismatchDetails {
+	if !entry.hasDetails {
+		return nil
+	}
+	details := entry.details
+	return &details
+}
+
+func (r *Registry) effectiveExplainCacheLimit() int {
+	if r == nil || r.explainCacheLimit <= 0 {
+		return defaultRedirectExplainCacheLimit
+	}
+	return r.explainCacheLimit
+}
+
+func (r *Registry) clearExplainCacheLocked() {
+	clear(r.explainCache)
+	r.explainCacheOrder = r.explainCacheOrder[:0]
 }
 
 func normalizeURL(raw *url.URL) (*url.URL, error) {

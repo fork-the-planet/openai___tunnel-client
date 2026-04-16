@@ -102,6 +102,98 @@ func TestRegistryPreservesDistinctEncodedPathAndQueryForms(t *testing.T) {
 	require.False(t, registry.AllowsURL(mustURL(t, "https://example.com/a/b?x=a+b")))
 }
 
+func TestRegistryExplainBlockedRedirectDetectsSchemeMismatch(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, []Target{
+		{
+			Label:   "oauth-auth-server-metadata-0",
+			BaseURL: mustURL(t, "https://example.com/.well-known/oauth-authorization-server/"),
+		},
+	})
+	require.NoError(t, err)
+
+	details := registry.ExplainBlockedRedirect(mustURL(t, "http://example.com/.well-known/oauth-authorization-server"))
+	require.NotNil(t, details)
+	require.Equal(t, redirectMismatchSchemeHTTPSToHTTP, details.Kind)
+	require.Equal(t, "https://example.com/.well-known/oauth-authorization-server/", details.ExpectedURL)
+	require.Equal(t, "https", details.ExpectedScheme)
+	require.Equal(t, "http", details.ActualScheme)
+}
+
+func TestRegistryExplainBlockedRedirectDetectsTrailingSlashPathMismatch(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, []Target{
+		{
+			Label:   "oauth-auth-server-metadata-0",
+			BaseURL: mustURL(t, "https://example.com/.well-known/oauth-authorization-server/"),
+		},
+	})
+	require.NoError(t, err)
+
+	details := registry.ExplainBlockedRedirect(mustURL(t, "https://example.com/.well-known/oauth-authorization-server"))
+	require.NotNil(t, details)
+	require.Equal(t, redirectMismatchPath, details.Kind)
+	require.Equal(t, "https://example.com/.well-known/oauth-authorization-server/", details.ExpectedURL)
+}
+
+func TestRegistryExplainBlockedRedirectCacheInvalidatesOnRegister(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, []Target{
+		{
+			Label:   "oauth-auth-server-metadata-0",
+			BaseURL: mustURL(t, "https://example.com/.well-known/oauth-authorization-server/"),
+		},
+	})
+	require.NoError(t, err)
+
+	candidate := mustURL(t, "http://example.com/.well-known/oauth-authorization-server")
+
+	first := registry.ExplainBlockedRedirect(candidate)
+	require.NotNil(t, first)
+	require.Equal(t, redirectMismatchSchemeHTTPSToHTTP, first.Kind)
+
+	err = registry.RegisterTarget(Target{
+		Label:   "oauth-auth-server-metadata-http-0",
+		BaseURL: mustURL(t, "http://example.com/.well-known/oauth-authorization-server"),
+	})
+	require.NoError(t, err)
+
+	second := registry.ExplainBlockedRedirect(candidate)
+	require.Nil(t, second)
+}
+
+func TestRegistryExplainBlockedRedirectCacheEvictsOldEntries(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, []Target{
+		{
+			Label:   "oauth-auth-server-metadata-0",
+			BaseURL: mustURL(t, "https://example.com/.well-known/oauth-authorization-server/"),
+		},
+	})
+	require.NoError(t, err)
+	registry.explainCacheLimit = 2
+
+	candidateA := mustURL(t, "http://example.com/.well-known/oauth-authorization-server?a=1")
+	candidateB := mustURL(t, "http://example.com/.well-known/oauth-authorization-server?a=2")
+	candidateC := mustURL(t, "http://example.com/.well-known/oauth-authorization-server?a=3")
+
+	require.NotNil(t, registry.ExplainBlockedRedirect(candidateA))
+	require.NotNil(t, registry.ExplainBlockedRedirect(candidateB))
+	require.NotNil(t, registry.ExplainBlockedRedirect(candidateC))
+
+	require.Len(t, registry.explainCache, 2)
+	keyA, err := normalizedURLKey(candidateA)
+	require.NoError(t, err)
+	keyB, err := normalizedURLKey(candidateB)
+	require.NoError(t, err)
+	keyC, err := normalizedURLKey(candidateC)
+	require.NoError(t, err)
+
+	_, hasA := registry.explainCache[keyA]
+	_, hasB := registry.explainCache[keyB]
+	_, hasC := registry.explainCache[keyC]
+	require.False(t, hasA)
+	require.True(t, hasB)
+	require.True(t, hasC)
+	require.Equal(t, []string{keyB, keyC}, registry.explainCacheOrder)
+}
+
 func TestSummarizeTargets(t *testing.T) {
 	urlA, err := url.Parse("https://example.com/base/")
 	require.NoError(t, err)

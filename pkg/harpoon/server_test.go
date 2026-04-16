@@ -1,6 +1,7 @@
 package harpoon
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -491,6 +492,99 @@ func TestCallTargetRedirectLimit(t *testing.T) {
 		MaxRedirects: &maxRedirects,
 	})
 	require.Error(t, err)
+}
+
+func TestCallTargetRedirectSchemeMismatchIncludesExplicitMessage(t *testing.T) {
+	metadataTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example.com/.well-known/oauth-authorization-server", http.StatusFound)
+	}))
+	defer metadataTarget.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		Targets: []config.HarpoonTarget{
+			{Label: "primary", BaseURL: mustParseURL(t, metadataTarget.URL)},
+			{Label: "oauth-auth-server-metadata-0", BaseURL: mustParseURL(t, "https://example.com/.well-known/oauth-authorization-server/")},
+		},
+	}
+	client := newTestServer(t, cfg)
+
+	_, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "primary",
+		Method: http.MethodGet,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "redirect blocked: scheme mismatch (allowlisted https, redirected to http)")
+}
+
+func TestCallTargetRedirectHostMismatchStaysGeneric(t *testing.T) {
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("blocked"))
+	}))
+	defer blocked.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, blocked.URL+"/escape", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		Targets: []config.HarpoonTarget{{
+			Label:   "primary",
+			BaseURL: mustParseURL(t, redirector.URL),
+		}},
+	}
+	client := newTestServer(t, cfg)
+
+	_, err := client.callTarget(context.Background(), callTargetRequest{
+		Label:  "primary",
+		Method: http.MethodGet,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "redirect blocked")
+	require.NotContains(t, err.Error(), "scheme mismatch")
+	require.NotContains(t, err.Error(), "host mismatch")
+}
+
+func TestCallTargetRedirectMismatchFieldsAreLogged(t *testing.T) {
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
+	metadataTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example.com/.well-known/oauth-authorization-server", http.StatusFound)
+	}))
+	defer metadataTarget.Close()
+
+	registry, err := NewRegistry(logger, true, []Target{
+		{Label: "primary", BaseURL: mustParseURL(t, metadataTarget.URL)},
+		{Label: "oauth-auth-server-metadata-0", BaseURL: mustParseURL(t, "https://example.com/.well-known/oauth-authorization-server/")},
+	})
+	require.NoError(t, err)
+
+	server, err := NewServer(&config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+	}, registry, NewCallBuffer(), logger)
+	require.NoError(t, err)
+
+	_, err = server.callTarget(context.Background(), callTargetRequest{
+		Label:  "primary",
+		Method: http.MethodGet,
+	})
+	require.Error(t, err)
+
+	logOutput := logBuffer.String()
+	require.Contains(t, logOutput, "msg=\"harpoon request failed\"")
+	require.Contains(t, logOutput, "redirect_mismatch_kind=scheme_mismatch_https_to_http")
+	require.Contains(t, logOutput, "redirect_expected_url=https://example.com/.well-known/oauth-authorization-server/")
+	require.Contains(t, logOutput, "redirect_expected_scheme=https")
+	require.Contains(t, logOutput, "redirect_actual_scheme=http")
+	require.Contains(t, logOutput, "redirect_reason=\"redirect target not in allow list\"")
 }
 
 func TestIntegrationRedirectTruncationWithExactTargets(t *testing.T) {

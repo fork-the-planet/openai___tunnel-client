@@ -395,6 +395,18 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 				slog.String("redirect_url", toolErr.redirectURL),
 				slog.String("redirect_reason", toolErr.reason),
 			)
+			if toolErr.redirectMismatchKind != "" {
+				logFields = append(logFields, slog.String("redirect_mismatch_kind", string(toolErr.redirectMismatchKind)))
+			}
+			if toolErr.redirectExpectedURL != "" {
+				logFields = append(logFields, slog.String("redirect_expected_url", toolErr.redirectExpectedURL))
+			}
+			if toolErr.redirectExpectedScheme != "" {
+				logFields = append(logFields, slog.String("redirect_expected_scheme", toolErr.redirectExpectedScheme))
+			}
+			if toolErr.redirectActualScheme != "" {
+				logFields = append(logFields, slog.String("redirect_actual_scheme", toolErr.redirectActualScheme))
+			}
 		}
 		logger.InfoContext(ctx, "harpoon request failed",
 			logFields...,
@@ -614,7 +626,7 @@ func (s *Server) redirectPolicy(label string, maxRedirects int, followRedirects 
 			return newToolError(label, "redirect blocked")
 		}
 		if !s.registry.AllowsURL(req.URL) {
-			return newRedirectBlockedError(label, req.URL.String())
+			return newRedirectBlockedError(label, req.URL.String(), s.registry.ExplainBlockedRedirect(req.URL))
 		}
 		return nil
 	}
@@ -807,23 +819,41 @@ func applyCallTargetOutputSchemaBounds(schema *jsonschema.Schema, cfg *config.Ha
 }
 
 type toolError struct {
-	label       string
-	msg         string
-	redirectURL string
-	reason      string
+	label                  string
+	msg                    string
+	redirectURL            string
+	reason                 string
+	redirectMismatchKind   redirectMismatchKind
+	redirectExpectedURL    string
+	redirectExpectedScheme string
+	redirectActualScheme   string
 }
 
 func newToolError(label, msg string) *toolError {
 	return &toolError{label: label, msg: msg}
 }
 
-func newRedirectBlockedError(label, redirectURL string) *toolError {
-	return &toolError{
+func newRedirectBlockedError(label, redirectURL string, details *redirectMismatchDetails) *toolError {
+	err := &toolError{
 		label:       label,
 		msg:         "redirect blocked",
 		redirectURL: redirectURL,
 		reason:      "redirect target not in allow list",
 	}
+	if details == nil {
+		return err
+	}
+	err.redirectMismatchKind = details.Kind
+	err.redirectExpectedURL = details.ExpectedURL
+	err.redirectExpectedScheme = details.ExpectedScheme
+	err.redirectActualScheme = details.ActualScheme
+	if details.Reason != "" {
+		err.reason = details.Reason
+	}
+	if details.Kind == redirectMismatchSchemeHTTPToHTTPS || details.Kind == redirectMismatchSchemeHTTPSToHTTP {
+		err.msg = fmt.Sprintf("redirect blocked: scheme mismatch (allowlisted %s, redirected to %s)", details.ExpectedScheme, details.ActualScheme)
+	}
+	return err
 }
 
 func (e *toolError) Error() string {
@@ -858,6 +888,9 @@ func classifyRequestError(err error) string {
 	}
 	var te *toolError
 	if errors.As(err, &te) {
+		if te.redirectMismatchKind == redirectMismatchSchemeHTTPToHTTPS || te.redirectMismatchKind == redirectMismatchSchemeHTTPSToHTTP {
+			return te.msg
+		}
 		if te.redirectURL != "" {
 			return fmt.Sprintf("%s: %s not in allow list", te.msg, te.redirectURL)
 		}
