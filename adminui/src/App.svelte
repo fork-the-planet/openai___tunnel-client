@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { fetchText } from "./lib/api";
+  import { fetchTextResponse } from "./lib/api";
+  import { healthBadgeFromResponse, readyBadgeFromResponse } from "./lib/badges";
   import type { BadgeKind } from "./lib/types";
   import OverviewPanel from "./components/OverviewPanel.svelte";
   import MetricsPanel from "./components/MetricsPanel.svelte";
@@ -43,8 +44,7 @@
 
   async function refreshHealth(): Promise<void> {
     try {
-      const text = (await fetchText("/healthz")).trim();
-      healthBadge = { kind: "ok", text: `Health: ${text || "ok"}` };
+      healthBadge = healthBadgeFromResponse(await fetchTextResponse("/healthz"));
     } catch {
       healthBadge = { kind: "bad", text: "Health: error" };
     }
@@ -52,8 +52,7 @@
 
   async function refreshReady(): Promise<void> {
     try {
-      const text = (await fetchText("/readyz")).trim();
-      readyBadge = { kind: "ok", text: `Ready: ${text || "ok"}` };
+      readyBadge = readyBadgeFromResponse(await fetchTextResponse("/readyz"));
     } catch {
       readyBadge = { kind: "bad", text: "Ready: error" };
     }

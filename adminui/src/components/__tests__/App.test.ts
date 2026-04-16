@@ -3,10 +3,23 @@ import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import App from "../../App.svelte";
 import { jsonResponse, mockFetch, textResponse } from "../../test/mockFetch";
 
-function installAppFetchMock() {
+function installAppFetchMock({
+  healthStatus = 200,
+  healthText = "ok",
+  readyStatus = 200,
+  readyText = "ok",
+}: {
+  healthStatus?: number;
+  healthText?: string;
+  readyStatus?: number;
+  readyText?: string;
+} = {}) {
   return mockFetch(async (url) => {
-    if (url.endsWith("/healthz") || url.endsWith("/readyz")) {
-      return textResponse("ok");
+    if (url.endsWith("/healthz")) {
+      return textResponse(healthText, healthStatus);
+    }
+    if (url.endsWith("/readyz")) {
+      return textResponse(readyText, readyStatus);
     }
     if (url.endsWith("/metrics")) {
       return textResponse("commands_poll_cycles_total 1\n");
