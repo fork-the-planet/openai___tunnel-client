@@ -11,12 +11,16 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
+	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
+	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
@@ -74,6 +78,7 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	files := readTarGzForTest(t, rec.Body.Bytes())
 	require.Contains(t, files, "manifest.json")
 	require.Contains(t, files, "README.txt")
+	require.Contains(t, files, runtimeSnapshotFile)
 	require.Contains(t, files, "tunnel-client.logs.ndjson")
 	require.Contains(t, files, metricsSnapshotFile)
 	require.Contains(t, files, "admin/status.json")
@@ -93,11 +98,16 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Equal(t, 10, manifest.LogBufferCapacity)
 	require.Equal(t, len(files[metricsSnapshotFile]), manifest.MetricsBytes)
 	require.Contains(t, manifest.Files, metricsSnapshotFile)
+	require.Contains(t, manifest.Files, runtimeSnapshotFile)
 	require.Contains(t, manifest.Runtime.Argv, "--control-plane.api-key=env:OPENAI_TUNNEL_KEY_PROD")
 	require.Equal(t, "[REDACTED]", manifest.Runtime.Environment["OPENAI_TUNNEL_KEY_PROD"])
 	require.Contains(t, manifest.Files, "admin/status.json")
 	require.Contains(t, manifest.Files, "admin/system.json")
 	require.Contains(t, manifest.Files, "admin/oauth.json")
+	require.Contains(t, files[runtimeSnapshotFile], "argv:")
+	require.Contains(t, files[runtimeSnapshotFile], "environment:")
+	require.Contains(t, files[runtimeSnapshotFile], "OPENAI_TUNNEL_KEY_PROD: '[REDACTED]'")
+	require.NotContains(t, files[runtimeSnapshotFile], "sk-proj-runtime-secret123456")
 
 	var status statusResponse
 	require.NoError(t, json.Unmarshal([]byte(files["admin/status.json"]), &status))
@@ -249,6 +259,121 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 	require.NotContains(t, got.Environment, "should-not-be-exported-because-not-relevant")
 }
 
+func TestRuntimeSnapshotProviderIncludesRedactedEffectiveConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		ControlPlane: config.ControlPlaneConfig{
+			BaseURL:             mustURLForTest(t, "https://api.example"),
+			TunnelID:            types.TunnelID("tunnel_0123456789abcdef0123456789abcdef"),
+			APIKey:              "sk-proj-control-secret123456",
+			MaxInFlightRequests: 20,
+			PollTimeout:         30 * time.Second,
+			ExtraHeaders:        map[string]string{"X-Tunnel-Shard-Token": "secret-shard-token"},
+		},
+		Logging: config.LoggingConfig{
+			Level:  slog.LevelInfo,
+			Format: config.LogFormatJSON,
+			File:   "/tmp/tunnel-client.log",
+		},
+		Health:  config.HealthConfig{ListenAddr: "127.0.0.1:8080"},
+		Process: config.ProcessConfig{PIDFile: "/tmp/tunnel-client.pid"},
+		MCP: config.MCPConfig{
+			ServerURL:             mustURLForTest(t, "https://alice:secret@mcp.example/mcp?access_token=secret-token"),
+			TransportKind:         config.MCPTransportHTTPStreamable,
+			ConnectionMaxTTL:      time.Minute,
+			MaxConcurrentRequests: 5,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     mustURLForTest(t, "https://alice:secret@mcp.example/mcp?access_token=secret-token"),
+				},
+			},
+		},
+		AdminUI:     config.AdminUIConfig{LogBufferEvents: 10},
+		ProxyHealth: config.ProxyHealthConfig{CheckInterval: time.Minute},
+		Runtime:     config.RuntimeConfig{ConfigFile: "/tmp/tunnel-client.yaml"},
+	}
+
+	runtime := NewRuntimeSnapshotProvider(cfg)()
+	archive, err := buildLogsArchive(nil, time.Now().UTC(), time.Minute, 10, runtime, metricsSnapshot{}, logExportAdminSnapshots{})
+	require.NoError(t, err)
+
+	files := readTarGzForTest(t, archive)
+	var payload map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(files[runtimeSnapshotFile]), &payload))
+	require.Contains(t, payload, "effective_config")
+	require.NotContains(t, files[runtimeSnapshotFile], "sk-proj-control-secret123456")
+	require.NotContains(t, files[runtimeSnapshotFile], "secret-token")
+	require.NotContains(t, files[runtimeSnapshotFile], "secret-shard-token")
+	require.Contains(t, files[runtimeSnapshotFile], "api_key: '[REDACTED]'")
+	require.Contains(t, files[runtimeSnapshotFile], "https://mcp.example/mcp")
+}
+
+func TestRuntimeSnapshotProviderIncludesRedactedActualConfigSnapshot(t *testing.T) {
+	t.Parallel()
+
+	configPath := "/tmp/tunnel-client.yaml"
+	configContents := []byte(`
+config_version: 1
+control_plane:
+  base_url: https://alice:secret@api.example/v1?access_token=control-token
+  tunnel_id: tunnel_0123456789abcdef0123456789abcdef
+  api_key: sk-proj-config-secret123456
+  extra_headers:
+    Authorization: Bearer config-bearer
+    X-Tunnel-Shard-Token: config-shard-token
+    X-Debug: safe-value
+mcp:
+  server_urls:
+    - channel: main
+      url: https://bob:secret@mcp.example/mcp?code=mcp-code
+      client_cert: /tmp/client.crt
+      client_key: /tmp/client.key
+  commands:
+    - channel: tools
+      command: python -m tools --api-key sk-proj-command-secret123456
+`)
+	cfg := &config.Config{
+		Runtime: config.RuntimeConfig{
+			ConfigFile:         configPath,
+			ConfigFileContents: configContents,
+		},
+	}
+
+	runtime := NewRuntimeSnapshotProvider(cfg)()
+	archive, err := buildLogsArchive(nil, time.Now().UTC(), time.Minute, 10, runtime, metricsSnapshot{}, logExportAdminSnapshots{})
+	require.NoError(t, err)
+
+	files := readTarGzForTest(t, archive)
+	var payload map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(files[runtimeSnapshotFile]), &payload))
+	require.Contains(t, payload, "actual_config")
+
+	runtimeYAML := files[runtimeSnapshotFile]
+	require.Contains(t, runtimeYAML, "actual_config:")
+	require.Contains(t, runtimeYAML, "path: /tmp/tunnel-client.yaml")
+	require.Contains(t, runtimeYAML, "base_url: https://api.example/v1")
+	require.Contains(t, runtimeYAML, "url: https://mcp.example/mcp")
+	require.Contains(t, runtimeYAML, "client_cert: /tmp/client.crt")
+	require.Contains(t, runtimeYAML, "X-Debug: safe-value")
+	require.Contains(t, runtimeYAML, "api_key: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "Authorization: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Tunnel-Shard-Token: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "client_key: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "python -m tools --api-key sk-REDACTED")
+	require.NotContains(t, runtimeYAML, "alice:secret")
+	require.NotContains(t, runtimeYAML, "bob:secret")
+	require.NotContains(t, runtimeYAML, "control-token")
+	require.NotContains(t, runtimeYAML, "mcp-code")
+	require.NotContains(t, runtimeYAML, "config-secret")
+	require.NotContains(t, runtimeYAML, "config-bearer")
+	require.NotContains(t, runtimeYAML, "config-shard-token")
+	require.NotContains(t, runtimeYAML, "client.key")
+	require.NotContains(t, runtimeYAML, "command-secret")
+}
+
 func TestHandleLogsExportReturnsInternalServerErrorWhenMetricsSnapshotFails(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +411,13 @@ func TestNewMetricsSnapshotProviderRejectsUnexpectedStatus(t *testing.T) {
 
 	_, err := provider()
 	require.EqualError(t, err, "capture metrics snapshot: unexpected status 503")
+}
+
+func mustURLForTest(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+	return parsed
 }
 
 func readTarGzForTest(t *testing.T, data []byte) map[string]string {

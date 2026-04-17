@@ -12,12 +12,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 )
 
 const (
 	defaultLogExportWindow = 30 * time.Minute
 	maxLogExportWindow     = 24 * time.Hour
 	metricsSnapshotFile    = "tunnel-client.metrics.prom"
+	runtimeSnapshotFile    = "tunnel-client.runtime.yaml"
 )
 
 type logExportManifest struct {
@@ -34,8 +40,15 @@ type logExportManifest struct {
 }
 
 type logExportRuntime struct {
-	Argv        []string          `json:"argv"`
-	Environment map[string]string `json:"environment"`
+	Argv            []string                     `json:"argv" yaml:"argv"`
+	Environment     map[string]string            `json:"environment" yaml:"environment"`
+	ActualConfig    *logExportConfigFileSnapshot `json:"actual_config,omitempty" yaml:"actual_config,omitempty"`
+	EffectiveConfig any                          `json:"effective_config,omitempty" yaml:"effective_config,omitempty"`
+}
+
+type logExportConfigFileSnapshot struct {
+	Path     string `json:"path" yaml:"path"`
+	Contents any    `json:"contents,omitempty" yaml:"contents,omitempty"`
 }
 
 type metricsSnapshot struct {
@@ -58,9 +71,12 @@ type MetricsSnapshotProvider func() (metricsSnapshot, error)
 // AdminSnapshotProvider returns the current support-facing admin API snapshots for export bundles.
 type AdminSnapshotProvider func() logExportAdminSnapshots
 
-func NewRuntimeSnapshotProvider() RuntimeSnapshotProvider {
+func NewRuntimeSnapshotProvider(cfg *config.Config) RuntimeSnapshotProvider {
 	return func() logExportRuntime {
-		return collectLogExportRuntime(os.Args, os.Environ())
+		runtime := collectLogExportRuntime(os.Args, os.Environ())
+		runtime.ActualConfig = buildConfigFileSnapshot(cfg)
+		runtime.EffectiveConfig = buildEffectiveConfigSnapshot(cfg)
+		return runtime
 	}
 }
 
@@ -168,6 +184,7 @@ func buildLogsArchive(
 	files := []string{
 		"manifest.json",
 		"README.txt",
+		runtimeSnapshotFile,
 		"tunnel-client.logs.ndjson",
 	}
 	if snapshot.Filename != "" {
@@ -190,7 +207,10 @@ func buildLogsArchive(
 	if err := writeTarJSON(tw, "manifest.json", manifest); err != nil {
 		return nil, err
 	}
-	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes redacted argv plus tunnel-client-related environment variables and env: references discovered in argv.\nThe Prometheus snapshot is captured at export time from /metrics when available.\nadmin/status.json, admin/system.json, and admin/oauth.json mirror the current admin API snapshots at export time.\n")); err != nil {
+	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes the archive index and redacted runtime metadata.\ntunnel-client.runtime.yaml includes redacted argv, relevant environment variables, the startup YAML config file when present, and the effective startup config.\nThe Prometheus snapshot is captured at export time from /metrics when available.\nadmin/status.json, admin/system.json, and admin/oauth.json mirror the current admin API snapshots at export time.\n")); err != nil {
+		return nil, err
+	}
+	if err := writeTarYAML(tw, runtimeSnapshotFile, runtime); err != nil {
 		return nil, err
 	}
 
@@ -396,9 +416,253 @@ func redactRuntimeEnv(key string, value string) string {
 	return redactString(value)
 }
 
+func buildConfigFileSnapshot(cfg *config.Config) *logExportConfigFileSnapshot {
+	if cfg == nil || cfg.Runtime.ConfigFile == "" || len(cfg.Runtime.ConfigFileContents) == 0 {
+		return nil
+	}
+
+	var contents any
+	dec := yaml.NewDecoder(bytes.NewReader(cfg.Runtime.ConfigFileContents))
+	if err := dec.Decode(&contents); err != nil {
+		return &logExportConfigFileSnapshot{
+			Path: redactString(cfg.Runtime.ConfigFile),
+			Contents: map[string]any{
+				"parse_error": redactString(err.Error()),
+			},
+		}
+	}
+
+	return &logExportConfigFileSnapshot{
+		Path:     redactString(cfg.Runtime.ConfigFile),
+		Contents: redactConfigFileValue("", contents),
+	}
+}
+
+func redactConfigFileValue(key string, v any) any {
+	if isSensitiveRuntimeKey(key) {
+		if s, ok := v.(string); ok && isSafeReferenceValue(s) {
+			return redactSnapshotString(s)
+		}
+		return "[REDACTED]"
+	}
+
+	switch t := v.(type) {
+	case string:
+		return redactSnapshotString(t)
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, item := range t {
+			out = append(out, redactConfigFileValue("", item))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, value := range t {
+			out[k] = redactConfigFileValue(k, value)
+		}
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(t))
+		for k, value := range t {
+			keyString := fmt.Sprint(k)
+			out[keyString] = redactConfigFileValue(keyString, value)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
+	if cfg == nil {
+		return nil
+	}
+
+	out := map[string]any{
+		"source": map[string]any{
+			"config_file": redactString(cfg.Runtime.ConfigFile),
+		},
+		"control_plane": map[string]any{
+			"base_url":              urlForSnapshot(cfg.ControlPlane.BaseURL),
+			"tunnel_id":             cfg.ControlPlane.TunnelID.String(),
+			"api_key":               redactedPresence(cfg.ControlPlane.APIKey),
+			"max_inflight_requests": cfg.ControlPlane.MaxInFlightRequests,
+			"poll_timeout":          cfg.ControlPlane.PollTimeout.String(),
+			"extra_headers":         redactStringMap(cfg.ControlPlane.ExtraHeaders),
+			"http_proxy":            urlForSnapshot(cfg.ControlPlane.HTTPProxy),
+			"http_proxy_source":     string(cfg.ControlPlane.HTTPProxySource),
+			"poll_backoff_min":      durationForSnapshot(cfg.ControlPlane.PollBackoffMin),
+			"poll_backoff_max":      durationForSnapshot(cfg.ControlPlane.PollBackoffMax),
+		},
+		"log": map[string]any{
+			"level":           cfg.Logging.Level.String(),
+			"format":          cfg.Logging.Format.String(),
+			"file":            redactString(cfg.Logging.File),
+			"http_raw_unsafe": cfg.Logging.HTTPRawUnsafe,
+		},
+		"health": map[string]any{
+			"listen_addr": cfg.Health.ListenAddr,
+			"url_file":    redactString(cfg.Health.URLFile),
+		},
+		"process": map[string]any{
+			"pid_file": redactString(cfg.Process.PIDFile),
+		},
+		"admin_ui": map[string]any{
+			"allow_remote":      cfg.AdminUI.AllowRemote,
+			"open_browser":      cfg.AdminUI.OpenBrowser,
+			"log_buffer_events": cfg.AdminUI.LogBufferEvents,
+		},
+		"mcp": map[string]any{
+			"server_url":              urlForSnapshot(cfg.MCP.ServerURL),
+			"command":                 redactString(cfg.MCP.Command),
+			"command_args":            redactStringSlice(cfg.MCP.CommandArgs),
+			"transport":               string(cfg.MCP.TransportKind),
+			"client_certificate":      clientCertificateSnapshot(cfg.MCP.ClientCertificate),
+			"connection_max_ttl":      cfg.MCP.ConnectionMaxTTL.String(),
+			"max_concurrent_requests": cfg.MCP.MaxConcurrentRequests,
+			"http_proxy":              urlForSnapshot(cfg.MCP.HTTPProxy),
+			"http_proxy_source":       string(cfg.MCP.HTTPProxySource),
+			"channel_bindings":        mcpBindingSnapshots(cfg.MCP.ChannelBindings),
+		},
+		"harpoon": map[string]any{
+			"allow_plaintext_http":  cfg.Harpoon.AllowPlaintextHTTP,
+			"max_response_bytes":    cfg.Harpoon.MaxResponseBytes,
+			"max_redirects":         cfg.Harpoon.MaxRedirects,
+			"additional_transports": harpoonTransportsSnapshot(cfg.Harpoon.AdditionalTransports),
+			"targets":               harpoonTargetSnapshots(cfg.Harpoon.Targets),
+			"capture_payloads":      cfg.Harpoon.CapturePayloads,
+			"host_classifier": map[string]any{
+				"include_suffix":   cfg.Harpoon.HostClassifier.IncludeSuffix,
+				"include_regex":    cfg.Harpoon.HostClassifier.IncludeRegex,
+				"include_loopback": cfg.Harpoon.HostClassifier.IncludeLoopback,
+				"include_private":  cfg.Harpoon.HostClassifier.IncludePrivate,
+			},
+			"http_proxy":        urlForSnapshot(cfg.Harpoon.HTTPProxy),
+			"http_proxy_source": string(cfg.Harpoon.HTTPProxySource),
+		},
+		"proxy": map[string]any{
+			"check_interval": cfg.ProxyHealth.CheckInterval.String(),
+		},
+	}
+	if cfg.TLS != nil {
+		out["tls"] = map[string]any{
+			"ca_bundle": redactString(cfg.TLS.Path),
+		}
+	}
+	return out
+}
+
+func urlForSnapshot(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return redactSnapshotString(u.String())
+}
+
+func durationForSnapshot(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return d.String()
+}
+
+func redactedPresence(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "[REDACTED]"
+}
+
+func redactStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		if isSensitiveRuntimeKey(key) {
+			out[key] = "[REDACTED]"
+			continue
+		}
+		out[key] = redactString(value)
+	}
+	return out
+}
+
+func redactStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, redactString(value))
+	}
+	return out
+}
+
+func clientCertificateSnapshot(cert *tlsconfig.ClientCertificate) any {
+	if cert == nil {
+		return nil
+	}
+	return map[string]any{
+		"cert_path": redactString(cert.CertPath),
+		"key_path":  redactedPresence(cert.KeyPath),
+	}
+}
+
+func mcpBindingSnapshots(bindings []config.MCPChannelBinding) []map[string]any {
+	if len(bindings) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(bindings))
+	for _, binding := range bindings {
+		snapshot := map[string]any{
+			"channel":            binding.Channel.String(),
+			"transport":          string(binding.TransportKind),
+			"server_url":         urlForSnapshot(binding.ServerURL),
+			"command":            redactString(binding.Command),
+			"command_args":       redactStringSlice(binding.CommandArgs),
+			"client_certificate": clientCertificateSnapshot(binding.ClientCertificate),
+			"http_proxy":         urlForSnapshot(binding.HTTPProxy),
+			"http_proxy_source":  string(binding.HTTPProxySource),
+		}
+		out = append(out, snapshot)
+	}
+	return out
+}
+
+func harpoonTransportsSnapshot(transports []config.HarpoonTransportKind) []string {
+	if len(transports) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(transports))
+	for _, transport := range transports {
+		out = append(out, string(transport))
+	}
+	return out
+}
+
+func harpoonTargetSnapshots(targets []config.HarpoonTarget) []map[string]string {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]map[string]string, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, map[string]string{
+			"label":       target.Label,
+			"description": redactString(target.Description),
+			"base_url":    urlForSnapshot(target.BaseURL),
+		})
+	}
+	return out
+}
+
 func isReferenceValue(value string) bool {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	return strings.HasPrefix(lower, "env:") || strings.HasPrefix(lower, "file:")
+}
+
+func isSafeReferenceValue(value string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "env:")
 }
 
 func isSensitiveRuntimeKey(key string) bool {
@@ -445,6 +709,14 @@ func writeTarJSON(tw *tar.Writer, name string, v any) error {
 		return fmt.Errorf("marshal %s: %w", name, err)
 	}
 	data = append(data, '\n')
+	return writeTarFile(tw, name, data)
+}
+
+func writeTarYAML(tw *tar.Writer, name string, v any) error {
+	data, err := yaml.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", name, err)
+	}
 	return writeTarFile(tw, name, data)
 }
 

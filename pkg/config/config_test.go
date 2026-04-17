@@ -191,6 +191,201 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	}
 }
 
+func TestLoadUsesYAMLConfigWhenFlagsAndEnvUnset(t *testing.T) {
+	configPath := writeTempConfigFile(t, `
+config_version: 1
+control_plane:
+  base_url: https://yaml-control.example
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: env:YAML_CONTROL_PLANE_API_KEY
+  max_inflight_requests: 17
+  poll_timeout: 55s
+  extra_headers:
+    X-Debug-Mode: yaml
+log:
+  level: warn
+  format: json
+  file: /tmp/yaml-log.ndjson
+  http_raw_unsafe: true
+health:
+  listen_addr: 127.0.0.1:9090
+  url_file: /tmp/yaml-health-url
+admin_ui:
+  allow_remote: true
+  open_browser: true
+  log_buffer_events: 321
+process:
+  pid_file: /tmp/yaml.pid
+mcp:
+  server_urls:
+    - channel: main
+      url: https://yaml-mcp.example/mcp
+  commands:
+    - channel: tools
+      command: python -m tools
+  connection_max_ttl: 2m
+  max_concurrent_requests: 9
+harpoon:
+  targets:
+    - label: auth
+      url: https://auth.example
+      description: Auth server
+  additional_transports:
+    - http-streamable
+  capture_payloads: true
+proxy:
+  check_interval: 45s
+`)
+
+	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
+		"YAML_CONTROL_PLANE_API_KEY": "yaml-control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Runtime.ConfigFile != configPath {
+		t.Fatalf("expected config file %q, got %q", configPath, cfg.Runtime.ConfigFile)
+	}
+	if !strings.Contains(string(cfg.Runtime.ConfigFileContents), "yaml-control.example") {
+		t.Fatalf("expected runtime config file contents to contain startup YAML")
+	}
+	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://yaml-control.example" {
+		t.Fatalf("unexpected control plane base url: %v", cfg.ControlPlane.BaseURL)
+	}
+	if cfg.ControlPlane.TunnelID != "tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.APIKey != "yaml-control-key" {
+		t.Fatalf("expected resolved YAML control-plane API key, got %q", cfg.ControlPlane.APIKey)
+	}
+	if cfg.ControlPlane.MaxInFlightRequests != 17 {
+		t.Fatalf("unexpected max in-flight requests: %d", cfg.ControlPlane.MaxInFlightRequests)
+	}
+	if cfg.ControlPlane.PollTimeout != 55*time.Second {
+		t.Fatalf("unexpected poll timeout: %s", cfg.ControlPlane.PollTimeout)
+	}
+	if cfg.ControlPlane.ExtraHeaders["X-Debug-Mode"] != "yaml" {
+		t.Fatalf("unexpected extra headers: %#v", cfg.ControlPlane.ExtraHeaders)
+	}
+	if cfg.Logging.Level != slog.LevelWarn || cfg.Logging.Format != LogFormatJSON || cfg.Logging.File != "/tmp/yaml-log.ndjson" || !cfg.Logging.HTTPRawUnsafe {
+		t.Fatalf("unexpected logging config: %#v", cfg.Logging)
+	}
+	if cfg.Health.ListenAddr != "127.0.0.1:9090" || cfg.Health.URLFile != "/tmp/yaml-health-url" {
+		t.Fatalf("unexpected health config: %#v", cfg.Health)
+	}
+	if !cfg.AdminUI.AllowRemote || !cfg.AdminUI.OpenBrowser || cfg.AdminUI.LogBufferEvents != 321 {
+		t.Fatalf("unexpected admin UI config: %#v", cfg.AdminUI)
+	}
+	if cfg.Process.PIDFile != "/tmp/yaml.pid" {
+		t.Fatalf("unexpected pid file: %s", cfg.Process.PIDFile)
+	}
+	if cfg.MCP.ServerURL == nil || cfg.MCP.ServerURL.String() != "https://yaml-mcp.example/mcp" {
+		t.Fatalf("unexpected main MCP server URL: %v", cfg.MCP.ServerURL)
+	}
+	if cfg.MCP.ConnectionMaxTTL != 2*time.Minute || cfg.MCP.MaxConcurrentRequests != 9 {
+		t.Fatalf("unexpected MCP limits: ttl=%s max=%d", cfg.MCP.ConnectionMaxTTL, cfg.MCP.MaxConcurrentRequests)
+	}
+	if len(cfg.MCP.ChannelBindings) != 2 {
+		t.Fatalf("expected two MCP channel bindings, got %d", len(cfg.MCP.ChannelBindings))
+	}
+	if tools := cfg.MCP.ChannelBindingFor(types.Channel("tools")); tools == nil || tools.Command != "python -m tools" {
+		t.Fatalf("expected tools stdio binding, got %#v", tools)
+	}
+	if len(cfg.Harpoon.Targets) != 1 || cfg.Harpoon.Targets[0].Label != "auth" {
+		t.Fatalf("unexpected harpoon targets: %#v", cfg.Harpoon.Targets)
+	}
+	if !cfg.Harpoon.AdditionalTransportEnabled(HarpoonTransportHTTPStreamable) || !cfg.Harpoon.CapturePayloads {
+		t.Fatalf("unexpected harpoon config: %#v", cfg.Harpoon)
+	}
+	if cfg.ProxyHealth.CheckInterval != 45*time.Second {
+		t.Fatalf("unexpected proxy check interval: %s", cfg.ProxyHealth.CheckInterval)
+	}
+}
+
+func TestLoadPrecedenceFlagsEnvYAMLDefaults(t *testing.T) {
+	configPath := writeTempConfigFile(t, `
+control_plane:
+  base_url: https://yaml-control.example
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: yaml-control-key
+mcp:
+  server_urls:
+    - channel: main
+      url: https://yaml-mcp.example/mcp
+`)
+
+	cfg, err := Load([]string{
+		"--config", configPath,
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "https://flag-mcp.example/mcp",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_BASE_URL": "https://env-control.example",
+		"CONTROL_PLANE_API_KEY":  "env-control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://env-control.example" {
+		t.Fatalf("expected env control plane base url, got %v", cfg.ControlPlane.BaseURL)
+	}
+	if cfg.ControlPlane.TunnelID != flagTunnelID {
+		t.Fatalf("expected flag tunnel ID, got %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.APIKey != "env-control-key" {
+		t.Fatalf("expected env API key, got %q", cfg.ControlPlane.APIKey)
+	}
+	if cfg.MCP.ServerURL == nil || cfg.MCP.ServerURL.String() != "https://flag-mcp.example/mcp" {
+		t.Fatalf("expected flag MCP server URL, got %v", cfg.MCP.ServerURL)
+	}
+}
+
+func TestLoadUsesYAMLConfigPathFromEnv(t *testing.T) {
+	configPath := writeTempConfigFile(t, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: yaml-control-key
+mcp:
+  server_urls:
+    - channel: main
+      url: https://yaml-mcp.example/mcp
+`)
+
+	cfg, err := Load(nil, lookupEnvMap(map[string]string{
+		"TUNNEL_CLIENT_CONFIG": configPath,
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Runtime.ConfigFile != configPath {
+		t.Fatalf("expected config file %q, got %q", configPath, cfg.Runtime.ConfigFile)
+	}
+	if cfg.ControlPlane.APIKey != "yaml-control-key" {
+		t.Fatalf("expected YAML API key, got %q", cfg.ControlPlane.APIKey)
+	}
+}
+
+func TestLoadRejectsUnknownYAMLFields(t *testing.T) {
+	configPath := writeTempConfigFile(t, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  unknown: true
+mcp:
+  server_urls:
+    - channel: main
+      url: https://yaml-mcp.example/mcp
+`)
+
+	_, err := Load([]string{"--config", configPath}, lookupEnvMap(nil))
+	if err == nil {
+		t.Fatalf("expected unknown YAML field error")
+	}
+	if !strings.Contains(err.Error(), "field unknown not found") {
+		t.Fatalf("expected unknown field error, got %v", err)
+	}
+}
+
 func TestLoadCABundleFlag(t *testing.T) {
 	bundlePath := writeTempCABundle(t)
 	args := []string{
@@ -1615,6 +1810,15 @@ func writeTempCABundle(t *testing.T) string {
 	path := filepath.Join(dir, "bundle.pem")
 	if err := os.WriteFile(path, certPEM, 0o600); err != nil {
 		t.Fatalf("write bundle: %v", err)
+	}
+	return path
+}
+
+func writeTempConfigFile(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tunnel-client.yaml")
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(contents)+"\n"), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
 	}
 	return path
 }

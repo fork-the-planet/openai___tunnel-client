@@ -40,7 +40,9 @@ network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
 - The admin UI Overview reports channel availability and reasons when channels
   are disabled.
 - The admin UI log export returns a redacted support bundle with recent logs
-  plus a point-in-time Prometheus snapshot from `/metrics`.
+  plus a point-in-time Prometheus snapshot from `/metrics` and a redacted
+  runtime YAML snapshot containing argv, relevant environment, actual YAML
+  config, and effective config.
 - It embeds the **Harpoon MCP server** to provide a labeled, allowlisted
   outbound HTTP client for internal tooling.
 

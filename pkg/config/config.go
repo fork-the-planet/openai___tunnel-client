@@ -85,6 +85,14 @@ type Config struct {
 	Harpoon      HarpoonConfig
 	ProxyHealth  ProxyHealthConfig
 	TLS          *tlsconfig.Bundle
+	Runtime      RuntimeConfig
+}
+
+// RuntimeConfig captures startup metadata that is useful for diagnostics but
+// does not affect runtime behavior.
+type RuntimeConfig struct {
+	ConfigFile         string
+	ConfigFileContents []byte
 }
 
 // AdminUIConfig defines runtime behavior for the embedded admin web UI.
@@ -267,6 +275,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_CONFIG\tPath to YAML config file (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  ALLOW_REMOTE_UI\tSet to true to allow non-loopback access to the embedded web UI (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  ADMIN_UI_LOG_BUFFER_EVENTS\tRecent log-event capacity for the embedded web UI and export archive (optional)")
@@ -279,6 +288,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 // RegisterFlags attaches all supported CLI flags to the provided flag set.
 func RegisterFlags(fs *pflag.FlagSet) {
 	registerTLSFlags(fs)
+	fs.String("config", "", "Path to YAML config file (env.TUNNEL_CLIENT_CONFIG). Precedence: flags > environment > YAML > defaults")
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
 	fs.String("control-plane.api-key", "", "Reference to environment variable or file containing the control-plane API key (format env:VARNAME or file:/path/to/secret)")
@@ -330,6 +340,12 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 	if lookupEnv == nil {
 		lookupEnv = os.LookupEnv
 	}
+
+	fileValues, err := loadFileConfigValues(fs, lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	lookupEnv = lookupEnvWithFileValues(lookupEnv, fileValues)
 
 	tlsBundle, err := buildTLSBundle(fs, lookupEnv)
 	if err != nil {
@@ -385,6 +401,10 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		ProxyHealth:  proxyHealth,
 		TLS:          tlsBundle,
 	}
+	if fileValues != nil {
+		cfg.Runtime.ConfigFile = fileValues.Path
+		cfg.Runtime.ConfigFileContents = fileValues.Raw
+	}
 
 	return cfg, nil
 }
@@ -405,18 +425,46 @@ func resolveProxyFlag(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), 
 		return nil, "", false, nil
 	}
 	flag := fs.Lookup(flagName)
-	if flag == nil || !flag.Changed {
-		return nil, "", false, nil
+	if flag != nil && flag.Changed {
+		raw := strings.TrimSpace(flag.Value.String())
+		if raw == "" {
+			return nil, "", true, fmt.Errorf("invalid %s proxy: value is required", flagName)
+		}
+		parsed, source, err := parseProxyReference(flagName, raw, lookupEnv)
+		if err != nil {
+			return nil, "", true, err
+		}
+		return parsed, source, true, nil
 	}
-	raw := strings.TrimSpace(flag.Value.String())
-	if raw == "" {
-		return nil, "", true, fmt.Errorf("invalid %s proxy: value is required", flagName)
+
+	if envName := proxyFlagEnvName(flagName); envName != "" {
+		if raw, ok := lookupEnv(envName); ok && raw != "" {
+			parsed, source, err := parseProxyReference(flagName, raw, lookupEnv)
+			if err != nil {
+				return nil, "", true, fmt.Errorf("invalid %s: %w", envName, err)
+			}
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "env:") {
+				source = ProxySource(envName)
+			}
+			return parsed, source, true, nil
+		}
 	}
-	parsed, source, err := parseProxyReference(flagName, raw, lookupEnv)
-	if err != nil {
-		return nil, "", true, err
+	return nil, "", false, nil
+}
+
+func proxyFlagEnvName(flagName string) string {
+	switch flagName {
+	case "http-proxy":
+		return "TUNNEL_CLIENT_HTTP_PROXY"
+	case "control-plane.http-proxy":
+		return "CONTROL_PLANE_HTTP_PROXY"
+	case "mcp.http-proxy":
+		return "MCP_HTTP_PROXY"
+	case "harpoon.http-proxy":
+		return "HARPOON_HTTP_PROXY"
+	default:
+		return ""
 	}
-	return parsed, source, true, nil
 }
 
 func resolveProxyWithFallback(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName string, fallback *url.URL, fallbackSource ProxySource) (*url.URL, ProxySource, error) {

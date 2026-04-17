@@ -1,10 +1,71 @@
 # Configuration Reference
 
-`tunnel-client` can be configured via CLI flags or environment variables.
+`tunnel-client` can be configured via CLI flags, environment variables, or a
+YAML config file.
 
-- **Precedence**: flags > environment variables > defaults.
+- **Precedence**: flags > environment variables > YAML config > defaults.
 - **Requirement**: you must provide a control-plane API key, a tunnel ID, and a
   `main` MCP channel binding (via `--mcp.server-url` or `--mcp.command`).
+
+## YAML config file
+
+Pass a config file with `--config /path/to/tunnel-client.yaml` or set
+`TUNNEL_CLIENT_CONFIG=/path/to/tunnel-client.yaml`.
+
+Example:
+
+```yaml
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com # citadel-ignore: public endpoint example for external tunnel-client config
+  tunnel_id: tunnel_0123456789abcdef0123456789abcdef
+  api_key: env:CONTROL_PLANE_API_KEY
+  max_inflight_requests: 20
+  poll_timeout: 30s
+  extra_headers:
+    X-Debug-Mode: "1"
+log:
+  level: info
+  format: json
+  file: /var/log/tunnel-client/tunnel-client.ndjson
+health:
+  listen_addr: 127.0.0.1:8080
+  url_file: /run/tunnel-client/health-url
+admin_ui:
+  open_browser: false
+  log_buffer_events: 2000
+process:
+  pid_file: /run/tunnel-client/tunnel-client.pid
+mcp:
+  server_urls:
+    - channel: main
+      url: https://mcp.example.com/mcp
+  commands:
+    - channel: tools
+      command: python -m tools_mcp
+  connection_max_ttl: 10m
+  max_concurrent_requests: 10
+harpoon:
+  targets:
+    - label: auth
+      url: https://auth.example.com
+      description: Auth server
+  additional_transports:
+    - http-streamable
+proxy:
+  check_interval: 60s
+```
+
+Secret-bearing fields should use `env:VARNAME` or `file:/path/to/secret` when
+possible. `control_plane.api_key` accepts either form and resolves it at
+startup; direct literal values are accepted for compatibility but are not
+recommended for checked-in configs.
+
+The admin UI log export includes `tunnel-client.runtime.yaml`, a redacted
+snapshot of argv, relevant environment variables, the startup YAML config file
+under `actual_config.contents` when present, and the effective startup config.
+API keys, bearer tokens, cookies, shard tokens, URL credentials, and URL query
+secrets are redacted before export.
 
 ## Commands
 
