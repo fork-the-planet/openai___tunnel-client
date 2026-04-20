@@ -464,11 +464,10 @@ func (m *MockTunnelService) WaitForResponses(ctx context.Context, n int) error {
 	if n <= 0 {
 		return nil
 	}
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
 	for {
 		m.mu.Lock()
 		count := len(m.received)
+		state := m.stateCh
 		m.mu.Unlock()
 		if count >= n {
 			return nil
@@ -476,7 +475,7 @@ func (m *MockTunnelService) WaitForResponses(ctx context.Context, n int) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-state:
 		}
 	}
 }
@@ -484,24 +483,23 @@ func (m *MockTunnelService) WaitForResponses(ctx context.Context, n int) error {
 // WaitUntilIdle blocks until every scripted command has been delivered and all
 // expected responses have been observed, or until ctx expires.
 func (m *MockTunnelService) WaitUntilIdle(ctx context.Context) error {
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
 	for {
-		pendingCmd, pendingResp := m.pendingWork()
+		m.mu.Lock()
+		pendingCmd, pendingResp := m.pendingWorkLocked()
+		state := m.stateCh
+		m.mu.Unlock()
 		if pendingCmd == 0 && pendingResp == 0 {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-state:
 		}
 	}
 }
 
-func (m *MockTunnelService) pendingWork() (int, int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *MockTunnelService) pendingWorkLocked() (int, int) {
 	var pendingCmd, pendingResp int
 	for _, slot := range m.script {
 		if !slot.delivered {
@@ -678,8 +676,8 @@ func (m *MockTunnelService) handleResponse(w http.ResponseWriter, r *http.Reques
 		if slot.responseIndex >= len(slot.expected) {
 			slot.completed = true
 		}
-		m.signalStateChangeLocked()
 	}
+	m.signalStateChangeLocked()
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -706,6 +704,7 @@ func (m *MockTunnelService) nextCommandLocked() (json.RawMessage, bool) {
 			}
 			cmd := cloneJSON(payload)
 			m.delivered = append(m.delivered, cloneJSON(cmd))
+			m.signalStateChangeLocked()
 			return cmd, true
 		}
 		return nil, false
