@@ -76,6 +76,24 @@ func TestLogBufferRedactsSensitiveAttrKeysAndQueryParams(t *testing.T) {
 	require.NotContains(t, got[0].Attrs["safe_url"], "s3cr3t")
 }
 
+func TestLogBufferRedactsJSONAndFormSecretsInRawDump(t *testing.T) {
+	t.Parallel()
+
+	b := NewLogBufferWithCapacity(10)
+	r := slog.NewRecord(time.Now(), slog.LevelDebug, "raw http request", 0)
+	r.AddAttrs(slog.String("dump", "POST /token HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"access_token\":\"opaque-token\",\"password\":\"very-secret\"}\r\n\r\nclient_secret=another-secret&scope=openid"))
+	b.Handle(context.Background(), r)
+
+	got := b.Recent(1)
+	require.Len(t, got, 1)
+	require.Contains(t, got[0].Attrs["dump"], `"access_token":"[REDACTED]"`)
+	require.Contains(t, got[0].Attrs["dump"], `"password":"[REDACTED]"`)
+	require.Contains(t, got[0].Attrs["dump"], "client_secret=[REDACTED]")
+	require.NotContains(t, got[0].Attrs["dump"], "opaque-token")
+	require.NotContains(t, got[0].Attrs["dump"], "very-secret")
+	require.NotContains(t, got[0].Attrs["dump"], "another-secret")
+}
+
 func TestLogBufferRedactsNamedMapAndSliceValues(t *testing.T) {
 	t.Parallel()
 

@@ -25,6 +25,8 @@ var (
 	reSetCookie   = regexp.MustCompile(`(?i)(Set-Cookie:\s*)([^\r\n]+)`)
 	reSkKey       = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{10,}\b`)
 	reQuerySecret = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access_token|refresh_token|id_token|client_secret|code|password|secret)=)([^&#\s]+)`)
+	reFormSecret  = regexp.MustCompile(`(?i)\b((?:api[_-]?key|access_token|refresh_token|id_token|client_secret|code|password|secret)\s*=\s*)([^&\s]+)`)
+	reJSONSecret  = regexp.MustCompile(`(?i)(\"(?:api[_-]?key|access_token|refresh_token|id_token|client_secret|code|password|secret)\"\s*:\s*)(\"(?:\\.|[^\"])*\"|[^\s,\}\]]+)`)
 	reURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@`)
 )
 
@@ -353,6 +355,8 @@ func redactString(s string) string {
 	s = reSetCookie.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = reSkKey.ReplaceAllString(s, `sk-REDACTED`)
 	s = reQuerySecret.ReplaceAllString(s, `${1}[REDACTED]`)
+	s = reFormSecret.ReplaceAllString(s, `${1}[REDACTED]`)
+	s = reJSONSecret.ReplaceAllString(s, `${1}"[REDACTED]"`)
 	s = reURLUserInfo.ReplaceAllString(s, `${1}[REDACTED]@`)
 	return s
 }

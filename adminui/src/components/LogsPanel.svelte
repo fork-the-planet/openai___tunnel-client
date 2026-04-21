@@ -1,9 +1,15 @@
 <script lang="ts">
   import { afterUpdate, onDestroy, onMount } from "svelte";
   import { fetchJSON, fetchJSONWithInit } from "../lib/api";
-  import type { LogEvent, LogLevelResponse, LogsResponse } from "../lib/types";
+  import type { LogEvent, LogLevelResponse, LogsResponse, StatusResponse } from "../lib/types";
 
   export let onConnectionChange: (connected: boolean) => void;
+  export let navigateTo: (url: string) => void = (url: string) => {
+    window.location.assign(url);
+  };
+  export let confirmLogExport: (message: string) => boolean = (message: string) => {
+    return window.confirm(message);
+  };
 
   let logEvents: LogEvent[] = [];
   let pausedSnapshot: LogEvent[] = [];
@@ -18,6 +24,8 @@
   let runtimeLevelMessage = "";
   let runtimeLevelLoading = false;
   let runtimeLevelUpdating = false;
+  let activeRuntimeLevel = "info";
+  let rawHTTPLoggingEnabled = false;
   let streamConnected = false;
   let curlExportURL = "/api/logs/export?minutes=30";
   let logsContainer: HTMLDivElement | null = null;
@@ -122,8 +130,27 @@
     pausedSnapshot = [];
   }
 
-  function downloadRecentLogs(): void {
-    window.location.assign("/api/logs/export?minutes=30");
+  function shouldWarnBeforeLogExport(rawUnsafeEnabled: boolean): boolean {
+    return rawUnsafeEnabled && activeRuntimeLevel.toLowerCase() === "debug";
+  }
+
+  async function downloadRecentLogs(): Promise<void> {
+    let rawUnsafeEnabled = rawHTTPLoggingEnabled;
+    try {
+      const status = await fetchJSON<StatusResponse>("/api/status");
+      rawUnsafeEnabled = status.raw_http_logging_enabled === true;
+      rawHTTPLoggingEnabled = rawUnsafeEnabled;
+    } catch {
+      // ignore status refresh failures and fall back to the latest known value
+    }
+
+    if (shouldWarnBeforeLogExport(rawUnsafeEnabled)) {
+      const proceed = confirmLogExport(
+        "Logs may include sensitive data because debug logging and --log.http-raw-unsafe are enabled. Download logs anyway?",
+      );
+      if (!proceed) return;
+    }
+    navigateTo("/api/logs/export?minutes=30");
   }
 
   function updateCurlExportURL(): void {
@@ -150,6 +177,7 @@
     try {
       const response = await fetchJSON<LogLevelResponse>("/api/log-level");
       runtimeLevel = response.level || runtimeLevel;
+      activeRuntimeLevel = response.level || activeRuntimeLevel;
       supportedRuntimeLevels = response.supported_levels?.length
         ? response.supported_levels
         : supportedRuntimeLevels;
@@ -172,6 +200,7 @@
         body: JSON.stringify({ level: runtimeLevel }),
       });
       runtimeLevel = response.level || runtimeLevel;
+      activeRuntimeLevel = response.level || activeRuntimeLevel;
       supportedRuntimeLevels = response.supported_levels?.length
         ? response.supported_levels
         : supportedRuntimeLevels;
@@ -180,6 +209,15 @@
       errorMessage = `error updating runtime log level: ${String(err)}`;
     } finally {
       runtimeLevelUpdating = false;
+    }
+  }
+
+  async function loadStatus(): Promise<void> {
+    try {
+      const status = await fetchJSON<StatusResponse>("/api/status");
+      rawHTTPLoggingEnabled = status.raw_http_logging_enabled === true;
+    } catch (err) {
+      errorMessage = `error loading status: ${String(err)}`;
     }
   }
 
@@ -204,7 +242,7 @@
   onMount(async () => {
     updateConnection(false);
     updateCurlExportURL();
-    await Promise.all([loadInitialLogs(), loadRuntimeLevel()]);
+    await Promise.all([loadInitialLogs(), loadRuntimeLevel(), loadStatus()]);
     startStream();
   });
 
