@@ -575,6 +575,16 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 	}
 	defer cancel()
 
+	terminalResponseDelivered := false
+	defer func() {
+		if terminalResponseDelivered {
+			return
+		}
+		if err := conn.Close(); err != nil {
+			logger.WarnContext(ctx, "failed to close MCP connection after early response forwarding exit", slog.String("error", err.Error()))
+		}
+	}()
+
 	req := cmd.Message().(*jsonrpc.Request)
 	postTerminalErrorResponse := func(cause error) {
 		if cause == nil {
@@ -721,6 +731,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
 		}
 		logger.DebugContext(ctx, "dispatcher delivered response to control plane", attrs...)
+		terminalResponseDelivered = true
 		return
 	}
 }

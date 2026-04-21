@@ -172,6 +172,9 @@ func newProcessorChannelBindings(p processorChannelBindingsParams) (map[types.Ch
 		var transport mcpclient.ForwardingTransport
 		if binding.Transport != nil {
 			transport = mcpclient.NewForwardingTransport(binding.Transport)
+			if canonical == types.ChannelHarpoon {
+				transport = mcpclient.NewSerializedForwardingTransport(transport)
+			}
 		}
 		out[canonical] = dispatcherinternal.ChannelBinding{
 			Transport:     transport,

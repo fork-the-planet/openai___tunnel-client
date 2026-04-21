@@ -2054,6 +2054,50 @@ func TestProcessorForwardResponsesForwardsUpstreamNotificationRequests(t *testin
 	require.Equal(t, types.ResponseTypeJSONRPCResponse, final.response.Type())
 }
 
+func TestProcessorForwardResponsesClosesConnectionWhenNotificationForwardingFails(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	callID, err := jsonrpc.MakeID("notification-forward-failure")
+	require.NoError(t, err)
+
+	conn := &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			{msg: &jsonrpc.Request{Method: "notifications/progress"}, err: nil},
+			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
+		},
+	}
+	transport := &stubForwardingTransport{conn: conn}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: &failingResponder{err: errors.New("notification post failed")},
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("notification-forward-failure-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-notification-forward-failure",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	require.True(t, conn.closed)
+}
+
 func TestProcessorForwardResponsesStopsOnNonResponseMessage(t *testing.T) {
 	t.Parallel()
 
@@ -2843,6 +2887,7 @@ type scriptedForwardingConnection struct {
 	writeErr   error
 
 	mu        sync.Mutex
+	closed    bool
 	readSteps []readStep
 }
 
@@ -2868,7 +2913,12 @@ func (c *scriptedForwardingConnection) Read(ctx context.Context) (jsonrpc.Messag
 	return step.msg, step.err
 }
 
-func (c *scriptedForwardingConnection) Close() error { return nil }
+func (c *scriptedForwardingConnection) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
 
 type fakePolledCommand struct {
 	id         types.RequestID
