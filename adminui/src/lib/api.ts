@@ -4,12 +4,16 @@ export interface TextResponse {
   text: string;
 }
 
-export async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(path, { cache: "no-store" });
+export async function fetchJSONWithInit<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, { cache: "no-store", ...init });
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
+}
+
+export async function fetchJSON<T>(path: string): Promise<T> {
+  return fetchJSONWithInit<T>(path);
 }
 
 export async function fetchTextResponse(path: string): Promise<TextResponse> {

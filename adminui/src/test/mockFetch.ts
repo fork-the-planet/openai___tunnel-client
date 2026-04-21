@@ -23,10 +23,18 @@ function requestURL(input: RequestInfo | URL): string {
   return String(input);
 }
 
-export function mockFetch(handler: (url: string) => Response | Promise<Response>) {
-  const impl = async (input: RequestInfo | URL): Promise<Response> => {
+export interface MockFetchRequest {
+  input: RequestInfo | URL;
+  init?: RequestInit;
+  url: string;
+}
+
+export function mockFetchRequest(
+  handler: (request: MockFetchRequest) => Response | Promise<Response>,
+) {
+  const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = requestURL(input);
-    return await handler(url);
+    return await handler({ input, init, url });
   };
 
   const globalSpy = vi.spyOn(globalThis, "fetch").mockImplementation(impl as typeof fetch);
@@ -36,4 +44,8 @@ export function mockFetch(handler: (url: string) => Response | Promise<Response>
   }
 
   return globalSpy;
+}
+
+export function mockFetch(handler: (url: string) => Response | Promise<Response>) {
+  return mockFetchRequest(({ url }) => handler(url));
 }

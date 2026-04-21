@@ -43,6 +43,7 @@ type routeParams struct {
 	Lifecycle      fx.Lifecycle
 	Logger         *slog.Logger
 	Buffer         *LogBuffer
+	LevelControl   *tclog.LevelController
 	Runtime        RuntimeSnapshotProvider
 	MetricExporter metrics.MetricsExporter
 	HealthService  health.Service
@@ -116,6 +117,7 @@ func registerRoutes(p routeParams) error {
 		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
+	gmux.HandleFunc("/api/log-level", handleLogLevel(p.LevelControl, p.Logger))
 	gmux.HandleFunc("/api/logs/export", handleLogsExport(
 		p.Buffer,
 		p.Runtime,

@@ -50,8 +50,20 @@ const (
 // NewLogger constructs a slog.Logger configured according to the provided config.
 // It returns the logger along with an optional closer that must be closed by the caller.
 func NewLogger(cfg *config.LoggingConfig, defaultWriter io.Writer) (*slog.Logger, io.Closer, error) {
+	controller, err := NewLevelController(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewLoggerWithLevelController(cfg, defaultWriter, controller)
+}
+
+// NewLoggerWithLevelController constructs a slog.Logger backed by the provided level controller.
+func NewLoggerWithLevelController(cfg *config.LoggingConfig, defaultWriter io.Writer, controller *LevelController) (*slog.Logger, io.Closer, error) {
 	if cfg == nil {
 		return nil, nil, fmt.Errorf("logging config is nil")
+	}
+	if controller == nil {
+		return nil, nil, fmt.Errorf("log level controller is nil")
 	}
 
 	var logger *slog.Logger
@@ -59,7 +71,7 @@ func NewLogger(cfg *config.LoggingConfig, defaultWriter io.Writer) (*slog.Logger
 	var closer io.Closer
 
 	if cfg.Format == config.LogFormatUnset {
-		logger = slog.Default()
+		logger = slog.New(newDefaultHandler(slog.Default().Handler(), controller))
 		if cfg.File != "" {
 			return nil, nil, fmt.Errorf("invalid logging configuration: file is only supported for json or struct-text")
 		}
@@ -78,7 +90,7 @@ func NewLogger(cfg *config.LoggingConfig, defaultWriter io.Writer) (*slog.Logger
 			writer = os.Stdout
 		}
 
-		handlerOpts := buildHandlerOptions(cfg.Level)
+		handlerOpts := buildHandlerOptions(controller.LevelVar())
 		handler, err := buildHandler(cfg.Format, writer, handlerOpts)
 		if err != nil {
 			CloseIfNeeded(closer)
@@ -105,8 +117,81 @@ func CloseIfNeeded(closer io.Closer) {
 	}
 }
 
-func buildHandlerOptions(level slog.Level) *slog.HandlerOptions {
+func buildHandlerOptions(level slog.Leveler) *slog.HandlerOptions {
 	return &slog.HandlerOptions{Level: level}
+}
+
+func newDefaultHandler(base slog.Handler, controller *LevelController) slog.Handler {
+	if base == nil {
+		base = slog.Default().Handler()
+	}
+	levelVar := controller.LevelVar()
+	if levelVar == nil {
+		return base
+	}
+	return &levelFilterHandler{
+		base:                base,
+		level:               levelVar,
+		preserveBaseEnabled: shouldPreserveBaseEnabled(base, controller.Level()),
+	}
+}
+
+type levelFilterHandler struct {
+	base                slog.Handler
+	level               *slog.LevelVar
+	preserveBaseEnabled bool
+}
+
+func (h *levelFilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	if h == nil {
+		return true
+	}
+	if h.preserveBaseEnabled && h.base != nil && !h.base.Enabled(ctx, level) {
+		return false
+	}
+	if h.level == nil {
+		return true
+	}
+	return level >= h.level.Level()
+}
+
+func (h *levelFilterHandler) Handle(ctx context.Context, record slog.Record) error {
+	return h.base.Handle(ctx, record)
+}
+
+func (h *levelFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &levelFilterHandler{
+		base:                h.base.WithAttrs(attrs),
+		level:               h.level,
+		preserveBaseEnabled: h.preserveBaseEnabled,
+	}
+}
+
+func (h *levelFilterHandler) WithGroup(name string) slog.Handler {
+	return &levelFilterHandler{
+		base:                h.base.WithGroup(name),
+		level:               h.level,
+		preserveBaseEnabled: h.preserveBaseEnabled,
+	}
+}
+
+func shouldPreserveBaseEnabled(base slog.Handler, startupLevel slog.Level) bool {
+	if base == nil {
+		return false
+	}
+	if !isBuiltinDefaultStyleHandler(base) {
+		return true
+	}
+	return !base.Enabled(context.Background(), startupLevel)
+}
+
+func isBuiltinDefaultStyleHandler(base slog.Handler) bool {
+	switch base.(type) {
+	case *slog.TextHandler, *slog.JSONHandler:
+		return true
+	default:
+		return fmt.Sprintf("%T", base) == "*slog.defaultHandler"
+	}
 }
 
 func buildHandler(format config.LogFormat, writer io.Writer, opts *slog.HandlerOptions) (slog.Handler, error) {

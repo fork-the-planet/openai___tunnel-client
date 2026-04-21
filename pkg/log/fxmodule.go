@@ -12,7 +12,7 @@ import (
 
 // Module exposes the logger as an Fx module that owns the lifecycle of any
 // resources it creates.
-var Module = fx.Module("logger", fx.Provide(newLogger))
+var Module = fx.Module("logger", fx.Provide(newLevelController, newLogger))
 
 type loggerParams struct {
 	fx.In
@@ -20,12 +20,17 @@ type loggerParams struct {
 	Lifecycle     fx.Lifecycle
 	Config        *config.LoggingConfig
 	ControlPlane  *config.ControlPlaneConfig
+	LevelControl  *LevelController
 	DefaultWriter io.Writer `optional:"true"`
 	Sink          Sink      `optional:"true"`
 }
 
+func newLevelController(cfg *config.LoggingConfig) (*LevelController, error) {
+	return NewLevelController(cfg)
+}
+
 func newLogger(p loggerParams) (*slog.Logger, error) {
-	logger, closer, err := NewLogger(p.Config, p.DefaultWriter)
+	logger, closer, err := NewLoggerWithLevelController(p.Config, p.DefaultWriter, p.LevelControl)
 	if err != nil {
 		return nil, err
 	}

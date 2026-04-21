@@ -1,18 +1,23 @@
 <script lang="ts">
   import { afterUpdate, onDestroy, onMount } from "svelte";
-  import { fetchJSON } from "../lib/api";
-  import type { LogEvent, LogsResponse } from "../lib/types";
+  import { fetchJSON, fetchJSONWithInit } from "../lib/api";
+  import type { LogEvent, LogLevelResponse, LogsResponse } from "../lib/types";
 
   export let onConnectionChange: (connected: boolean) => void;
 
   let logEvents: LogEvent[] = [];
   let pausedSnapshot: LogEvent[] = [];
   let filterText = "";
-  let level = "all";
+  let visibleLevel = "all";
+  let runtimeLevel = "info";
+  let supportedRuntimeLevels = ["debug", "info", "warn"];
   let autoscroll = true;
   let showAttrs = false;
   let paused = false;
   let errorMessage = "";
+  let runtimeLevelMessage = "";
+  let runtimeLevelLoading = false;
+  let runtimeLevelUpdating = false;
   let streamConnected = false;
   let curlExportURL = "/api/logs/export?minutes=30";
   let logsContainer: HTMLDivElement | null = null;
@@ -89,7 +94,7 @@
 
   const passesFilters = (ev: LogEvent): boolean => {
     const filter = filterText.trim().toLowerCase();
-    const minLevel = level;
+    const minLevel = visibleLevel;
     const lvl = (ev.level || "").toLowerCase();
     if (minLevel !== "all") {
       if (levelOrder(lvl) < levelOrder(minLevel)) return false;
@@ -140,6 +145,44 @@
     }
   }
 
+  async function loadRuntimeLevel(): Promise<void> {
+    runtimeLevelLoading = true;
+    try {
+      const response = await fetchJSON<LogLevelResponse>("/api/log-level");
+      runtimeLevel = response.level || runtimeLevel;
+      supportedRuntimeLevels = response.supported_levels?.length
+        ? response.supported_levels
+        : supportedRuntimeLevels;
+    } catch (err) {
+      errorMessage = `error loading runtime log level: ${String(err)}`;
+    } finally {
+      runtimeLevelLoading = false;
+    }
+  }
+
+  async function applyRuntimeLevel(): Promise<void> {
+    runtimeLevelUpdating = true;
+    runtimeLevelMessage = "";
+    try {
+      const response = await fetchJSONWithInit<LogLevelResponse>("/api/log-level", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ level: runtimeLevel }),
+      });
+      runtimeLevel = response.level || runtimeLevel;
+      supportedRuntimeLevels = response.supported_levels?.length
+        ? response.supported_levels
+        : supportedRuntimeLevels;
+      runtimeLevelMessage = `runtime log level: ${runtimeLevel}`;
+    } catch (err) {
+      errorMessage = `error updating runtime log level: ${String(err)}`;
+    } finally {
+      runtimeLevelUpdating = false;
+    }
+  }
+
   function startStream(): void {
     try {
       eventSource = new EventSource("/api/logs/stream");
@@ -161,7 +204,7 @@
   onMount(async () => {
     updateConnection(false);
     updateCurlExportURL();
-    await loadInitialLogs();
+    await Promise.all([loadInitialLogs(), loadRuntimeLevel()]);
     startStream();
   });
 
@@ -195,15 +238,33 @@
       CLI export: <code class="mono">{curlExportCommand}</code>
     </div>
     <div class="row" style="margin-top: 10px">
-      <input bind:value={filterText} placeholder="filter (substring)…" />
-      <select bind:value={level}>
+      <input aria-label="Filter logs" bind:value={filterText} placeholder="filter (substring)…" />
+      <select aria-label="Visible log level filter" bind:value={visibleLevel}>
         <option value="all">level: all</option>
         <option value="debug">level: debug+</option>
         <option value="info">level: info+</option>
         <option value="warn">level: warn+</option>
         <option value="error">level: error</option>
       </select>
-      <span class="muted small">{errorMessage}</span>
+      <span class="muted small">runtime</span>
+      <select
+        id="runtime-log-level"
+        aria-label="Runtime log level"
+        bind:value={runtimeLevel}
+        disabled={runtimeLevelLoading || runtimeLevelUpdating}
+      >
+        {#each supportedRuntimeLevels as option}
+          <option value={option}>{option}</option>
+        {/each}
+      </select>
+      <button
+        type="button"
+        on:click={applyRuntimeLevel}
+        disabled={runtimeLevelLoading || runtimeLevelUpdating}
+      >
+        {runtimeLevelUpdating ? "Applying..." : "Apply runtime level"}
+      </button>
+      <span class="muted small">{runtimeLevelMessage || errorMessage}</span>
     </div>
     <div class="logs mono" bind:this={logsContainer} style="margin-top: 12px">
       {#each displayEvents as ev}

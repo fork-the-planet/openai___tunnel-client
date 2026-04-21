@@ -24,6 +24,12 @@ func TestNewLoggerBindsTunnelIDToSinkRecords(t *testing.T) {
 	t.Parallel()
 
 	sink := &recordSink{}
+	levelControl, err := newLevelController(&config.LoggingConfig{
+		Format: config.LogFormatStructText,
+		Level:  slog.LevelInfo,
+	})
+	require.NoError(t, err)
+
 	logger, err := newLogger(loggerParams{
 		Config: &config.LoggingConfig{
 			Format: config.LogFormatStructText,
@@ -32,6 +38,7 @@ func TestNewLoggerBindsTunnelIDToSinkRecords(t *testing.T) {
 		ControlPlane: &config.ControlPlaneConfig{
 			TunnelID: types.TunnelID("tunnel_0123456789abcdef0123456789abcdef"),
 		},
+		LevelControl:  levelControl,
 		DefaultWriter: io.Discard,
 		Sink:          sink,
 	})

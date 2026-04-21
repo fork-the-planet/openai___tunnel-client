@@ -39,6 +39,8 @@ network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
   a lightweight **admin UI** (`/ui`) for operational status.
 - The admin UI Overview reports channel availability and reasons when channels
   are disabled.
+- The admin UI Logs tab can switch the live runtime log level between `debug`,
+  `info`, and `warn` without restarting the process.
 - The admin UI log export returns a redacted support bundle with recent logs
   plus a point-in-time Prometheus snapshot from `/metrics` and a redacted
   runtime YAML snapshot containing argv, relevant environment, actual YAML

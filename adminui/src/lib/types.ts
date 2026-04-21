@@ -114,6 +114,11 @@ export interface LogsResponse {
   events?: LogEvent[];
 }
 
+export interface LogLevelResponse {
+  level?: string;
+  supported_levels?: string[];
+}
+
 export interface LogEvent {
   seq?: number;
   time?: string;

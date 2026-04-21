@@ -183,6 +183,107 @@ func TestCloseIfNeededHandlesErrors(t *testing.T) {
 	tclog.CloseIfNeeded(&errorCloser{err: errors.New("close failed")})
 }
 
+func TestLevelControllerUpdatesLoggerOutput(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormatStructText,
+		Level:  slog.LevelInfo,
+	}
+
+	controller, err := tclog.NewLevelController(cfg)
+	if err != nil {
+		t.Fatalf("NewLevelController returned error: %v", err)
+	}
+
+	logger, closer, err := tclog.NewLoggerWithLevelController(cfg, &buf, controller)
+	if err != nil {
+		t.Fatalf("NewLoggerWithLevelController returned error: %v", err)
+	}
+	defer tclog.CloseIfNeeded(closer)
+
+	logger.Debug("before-switch")
+	if strings.Contains(buf.String(), "before-switch") {
+		t.Fatalf("did not expect debug line before level switch, got: %s", buf.String())
+	}
+
+	controller.Set(slog.LevelDebug)
+	logger.Debug("after-switch")
+
+	if !strings.Contains(buf.String(), "after-switch") {
+		t.Fatalf("expected debug line after level switch, got: %s", buf.String())
+	}
+}
+
+func TestLevelControllerUpdatesDefaultLoggerOutput(t *testing.T) {
+	originalDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(originalDefault)
+
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormatUnset,
+		Level:  slog.LevelInfo,
+	}
+
+	controller, err := tclog.NewLevelController(cfg)
+	if err != nil {
+		t.Fatalf("NewLevelController returned error: %v", err)
+	}
+
+	logger, closer, err := tclog.NewLoggerWithLevelController(cfg, io.Discard, controller)
+	if err != nil {
+		t.Fatalf("NewLoggerWithLevelController returned error: %v", err)
+	}
+	defer tclog.CloseIfNeeded(closer)
+
+	logger.Debug("before-default-switch")
+	if strings.Contains(buf.String(), "before-default-switch") {
+		t.Fatalf("did not expect debug line before default level switch, got: %s", buf.String())
+	}
+
+	controller.Set(slog.LevelDebug)
+	logger.Debug("after-default-switch")
+
+	if !strings.Contains(buf.String(), "after-default-switch") {
+		t.Fatalf("expected debug line after default level switch, got: %s", buf.String())
+	}
+}
+
+func TestLevelControllerPreservesBaseDefaultHandlerFiltering(t *testing.T) {
+	originalDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(originalDefault)
+
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormatUnset,
+		Level:  slog.LevelDebug,
+	}
+
+	controller, err := tclog.NewLevelController(cfg)
+	if err != nil {
+		t.Fatalf("NewLevelController returned error: %v", err)
+	}
+
+	logger, closer, err := tclog.NewLoggerWithLevelController(cfg, io.Discard, controller)
+	if err != nil {
+		t.Fatalf("NewLoggerWithLevelController returned error: %v", err)
+	}
+	defer tclog.CloseIfNeeded(closer)
+
+	logger.Warn("warn-should-still-be-filtered")
+	if strings.Contains(buf.String(), "warn-should-still-be-filtered") {
+		t.Fatalf("did not expect warn line to bypass base handler filtering, got: %s", buf.String())
+	}
+
+	logger.Error("error-should-pass")
+	if !strings.Contains(buf.String(), "error-should-pass") {
+		t.Fatalf("expected error line to pass base handler filtering, got: %s", buf.String())
+	}
+}
+
 type errorCloser struct {
 	err error
 }

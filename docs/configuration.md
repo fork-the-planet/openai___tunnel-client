@@ -374,6 +374,10 @@ When running `tunnel-client run`, the tunnel client serves a lightweight web UI 
   - Flag: `--open-web-ui`
   - Env: `OPEN_WEB_UI`
   - Default: `false`
+- **Runtime log level toggle**
+  - The Logs tab can change the live runtime log level between `debug`, `info`,
+    and `warn` through `GET`/`PUT /api/log-level`.
+  - Use this for short troubleshooting windows without restarting the client.
 
 ## Process utilities
 
