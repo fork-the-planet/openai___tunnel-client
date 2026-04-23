@@ -26,8 +26,12 @@ Use the first-run helpers before editing YAML by hand:
 - `tunnel-client profiles samples list`
 - `tunnel-client profiles samples show sample_mcp_with_dcr`
 - `tunnel-client dev mcp-stub`
-- `tunnel-client plugin codex install`
-- `tunnel-client plugin codex uninstall`
+- `tunnel-client codex assistant "Summarize what tunnel-client is for."`
+- `tunnel-client codex status`
+- `tunnel-client sessions list`
+- `tunnel-client admin-profiles list`
+- `tunnel-client codex plugin install`
+- `tunnel-client codex plugin uninstall`
 
 `run --help` also advertises the config precedence, the sample-discovery path,
 and the embedded UI convention `http://<health.listen-addr>/ui`.
@@ -137,12 +141,24 @@ secrets are redacted before export.
   sample such as `--sample sample_mcp_with_dcr`.
 - `profiles edit <name>`: open a profile in `$VISUAL` or `$EDITOR`, validate it,
   and only save it when the edited YAML parses.
-- `plugin codex install`: install the embedded Tunnel MCP plugin bundle into
+- `codex assistant [prompt...]`: run a terminal assistant session through the
+  supervised `codex app-server`; prompt args give one-shot mode and TTY stdin
+  enters REPL mode. The default reasoning effort is `medium`, and the REPL
+  supports `/model` to inspect or change model/reasoning without restarting.
+- `codex status`: report Codex CLI/app-server discovery, login state, and
+  plugin wiring.
+- `codex install|upgrade|uninstall`: print the official Codex CLI package
+  manager commands for this host.
+- `codex plugin install`: install the embedded Tunnel MCP plugin bundle into
   `CODEX_HOME`.
-- `plugin codex uninstall`: remove the embedded Tunnel MCP plugin bundle from
+- `codex plugin uninstall`: remove the embedded Tunnel MCP plugin bundle from
   `CODEX_HOME` and clean up its enablement section from `config.toml`.
-- `plugin codex export --dir <path>`: export the embedded plugin bundle for
+- `codex plugin export --dir <path>`: export the embedded plugin bundle for
   inspection or manual installation.
+- `admin-profiles list|set|delete`: manage saved admin-key profiles used by
+  native session workflows.
+- `sessions create|connect|list|status|stop|rm`: manage native alias state and
+  local tunnel-client runtime supervision.
 - `admin tunnels`: manage tunnel metadata via the admin API (`/v1/tunnels*`).
 - `admin tunnels get <id>`: read-only tunnel metadata lookup; accepts the
   runtime key or an admin key.

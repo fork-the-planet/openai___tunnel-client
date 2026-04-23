@@ -55,10 +55,22 @@ Other fast starts:
 The embedded UI is served from the health listener. With the default
 `127.0.0.1:8080`, the UI is at `http://127.0.0.1:8080/ui`.
 
+If Codex is installed locally and you want the plugin surface instead of the raw
+binary flow, install it directly from the binary:
+
+```bash
+tunnel-client codex assistant "Summarize what tunnel-client is for."
+tunnel-client codex status
+tunnel-client codex plugin install
+tunnel-client sessions list
+tunnel-client codex plugin uninstall
+```
 Starter prompts for Codex:
 
 - `Figure out what tunnel-client is for from the binary help, then get me to /ui with the shortest local path.`
 - `Use tunnel-client to create or reuse a profile, run doctor --explain, and then start the daemon.`
+- `Run tunnel-client codex assistant and summarize what this checkout is for in one sentence.`
+- `Install the Codex plugin from the tunnel-client binary, connect the provided tunnel id, and tell me whether the runtime is launched, healthy, or ready.`
 
 ## 3) Build from source
 

@@ -1,16 +1,95 @@
-#!/usr/bin/env python3
-import pathlib
-import sys
+#!/bin/sh
+set -eu
 
+plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tunnel_client_bin=""
 
-def main() -> int:
-    scripts_dir = pathlib.Path(__file__).resolve().parent
-    sys.path.insert(0, str(scripts_dir))
+if [ "${1:-}" = "--tunnel-client-bin" ]; then
+  if [ $# -lt 2 ]; then
+    echo "error: --tunnel-client-bin requires a value" >&2
+    exit 2
+  fi
+  tunnel_client_bin=$2
+  shift 2
+fi
 
-    from tunnel_mcp_cli.commands import main as commands_main
+if [ -z "$tunnel_client_bin" ] && [ -n "${TUNNEL_CLIENT_BIN:-}" ]; then
+  tunnel_client_bin=$TUNNEL_CLIENT_BIN
+fi
 
-    return commands_main()
+if [ -z "$tunnel_client_bin" ] && [ -f "$plugin_root/.tunnel-client-bin" ]; then
+  IFS= read -r tunnel_client_bin < "$plugin_root/.tunnel-client-bin" || true
+fi
 
+if [ -z "$tunnel_client_bin" ]; then
+  search_root=$plugin_root
+  while [ -n "$search_root" ]; do
+    for candidate in \
+      "$search_root/tunnel-client" \
+      "$search_root/bin/tunnel-client" \
+      "$search_root/bazel-bin/cmd/client/client" \
+      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client"
+    do
+      if [ -x "$candidate" ]; then
+        tunnel_client_bin=$candidate
+        break 2
+      fi
+    done
+    parent=$(dirname "$search_root")
+    if [ "$parent" = "$search_root" ]; then
+      break
+    fi
+    search_root=$parent
+  done
+fi
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if [ -z "$tunnel_client_bin" ]; then
+  tunnel_client_bin=tunnel-client
+fi
+
+if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'EOF'
+Usage: tunnel_mcp <command> [args]
+
+Routes to native tunnel-client commands:
+  create|connect|list|status|stop|disconnect|rm
+  admin-profiles <subcommand>
+
+All routed commands default to --json.
+EOF
+  exit 0
+fi
+
+case "$1" in
+  admin-profiles)
+    shift
+    set -- admin-profiles "$@"
+    ;;
+  create|connect|list|status|stop|disconnect)
+    command=$1
+    shift
+    set -- sessions "$command" "$@"
+    ;;
+  rm|remove)
+    shift
+    set -- sessions rm "$@"
+    ;;
+  *)
+    echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, or admin-profiles" >&2
+    exit 2
+    ;;
+esac
+
+has_json=0
+for arg in "$@"; do
+  if [ "$arg" = "--json" ]; then
+    has_json=1
+    break
+  fi
+done
+
+if [ "$has_json" -eq 0 ]; then
+  set -- "$@" --json
+fi
+
+exec "$tunnel_client_bin" "$@"

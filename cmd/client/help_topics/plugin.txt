@@ -1,26 +1,47 @@
-Use the Codex plugin when you want tunnel aliases, local process supervision, and Codex-native tunnel commands.
+Use the Codex plugin when you want a Codex-local entrypoint over the public native tunnel session commands.
+If you only need a terminal assistant over the same Codex app-server bridge, start with:
+  tunnel-client codex assistant "Summarize the current tunnel setup."
+
+Native command surfaces:
+  tunnel-client sessions create ...
+  tunnel-client sessions connect ...
+  tunnel-client sessions list
+  tunnel-client sessions status <alias>
+  tunnel-client sessions stop <alias>
+  tunnel-client sessions rm <alias>
+  tunnel-client admin-profiles list
+  tunnel-client admin-profiles set <name> --admin-key env:OPENAI_ADMIN_KEY
+  tunnel-client codex status
 
 Preferred install path from the binary:
-  tunnel-client plugin codex install
+  tunnel-client codex plugin install
 
 To remove or reset the installed plugin bundle:
-  tunnel-client plugin codex uninstall
+  tunnel-client codex plugin uninstall
 
 If you want to inspect the bundle first:
-  tunnel-client plugin codex export --dir /tmp/tunnel-plugin
+  tunnel-client codex plugin export --dir /tmp/tunnel-plugin
   cd /tmp/tunnel-plugin && python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client
 
 If Codex is installed locally but the plugin is missing, doctor and startup guidance will point you back to:
-  tunnel-client plugin codex install
+  tunnel-client codex plugin install
 
 Plugin runtime semantics:
+  - the installed plugin is a thin router onto `tunnel-client sessions ...` and `tunnel-client admin-profiles ...`
   - connect success means a usable local runtime exists, not merely that a launch command was issued
   - healthy = the managed runtime is alive and /healthz is reachable
   - ready is reported separately so agents can distinguish startup success from the full OAuth/MCP ready contract
   - status reports local runtime state first and includes the explicit ui_url when available
   - stop or disconnect tears down the managed local runtime without deleting the tunnel itself
 
-Useful plugin commands:
+Useful native commands:
+  tunnel-client sessions status <alias>
+  tunnel-client sessions stop <alias>
+  tunnel-client sessions disconnect <alias>
+  tunnel-client admin-profiles list
+
+Useful plugin aliases inside Codex:
   scripts/tunnel_mcp status <alias>
   scripts/tunnel_mcp stop <alias>
   scripts/tunnel_mcp disconnect <alias>
+  scripts/tunnel_mcp rm <alias>

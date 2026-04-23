@@ -9,6 +9,7 @@
   import HarpoonPanel from "./components/HarpoonPanel.svelte";
   import SystemPanel from "./components/SystemPanel.svelte";
   import LogsPanel from "./components/LogsPanel.svelte";
+  import CodexPanel from "./components/CodexPanel.svelte";
 
   const tabs = [
     { id: "overview", label: "Overview" },
@@ -16,6 +17,7 @@
     { id: "oauth", label: "OAuth" },
     { id: "harpoon", label: "Harpoon" },
     { id: "system", label: "System" },
+    { id: "codex", label: "Assistant" },
     { id: "logs", label: "Logs" },
   ];
 
@@ -136,6 +138,10 @@
 
 <section class="panel" id="panel-system" aria-hidden={activeTab !== "system"}>
   <SystemPanel active={activeTab === "system"} />
+</section>
+
+<section class="panel" id="panel-codex" aria-hidden={activeTab !== "codex"}>
+  <CodexPanel active={activeTab === "codex"} />
 </section>
 
 <section class="panel" id="panel-logs" aria-hidden={activeTab !== "logs"}>

@@ -8,6 +8,7 @@
 - Document upgrade as rerunning the installer against the newer plugin source.
   The installer should replace only
   `$CODEX_HOME/plugins/cache/<marketplace>/tunnel-mcp/local` and keep runtime
-  state under `$CODEX_HOME/tunnel-mcp` or `~/.codex/tunnel-mcp` intact.
+  state under `TUNNEL_CLIENT_STATE_DIR`, the platform state directory, or
+  reused legacy `CODEX_HOME` / `~/.codex/tunnel-mcp` roots intact.
 - Include post-install and post-upgrade verification commands that check
   manifest presence, config enablement, and `scripts/tunnel_mcp --help`.

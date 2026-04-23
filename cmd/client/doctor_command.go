@@ -519,7 +519,7 @@ func doctorCodexCheck(lookupEnv func(string) (string, bool)) doctorCheck {
 	return doctorCheck{
 		ID:      "codex_plugin",
 		Status:  doctorStatusSkip,
-		Summary: "Codex detected; Tunnel MCP plugin not installed (run `tunnel-client plugin codex install`)",
+		Summary: fmt.Sprintf("Codex detected; Tunnel MCP plugin not installed (run `%s`)", detection.InstallHint),
 		Why:     "the optional Codex plugin gives tunnel-client a more discoverable Codex-native control surface.",
 		Evidence: []string{
 			"CODEX_HOME: " + detection.CodexHome,

@@ -747,6 +747,7 @@ func isExpectedTransportShutdownError(err error) bool {
 	}
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "server is closing") ||
+		strings.Contains(lower, "broken pipe") ||
 		strings.Contains(lower, "closed pipe") ||
 		strings.Contains(lower, "use of closed network connection")
 }

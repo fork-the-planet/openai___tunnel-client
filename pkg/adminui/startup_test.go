@@ -45,7 +45,7 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 		CodexHome:       "/tmp/.codex",
 		PluginInstalled: false,
 		PluginDir:       "/tmp/.codex/plugins/cache/debug/tunnel-mcp/local",
-		InstallHint:     "tunnel-client plugin codex install",
+		InstallHint:     "tunnel-client codex plugin install",
 	})
 
 	require.Equal(t, "http://127.0.0.1:7777", summary.HealthURL)
@@ -58,7 +58,7 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:3001/mcp", summary.MCPTargetValue)
 	require.True(t, summary.CodexDetected)
 	require.False(t, summary.CodexPluginInstalled)
-	require.Equal(t, "tunnel-client plugin codex install", summary.CodexPluginInstallHint)
+	require.Equal(t, "tunnel-client codex plugin install", summary.CodexPluginInstallHint)
 }
 
 func TestStartupFirstFailingDependencyPrefersProbeOverOAuth(t *testing.T) {

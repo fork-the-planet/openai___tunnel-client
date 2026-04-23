@@ -1,0 +1,386 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/codexplugin"
+)
+
+func TestCodexCommandHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_CODEX_HELPER") != "1" {
+		return
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	writer := bufio.NewWriter(os.Stdout)
+	writef := func(format string, args ...any) {
+		_, err := fmt.Fprintf(writer, format, args...)
+		require.NoError(t, err)
+	}
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			continue
+		}
+		id := envelope["id"]
+		method, _ := envelope["method"].(string)
+		switch method {
+		case "initialize":
+			writef("{\"id\":%s,\"result\":{\"user_agent\":\"tunnel-client-test\",\"codex_home\":\"/tmp/.codex\",\"platform_family\":\"unix\",\"platform_os\":\"linux\"}}\n", marshalID(id))
+		case "initialized":
+			continue
+		case "getAuthStatus":
+			writef("{\"id\":%s,\"result\":{\"authMethod\":\"chatgpt\",\"requiresOpenaiAuth\":true}}\n", marshalID(id))
+		case "account/read":
+			writef("{\"id\":%s,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"worker@example.com\",\"planType\":\"business\"},\"requiresOpenaiAuth\":true}}\n", marshalID(id))
+		case "thread/start":
+			maybeCaptureThreadStartParams(t, envelope["params"])
+			writef("{\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001},\"model\":\"gpt-5.4\",\"modelProvider\":\"openai\",\"approvalPolicy\":\"never\",\"sandbox\":\"danger-full-access\"}}\n", marshalID(id))
+			writef("{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001}}}\n")
+		case "turn/start":
+			maybeCaptureTurnStartParams(t, envelope["params"])
+			prompt := "unknown"
+			if params, ok := envelope["params"].(map[string]any); ok {
+				if input, ok := params["input"].([]any); ok && len(input) > 0 {
+					if item, ok := input[0].(map[string]any); ok {
+						if text, ok := item["text"].(string); ok {
+							prompt = text
+						}
+					}
+				}
+			}
+			response := fmt.Sprintf("assistant heard: %s", prompt)
+			writef("{\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn_cli\",\"status\":\"in_progress\"}}}\n", marshalID(id))
+			writef("{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread_cli\",\"turn\":{\"id\":\"turn_cli\",\"status\":\"in_progress\"}}}\n")
+			writef("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"thread_cli\",\"turnId\":\"turn_cli\",\"delta\":%q}}\n", response)
+			writef("{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"thread_cli\",\"turn\":{\"id\":\"turn_cli\",\"status\":\"completed\"}}}\n")
+		default:
+			writef("{\"id\":%s,\"result\":{}}\n", marshalID(id))
+		}
+		require.NoError(t, writer.Flush())
+	}
+	os.Exit(0)
+}
+
+func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
+	codexHome := t.TempDir()
+	fakeTunnelClient := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	_, err := codexplugin.Install(codexHome, fakeTunnelClient)
+	require.NoError(t, err)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "status", "--json")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, `"state": "ready"`)
+	require.Contains(t, stdout, `"app_server_supported": true`)
+	require.Contains(t, stdout, `"plugin_installed": true`)
+	require.Contains(t, stdout, `"plugin_binary_hint": "`+fakeTunnelClient+`"`)
+	require.Contains(t, stdout, `"version": "codex-cli 0.123.0-alpha.8"`)
+	require.NotContains(t, stdout, `update check warning`)
+	require.Contains(t, stdout, `"email": "worker@example.com"`)
+}
+
+func TestCodexInstallPrefersHostDefaultWhenMultipleInstallersAreAvailable(t *testing.T) {
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "brew"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	root := newRootCommand(func(string) (string, bool) { return "", false }, &stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"codex", "install"})
+	require.NoError(t, root.Execute())
+
+	if runtime.GOOS == "darwin" {
+		require.Contains(t, stdout.String(), "Preferred on this host: homebrew")
+	} else {
+		require.Contains(t, stdout.String(), "Preferred on this host: npm")
+	}
+	require.Contains(t, stdout.String(), "brew install codex")
+	require.Contains(t, stdout.String(), "npm install -g @openai/codex")
+}
+
+func TestCodexAssistantRunsPromptArgument(t *testing.T) {
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "describe", "the", "tunnel")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "assistant heard: describe the tunnel")
+	require.Contains(t, stderr, "assistant> ")
+	require.Contains(t, stderr, "waiting for response")
+}
+
+func TestCodexAssistantReadsPromptFromStdin(t *testing.T) {
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommandWithInput(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "stdin prompt for codex\n", "codex", "assistant")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "assistant heard: stdin prompt for codex")
+	require.Contains(t, stderr, "assistant> ")
+	require.Contains(t, stderr, "waiting for response")
+}
+
+func TestCodexAssistantDefaultsToMediumReasoning(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "turn_start.json")
+	t.Setenv("GO_WANT_CODEX_TURN_START_CAPTURE", capturePath)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "describe", "the", "tunnel")
+
+	require.NoError(t, err, stderr)
+	params := readCapturedTurnStartParams(t, capturePath)
+	require.Equal(t, defaultCodexAssistantEffort, params.Effort)
+}
+
+func TestCodexHelpIncludesAssistantSubcommand(t *testing.T) {
+	var stdout bytes.Buffer
+	root := newRootCommand(func(string) (string, bool) { return "", false }, &stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"codex", "--help"})
+
+	require.NoError(t, root.Execute())
+	require.Contains(t, stdout.String(), "assistant")
+	require.Contains(t, stdout.String(), "plugin")
+}
+
+func TestCodexPluginCommandInstallAndLegacyAliasBothWork(t *testing.T) {
+	codexHome := t.TempDir()
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "plugin", "install", "--codex-home", codexHome)
+
+	require.NoError(t, err, stderr)
+	pluginDir := codexplugin.PluginTargetDir(codexHome)
+	require.FileExists(t, filepath.Join(pluginDir, ".codex-plugin", "plugin.json"))
+	require.Contains(t, stdout, "Installed tunnel-mcp")
+
+	stdout, stderr, err = executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "plugin", "codex", "uninstall", "--codex-home", codexHome)
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "Removed tunnel-mcp")
+}
+
+func TestAssistantWorkingDirectoryPrefersNestedTunnelClientWorkspace(t *testing.T) {
+	monorepoRoot := t.TempDir()
+	workspace := filepath.Join(monorepoRoot, "api", "tunnel-client")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "cmd", "client"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/tunnel-client\n"), 0o644))
+
+	t.Setenv("BUILD_WORKING_DIRECTORY", monorepoRoot)
+	require.Equal(t, workspace, assistantWorkingDirectory(""))
+}
+
+func TestAssistantWorkingDirectoryPrefersStandaloneTunnelClientWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "cmd", "client"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/tunnel-client\n"), 0o644))
+
+	t.Setenv("BUILD_WORKING_DIRECTORY", workspace)
+	require.Equal(t, workspace, assistantWorkingDirectory(""))
+}
+
+func TestAssistantWorkingDirectoryRespectsExplicitOverride(t *testing.T) {
+	require.Equal(t, "/tmp/custom-cwd", assistantWorkingDirectory("/tmp/custom-cwd"))
+}
+
+func TestCodexAssistantUsesStandaloneWorkspaceAsThreadCWD(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "cmd", "client"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/tunnel-client\n"), 0o644))
+
+	capturePath := filepath.Join(t.TempDir(), "thread_start.json")
+	t.Setenv("BUILD_WORKING_DIRECTORY", workspace)
+	t.Setenv("GO_WANT_CODEX_THREAD_START_CAPTURE", capturePath)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "describe", "the", "workspace")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "assistant heard: describe the workspace")
+
+	params := readCapturedThreadStartParams(t, capturePath)
+	require.Equal(t, workspace, params.CWD)
+	require.Contains(t, params.DeveloperInstructions, "Stay focused on this workspace root: "+workspace)
+}
+
+func TestBuildCodexCLIDeveloperInstructionsNarrowsScopeToTunnelClient(t *testing.T) {
+	instructions := buildCodexCLIDeveloperInstructions("/workspace/api/tunnel-client", "")
+
+	require.Contains(t, instructions, "Treat the request as being about tunnel-client")
+	require.Contains(t, instructions, "avoid broad repository scans")
+	require.Contains(t, instructions, "Stay focused on this workspace root: /workspace/api/tunnel-client")
+}
+
+func TestHandleCodexAssistantSlashCommandShowsAndUpdatesModelSettings(t *testing.T) {
+	options := codexAssistantOptions{Effort: defaultCodexAssistantEffort}
+	var stderr bytes.Buffer
+
+	handled, err := handleCodexAssistantSlashCommand(&stderr, &options, "/model")
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Contains(t, stderr.String(), "model=default reasoning=medium")
+
+	stderr.Reset()
+	handled, err = handleCodexAssistantSlashCommand(&stderr, &options, "/model high")
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, "high", options.Effort)
+	require.Contains(t, stderr.String(), "model=default reasoning=high")
+
+	stderr.Reset()
+	handled, err = handleCodexAssistantSlashCommand(&stderr, &options, "/model gpt-5.4 medium")
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.4", options.Model)
+	require.Equal(t, "medium", options.Effort)
+	require.Contains(t, stderr.String(), "model=gpt-5.4 reasoning=medium")
+}
+
+func TestHandleCodexAssistantSlashCommandRejectsUnknownReasoning(t *testing.T) {
+	options := codexAssistantOptions{Effort: defaultCodexAssistantEffort}
+	var stderr bytes.Buffer
+
+	handled, err := handleCodexAssistantSlashCommand(&stderr, &options, "/model gpt-5 turbo")
+	require.True(t, handled)
+	require.EqualError(t, err, `unknown reasoning "turbo"; expected one of: low, medium, high`)
+}
+
+func writeFakeCodexScript(t *testing.T) string {
+	t.Helper()
+	scriptPath := filepath.Join(t.TempDir(), "codex")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+case "${1:-}" in
+  --version)
+    echo "update check warning" >&2
+    echo "codex-cli 0.123.0-alpha.8"
+    ;;
+  app-server)
+    if [ "${2:-}" = "--help" ]; then
+      echo "usage: codex app-server"
+      exit 0
+    fi
+    GO_WANT_CODEX_HELPER=1 exec %q -test.run=TestCodexCommandHelperProcess --
+    ;;
+  *)
+    echo "unexpected codex args: $*" >&2
+    exit 1
+    ;;
+esac
+`, os.Args[0])
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
+	return scriptPath
+}
+
+func marshalID(value any) string {
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
+func maybeCaptureThreadStartParams(t *testing.T, params any) {
+	t.Helper()
+	path := strings.TrimSpace(os.Getenv("GO_WANT_CODEX_THREAD_START_CAPTURE"))
+	if path == "" {
+		return
+	}
+	data, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+}
+
+type capturedThreadStartParams struct {
+	CWD                   string `json:"cwd"`
+	DeveloperInstructions string `json:"developerInstructions"`
+}
+
+func readCapturedThreadStartParams(t *testing.T, path string) capturedThreadStartParams {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var params capturedThreadStartParams
+	require.NoError(t, json.Unmarshal(data, &params))
+	return params
+}
+
+func maybeCaptureTurnStartParams(t *testing.T, params any) {
+	t.Helper()
+	path := strings.TrimSpace(os.Getenv("GO_WANT_CODEX_TURN_START_CAPTURE"))
+	if path == "" {
+		return
+	}
+	data, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+}
+
+type capturedTurnStartParams struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+
+func readCapturedTurnStartParams(t *testing.T, path string) capturedTurnStartParams {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var params capturedTurnStartParams
+	require.NoError(t, json.Unmarshal(data, &params))
+	return params
+}
+
+func executeCommandWithInput(
+	t *testing.T,
+	env map[string]string,
+	input string,
+	args ...string,
+) (string, string, error) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	root := newRootCommand(func(key string) (string, bool) {
+		value, ok := env[key]
+		return value, ok
+	}, &stdout, &stderr)
+	root.SetIn(strings.NewReader(input))
+	root.SetArgs(args)
+	err := root.Execute()
+	return stdout.String(), stderr.String(), err
+}

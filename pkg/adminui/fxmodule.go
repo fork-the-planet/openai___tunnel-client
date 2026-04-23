@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/fx"
 
+	"go.openai.org/api/tunnel-client/pkg/codexappserver"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
@@ -30,6 +31,7 @@ var Module = fx.Module(
 	fx.Provide(
 		newConfiguredLogBuffer,
 		NewRuntimeSnapshotProvider,
+		codexappserver.NewBridge,
 		func(buf *LogBuffer) tclog.Sink { return buf },
 	),
 	fx.Invoke(registerRoutes),
@@ -56,6 +58,7 @@ type routeParams struct {
 	OAuthState     *oauth.DiscoveryState
 	HarpoonBuffer  *harpoon.CallBuffer
 	HarpoonReg     *harpoon.Registry
+	CodexBridge    *codexappserver.Bridge
 	StdioInfo      mcpclient.ChannelStdioRuntimeInfoProvider `optional:"true"`
 	MCPProbeState  *mcpclient.ProbeState                     `optional:"true"`
 	ProxyHealth    proxyhealth.Snapshotter                   `optional:"true"`
@@ -134,6 +137,13 @@ func registerRoutes(p routeParams) error {
 	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig, p.ProxyHealth))
 	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg))
 	gmux.HandleFunc("/api/harpoon/calls", handleHarpoonCalls(p.HarpoonBuffer, p.HarpoonConfig))
+	gmux.HandleFunc("/api/codex/status", handleCodexStatus(p))
+	gmux.HandleFunc("/api/codex/events", handleCodexEvents(p))
+	gmux.HandleFunc("/api/codex/events/stream", handleCodexEventsStream(p, streamCtx))
+	gmux.HandleFunc("/api/codex/login/device", handleCodexLoginDevice(p))
+	gmux.HandleFunc("/api/codex/login/cancel", handleCodexLoginCancel(p))
+	gmux.HandleFunc("/api/codex/thread/start", handleCodexThreadStart(p))
+	gmux.HandleFunc("/api/codex/turn/start", handleCodexTurnStart(p))
 	gmux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

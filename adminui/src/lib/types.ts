@@ -253,3 +253,107 @@ export interface MetricSample {
 }
 
 export type MetricMap = Map<string, MetricSample[]>;
+
+export interface CodexAccount {
+  type?: string;
+  email?: string;
+  plan_type?: string;
+}
+
+export interface CodexLoginState {
+  pending?: boolean;
+  type?: string;
+  login_id?: string;
+  verification_url?: string;
+  user_code?: string;
+  started_at?: string;
+  last_error?: string;
+}
+
+export interface CodexThreadState {
+  id?: string;
+  preview?: string;
+  cwd?: string;
+  model?: string;
+  model_provider?: string;
+  approval_policy?: string;
+  sandbox?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CodexTurnState {
+  id?: string;
+  thread_id?: string;
+  status?: string;
+  error?: string;
+  updated_at?: string;
+}
+
+export interface CodexInitializeInfo {
+  user_agent?: string;
+  codex_home?: string;
+  platform_family?: string;
+  platform_os?: string;
+}
+
+export interface CodexStatusResponse {
+  state?: string;
+  command?: string;
+  command_args?: string[];
+  command_cwd?: string;
+  pid?: number;
+  running?: boolean;
+  starting?: boolean;
+  ready?: boolean;
+  initialized?: boolean;
+  last_error?: string;
+  started_at?: string;
+  last_exit_at?: string;
+  initialize_info?: CodexInitializeInfo;
+  auth_method?: string;
+  requires_openai_auth?: boolean;
+  account?: CodexAccount | null;
+  login?: CodexLoginState | null;
+  thread?: CodexThreadState | null;
+  turn?: CodexTurnState | null;
+}
+
+export interface CodexEvent {
+  seq?: number;
+  time?: string;
+  source?: string;
+  method?: string;
+  thread_id?: string;
+  turn_id?: string;
+  item_id?: string;
+  summary?: string;
+  delta?: string;
+  payload?: unknown;
+}
+
+export interface CodexEventsResponse {
+  events?: CodexEvent[];
+}
+
+export interface CodexDeviceCodeLoginResponse {
+  login_id?: string;
+  verification_url?: string;
+  user_code?: string;
+}
+
+export interface CodexThreadStartResponse {
+  thread_id?: string;
+  cwd?: string;
+  model?: string;
+  model_provider?: string;
+  approval_policy?: string;
+  sandbox?: string;
+  thread_preview?: string;
+}
+
+export interface CodexTurnStartResponse {
+  turn_id?: string;
+  thread_id?: string;
+  status?: string;
+}

@@ -17,13 +17,14 @@ const (
 )
 
 type Detection struct {
-	CodexHome       string
-	ConfigPath      string
-	PluginDir       string
-	Detected        bool
-	PluginName      string
-	PluginInstalled bool
-	InstallHint     string
+	CodexHome        string
+	ConfigPath       string
+	PluginDir        string
+	Detected         bool
+	PluginName       string
+	PluginInstalled  bool
+	PluginBinaryHint string
+	InstallHint      string
 }
 
 type UninstallResult struct {
@@ -43,7 +44,7 @@ func Detect(lookupEnv func(string) (string, bool)) Detection {
 		ConfigPath:      filepath.Join(codexHome, "config.toml"),
 		PluginDir:       PluginTargetDir(codexHome),
 		PluginName:      manifest.Name,
-		InstallHint:     "tunnel-client plugin codex install",
+		InstallHint:     "tunnel-client codex plugin install",
 		Detected:        codexLooksInstalled(codexHome),
 		PluginInstalled: pluginLooksInstalled(codexHome, manifest.Name),
 	}
@@ -52,6 +53,7 @@ func Detect(lookupEnv func(string) (string, bool)) Detection {
 			detection.Detected = true
 		}
 	}
+	detection.PluginBinaryHint = ReadInstalledBinaryHint(codexHome)
 	return detection
 }
 
@@ -275,6 +277,17 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func ReadInstalledBinaryHint(codexHome string) string {
+	if strings.TrimSpace(codexHome) == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(PluginTargetDir(codexHome), binHintFilename))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func writeBinaryHint(dir string, tunnelClientBinary string) error {

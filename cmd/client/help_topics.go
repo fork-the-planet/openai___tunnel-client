@@ -35,6 +35,7 @@ func rootCommandLong() string {
 		"Tunnel client for the OpenAI MCP control plane.",
 		"Use it to connect a local or private MCP server to the OpenAI control plane over an outbound tunnel.",
 		"When it starts, it runs the long-lived tunnel daemon and exposes local operator surfaces at /healthz, /readyz, and /ui.",
+		`Fastest Codex terminal path: tunnel-client codex assistant "Summarize what tunnel-client is doing in this checkout."`,
 		"",
 		"Agent-first help topics:",
 	}

@@ -13,29 +13,44 @@ import (
 
 func newPluginCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "plugin",
-		Short: "Manage tunnel-client plugin integrations",
+		Use:    "plugin",
+		Short:  "Compatibility alias for `tunnel-client codex plugin`",
+		Hidden: true,
 	}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
-	cmd.AddCommand(newPluginCodexCommand(lookupEnv, stdout, stderr))
+	cmd.AddCommand(newPluginCodexAliasCommand(lookupEnv, stdout, stderr))
 	return cmd
 }
 
-func newPluginCodexCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
+func newPluginCodexAliasCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "codex",
+		Use:    "codex",
+		Short:  "Compatibility alias for `tunnel-client codex plugin`",
+		Hidden: true,
+	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.AddCommand(newCodexPluginInstallCommand(lookupEnv, stdout, stderr))
+	cmd.AddCommand(newCodexPluginUninstallCommand(lookupEnv, stdout, stderr))
+	cmd.AddCommand(newCodexPluginExportCommand(stdout, stderr))
+	return cmd
+}
+
+func newCodexPluginCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "plugin",
 		Short: "Install, uninstall, or export the embedded Codex plugin bundle",
 	}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
-	cmd.AddCommand(newPluginCodexInstallCommand(lookupEnv, stdout, stderr))
-	cmd.AddCommand(newPluginCodexUninstallCommand(lookupEnv, stdout, stderr))
-	cmd.AddCommand(newPluginCodexExportCommand(stdout, stderr))
+	cmd.AddCommand(newCodexPluginInstallCommand(lookupEnv, stdout, stderr))
+	cmd.AddCommand(newCodexPluginUninstallCommand(lookupEnv, stdout, stderr))
+	cmd.AddCommand(newCodexPluginExportCommand(stdout, stderr))
 	return cmd
 }
 
-func newPluginCodexInstallCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
+func newCodexPluginInstallCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var codexHome string
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -52,6 +67,7 @@ func newPluginCodexInstallCommand(lookupEnv func(string) (string, bool), stdout 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Installed %s into %s\n", detection.PluginName, detection.PluginDir)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated Codex config %s\n", detection.ConfigPath)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), `  tunnel-client codex assistant "Summarize the current tunnel setup."`)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  tunnel-client help plugin")
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  test -f %s\n", detection.PluginDir+"/.codex-plugin/plugin.json")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  start a new Codex session if plugins were already loaded")
@@ -64,7 +80,7 @@ func newPluginCodexInstallCommand(lookupEnv func(string) (string, bool), stdout 
 	return cmd
 }
 
-func newPluginCodexExportCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+func newCodexPluginExportCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{
 		Use:   "export",
@@ -88,7 +104,7 @@ func newPluginCodexExportCommand(stdout io.Writer, stderr io.Writer) *cobra.Comm
 	return cmd
 }
 
-func newPluginCodexUninstallCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
+func newCodexPluginUninstallCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var codexHome string
 	cmd := &cobra.Command{
 		Use:   "uninstall",
@@ -113,7 +129,7 @@ func newPluginCodexUninstallCommand(lookupEnv func(string) (string, bool), stdou
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No matching Codex config section found in %s\n", result.ConfigPath)
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  tunnel-client plugin codex install")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  tunnel-client codex plugin install")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  start a new Codex session if plugins were already loaded")
 			return nil
 		},

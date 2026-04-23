@@ -59,7 +59,26 @@ func TestDetectReportsMissingPluginInstallHint(t *testing.T) {
 
 	require.True(t, detection.Detected)
 	require.False(t, detection.PluginInstalled)
-	require.Equal(t, "tunnel-client plugin codex install", detection.InstallHint)
+	require.Equal(t, "tunnel-client codex plugin install", detection.InstallHint)
+}
+
+func TestDetectReportsInstalledBinaryHint(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	tunnelClientBin := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(tunnelClientBin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	_, err := Install(codexHome, tunnelClientBin)
+	require.NoError(t, err)
+
+	detection := Detect(func(key string) (string, bool) {
+		if key == "CODEX_HOME" {
+			return codexHome, true
+		}
+		return "", false
+	})
+
+	require.Equal(t, tunnelClientBin, detection.PluginBinaryHint)
 }
 
 func TestUninstallRemovesPluginBundleAndConfigSection(t *testing.T) {

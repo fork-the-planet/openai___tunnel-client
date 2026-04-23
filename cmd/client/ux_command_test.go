@@ -24,7 +24,8 @@ func TestRootHelpAdvertisesAgentFirstTopicsAndCommands(t *testing.T) {
 	require.Contains(t, stdout, "init")
 	require.Contains(t, stdout, "doctor")
 	require.Contains(t, stdout, "dev")
-	require.Contains(t, stdout, "plugin")
+	require.Contains(t, stdout, "codex")
+	require.Contains(t, stdout, "tunnel-client codex assistant")
 	require.Contains(t, stdout, "connect a local or private MCP server")
 }
 
@@ -165,6 +166,7 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	require.FileExists(t, filepath.Join(pluginDir, "scripts", "install_plugin.py"))
 	require.FileExists(t, filepath.Join(codexHome, "config.toml"))
 	require.Contains(t, stdout, "Installed tunnel-mcp")
+	require.Contains(t, stdout, "tunnel-client codex assistant")
 	require.Contains(t, stdout, "tunnel-client help plugin")
 	require.Contains(t, stdout, "start a new Codex session")
 
@@ -190,7 +192,7 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	require.NoError(t, readErr)
 	require.NotContains(t, string(configData), `[plugins."tunnel-mcp@debug"]`)
 	require.Contains(t, stdout, "Removed tunnel-mcp")
-	require.Contains(t, stdout, "tunnel-client plugin codex install")
+	require.Contains(t, stdout, "tunnel-client codex plugin install")
 }
 
 func TestPluginCodexUninstallIsIdempotent(t *testing.T) {

@@ -6,12 +6,14 @@ description: Create, connect, list, and inspect MCP tunnels through the local tu
 # Tunnel MCP
 
 Use `scripts/tunnel_mcp` from this plugin when a user asks Codex to manage MCP
-tunnels through `tunnel-client`.
+tunnels through `tunnel-client`. The plugin entrypoint is a thin router onto
+the public native `tunnel-client sessions ...` and
+`tunnel-client admin-profiles ...` command trees.
 
 Preferred install surfaces:
 
-- `tunnel-client plugin codex install` when the binary is available
-- `tunnel-client plugin codex uninstall` when the installed plugin should be reset or removed
+- `tunnel-client codex plugin install` when the binary is available
+- `tunnel-client codex plugin uninstall` when the installed plugin should be reset or removed
 - `python3 plugins/tunnel-mcp/scripts/install_plugin.py` from a source checkout
 - `python3 scripts/install_plugin.py` from an exported plugin bundle root
 
@@ -19,19 +21,22 @@ Preferred install surfaces:
 
 - Use `tunnel-client admin tunnels` for remote tunnel CRUD. Do not call raw
   tunnel-service HTTP endpoints from this plugin.
+- Route operational actions through the public native CLI:
+  `tunnel-client sessions ...` and `tunnel-client admin-profiles ...`.
 - Use native `tunnel-client run --profile <name>` for runtime processes. Do not
   use a helper shim that translates profile files into flags.
 - Do not assume a specific source checkout, build system, internal helper, or
-  tmux is available. The plugin must work from an installed plugin directory
-  with only `python3` and `tunnel-client`.
+  tmux is available. The installed plugin must work with `tunnel-client` alone;
+  Python is only needed for the standalone installer paths.
 - Use tmux when available; otherwise start `tunnel-client run --profile <name>`
   as a detached background process and report the PID/log path.
-- Store alias and process state under `$CODEX_HOME/tunnel-mcp` when
-  `CODEX_HOME` is set, otherwise under `~/.codex/tunnel-mcp`.
-- Store admin CRUD configuration in `$CODEX_HOME/tunnel-mcp/admin_profiles.yaml`.
-  Use `--admin-profile <name>` to select a profile and `--admin-key env:NAME` or
-  `--admin-key file:/path` to store a non-default admin key reference. Do not
-  pass literal admin keys.
+- Tunnel state is owned by `tunnel-client`. By default it lives under
+  `TUNNEL_CLIENT_STATE_DIR` or the platform state directory, and legacy
+  `CODEX_HOME` / `~/.codex/tunnel-mcp` state is reused when it already exists.
+- Admin CRUD configuration is owned by the native `admin-profiles` commands.
+  Use `--admin-profile <name>` to select a profile and `--admin-key env:NAME`
+  or `--admin-key file:/path` to store a non-default admin key reference. Do
+  not pass literal admin keys.
 - Preserve the link between tunnels and admin CRUD credentials by keeping
   `admin_profile` on alias and process records.
 - Write generated runtime YAML to the native tunnel-client profile directory:
