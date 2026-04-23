@@ -230,6 +230,8 @@ bin/tunnel-client admin tunnels create \
   --description "Routes BigCo connector traffic to the on-prem MCP server" \
   --workspace-id "<WORKSPACE_ID>"
 
+# After create succeeds, wait 25-30 seconds before expecting the tunnel to be active and ready.
+
 # List by workspace (exactly one filter required: org OR workspace OR tenant)
 bin/tunnel-client admin tunnels list --workspace-id "<WORKSPACE_ID>" --json
 

@@ -163,7 +163,8 @@ secrets are redacted before export.
 - `admin tunnels get <id>`: read-only tunnel metadata lookup; accepts the
   runtime key or an admin key.
 - `admin tunnels list|create|update|delete`: admin CRUD; requires an admin key
-  and explicit org/workspace/tenant scope flags.
+  and explicit org/workspace/tenant scope flags. After `create` succeeds, wait
+  25-30 seconds before expecting the tunnel to be active and ready.
 - `tunnel-client` with no subcommand prints help and available commands.
 
 ## Built-in profile samples

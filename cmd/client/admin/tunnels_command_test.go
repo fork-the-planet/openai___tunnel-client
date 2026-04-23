@@ -193,6 +193,86 @@ func TestTunnelSubcommandExamplesUseAdminPath(t *testing.T) {
 	}
 }
 
+func TestCreateHelpExplainsReadyDelay(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	root := NewAdminCommand(func(string) (string, bool) { return "", false }, &out, io.Discard)
+
+	root.SetArgs([]string{"tunnels", "create", "--help"})
+	require.NoError(t, root.Execute())
+
+	help := out.String()
+	require.Contains(t, help, "wait 25-30 seconds")
+	require.Contains(t, help, "active and ready")
+}
+
+func TestCreatePrintsReadyDelayNoteForTextOutput(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/tunnels", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"tunnel_123","name":"created tunnel","description":"created description","organization_ids":["org-1"],"workspace_ids":["ws-1"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	root := NewAdminCommand(func(key string) (string, bool) {
+		if key == "OPENAI_ADMIN_KEY" {
+			return "admin", true
+		}
+		return "", false
+	}, &out, io.Discard)
+
+	root.SetArgs([]string{
+		"tunnels", "create",
+		"--control-plane.base-url", server.URL,
+		"--name", "created tunnel",
+		"--description", "created description",
+		"--organization-id", "org-1",
+		"--workspace-id", "ws-1",
+	})
+
+	require.NoError(t, root.Execute())
+	require.Contains(t, out.String(), "Tunnel tunnel_123")
+	require.Contains(t, out.String(), tunnelCreateReadyDelayNote)
+}
+
+func TestCreateOmitsReadyDelayNoteForJSONOutput(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/tunnels", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"tunnel_123","name":"created tunnel","description":"created description","organization_ids":["org-1"],"workspace_ids":["ws-1"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	root := NewAdminCommand(func(key string) (string, bool) {
+		if key == "OPENAI_ADMIN_KEY" {
+			return "admin", true
+		}
+		return "", false
+	}, &out, io.Discard)
+
+	root.SetArgs([]string{
+		"tunnels", "create",
+		"--control-plane.base-url", server.URL,
+		"--name", "created tunnel",
+		"--description", "created description",
+		"--organization-id", "org-1",
+		"--json",
+	})
+
+	require.NoError(t, root.Execute())
+	require.NotContains(t, out.String(), tunnelCreateReadyDelayNote)
+	require.Contains(t, out.String(), `"id": "tunnel_123"`)
+}
+
 func TestCreateRejectsDuplicateScope(t *testing.T) {
 	t.Parallel()
 

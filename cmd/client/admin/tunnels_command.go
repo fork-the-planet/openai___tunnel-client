@@ -17,6 +17,7 @@ import (
 )
 
 const defaultAdminRequestTimeout = 30 * time.Second
+const tunnelCreateReadyDelayNote = "Note: wait 25-30 seconds before expecting a newly created tunnel to be active and ready."
 
 func NewTunnelsCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	if lookupEnv == nil {
@@ -61,16 +62,17 @@ func newTunnelCreateCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 Create a tunnel with organization/workspace attachments.
 
 This command requires a real admin API key. At least one org or workspace ID is required.
+After create succeeds, wait 25-30 seconds before expecting the tunnel to be active and ready.
 `),
 		Example: strings.TrimSpace(`
-  # Create with org + workspace scope
+  # Create with org + workspace scope. Then wait 25-30 seconds before using it.
   tunnel-client admin tunnels create \
     --name "My Tunnel" \
     --description "Routes to prod MCP" \
     --organization-id org_123 \
     --workspace-id ws_456
 
-  # Create scoped only to a workspace
+  # Create scoped only to a workspace. Then wait 25-30 seconds before using it.
   tunnel-client admin tunnels create \
     --name "Workspace Only" \
     --description "WS-only tunnel" \
@@ -105,7 +107,10 @@ This command requires a real admin API key. At least one org or workspace ID is 
 			if err != nil {
 				return err
 			}
-			return printTunnel(cmd, t)
+			if err := printTunnel(cmd, t); err != nil {
+				return err
+			}
+			return printTunnelCreateReadyDelay(cmd)
 		},
 	}
 
@@ -434,6 +439,15 @@ func printTunnel(cmd *cobra.Command, t *admin.Tunnel) error {
 	}
 
 	_, err := fmt.Fprint(cmd.OutOrStdout(), builder.String())
+	return err
+}
+
+func printTunnelCreateReadyDelay(cmd *cobra.Command) error {
+	jsonOut, _ := cmd.Flags().GetBool("json")
+	if jsonOut {
+		return nil
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), tunnelCreateReadyDelayNote)
 	return err
 }
 
