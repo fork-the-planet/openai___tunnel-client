@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/codexplugin/state"
@@ -465,24 +464,6 @@ func ClearHealthURLFile(alias string, root state.Root) {
 	_ = os.Remove(ProfileHealthURLFile(alias, root))
 }
 
-func PIDIsRunning(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
-}
-
-func TerminateProcess(pid int) error {
-	if pid <= 0 {
-		return nil
-	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-		return fmt.Errorf("terminate process %d: %w", pid, err)
-	}
-	return nil
-}
-
 func WaitForProcessExit(pid int) bool {
 	deadline := time.Now().Add(terminateWaitDuration)
 	for time.Now().Before(deadline) {
@@ -550,7 +531,7 @@ func startProcess(args []string, env map[string]string, logPath string) (Process
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
 	cmd.Env = envList(env)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	configureDetachedProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return nil, err

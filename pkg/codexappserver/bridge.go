@@ -174,8 +174,10 @@ type Bridge struct {
 
 	cfg           commandConfig
 	cmd           *exec.Cmd
+	pid           int
 	stdin         io.WriteCloser
 	waitDone      chan struct{}
+	running       bool
 	starting      bool
 	ready         bool
 	startupCh     chan struct{}
@@ -347,7 +349,8 @@ func (b *Bridge) Snapshot() Snapshot {
 		Command:     b.cfg.command,
 		CommandArgs: append([]string(nil), b.cfg.args...),
 		CommandCWD:  b.cfg.cwd,
-		Running:     b.cmd != nil && b.cmd.Process != nil && b.cmd.ProcessState == nil,
+		PID:         b.pid,
+		Running:     b.running,
 		Starting:    b.starting,
 		Ready:       b.ready,
 		Initialized: b.ready,
@@ -361,9 +364,6 @@ func (b *Bridge) Snapshot() Snapshot {
 			PlatformOS:     b.initialize.PlatformOS,
 		},
 		AuthMethod: b.authMethod,
-	}
-	if b.cmd != nil && b.cmd.Process != nil {
-		out.PID = b.cmd.Process.Pid
 	}
 	if b.requiresAuth != nil {
 		value := *b.requiresAuth
@@ -715,8 +715,10 @@ func (b *Bridge) startProcessLocked() error {
 	waitDone := make(chan struct{})
 	b.mu.Lock()
 	b.cmd = cmd
+	b.pid = cmd.Process.Pid
 	b.stdin = stdin
 	b.waitDone = waitDone
+	b.running = true
 	b.startedAt = time.Now().UTC()
 	b.mu.Unlock()
 
@@ -976,6 +978,8 @@ func (b *Bridge) waitForExit(cmd *exec.Cmd, done chan struct{}) {
 	b.starting = false
 	b.stdin = nil
 	b.cmd = nil
+	b.pid = 0
+	b.running = false
 	b.lastExitAt = time.Now().UTC()
 	if err != nil && !b.shuttingDown {
 		b.lastError = err.Error()
