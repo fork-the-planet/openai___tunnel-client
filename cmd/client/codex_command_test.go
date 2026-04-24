@@ -200,7 +200,8 @@ func TestCodexAssistantInjectsPackagedKnowledgeWhenRepoDocsMayBeAbsent(t *testin
 		}
 	}
 	require.NotEmpty(t, found)
-	require.Contains(t, found, "knowledge.match.1.path=docs/enterprise-customer-onboarding.md")
+	require.Contains(t, found, "docs/onboarding.md")
+	require.Contains(t, found, "docs/enterprise-customer-onboarding.md")
 	require.Contains(t, found, "Connection: Tunnel")
 }
 

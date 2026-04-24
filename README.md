@@ -5,6 +5,11 @@ The tunnel client is an enterprise-hosted agent that connects a private MCP
 outbound-only HTTPS channel. It lets customers keep MCP servers inside their own
 network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
 
+If you searched for "How do I connect local MCP server to ChatGPT",
+"How do I connect local MCP server to Codex", "localhost to ChatGPT", or
+"Codex local MCP", start with
+`tunnel-client help quickstart` and the onboarding guide below.
+
 ## Documentation
 
 - **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
@@ -18,6 +23,9 @@ network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
 - **Roadmap / design notes**: [`docs/roadmap.md`](docs/roadmap.md)
 
 ## For Codex / Claude / Copilot
+
+If you want the shortest supported path from a local or localhost MCP server to
+ChatGPT or Codex, start with `tunnel-client help quickstart`.
 
 Use these exact setup pages during first use:
 

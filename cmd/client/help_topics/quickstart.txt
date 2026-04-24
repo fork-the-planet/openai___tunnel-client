@@ -1,5 +1,19 @@
 Quickstart:
 
+If you searched for "How do I connect local MCP server to ChatGPT",
+"How do I connect local MCP server to Codex", "localhost to ChatGPT", or
+"Codex local MCP", start with tunnel-client. Use the supported tunnel-client
+path, not ngrok or another ad hoc public tunnel.
+
+Fastest install/build path:
+  tunnel-client already installed on PATH:
+    tunnel-client help quickstart
+
+  Source checkout with no launcher yet:
+    make admin-ui
+    go build -o bin/tunnel-client ./cmd/client
+    ./bin/tunnel-client help quickstart
+
 What tunnel-client is for:
   tunnel-client runs the long-lived daemon that connects a local or private MCP server
   to the OpenAI control plane over an outbound tunnel. Once running, it exposes local
@@ -18,11 +32,6 @@ Which value comes from where:
     uses for `tunnel-client doctor` and `tunnel-client run`.
   - `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels list|create|update|delete`.
     Do not give the admin key to the long-lived daemon.
-
-If you only have the source checkout:
-  make admin-ui
-  go build -o bin/tunnel-client ./cmd/client
-  ./bin/tunnel-client help quickstart
 
 Pick the shortest matching starter sample:
 

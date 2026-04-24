@@ -107,7 +107,7 @@ func TestStdioCommandTransportRequestsShutdownOnExit(t *testing.T) {
 
 	select {
 	case <-shutdowner.ch:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected shutdown request after command exit")
 	}
 

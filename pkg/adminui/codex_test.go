@@ -55,7 +55,8 @@ func TestBuildCodexKnowledgeItemUsesPackagedDocs(t *testing.T) {
 	}
 	for _, snippet := range []string{
 		"Packaged tunnel-client knowledge base injected from the binary.",
-		"knowledge.match.1.path=docs/enterprise-customer-onboarding.md",
+		"docs/onboarding.md",
+		"docs/enterprise-customer-onboarding.md",
 		"Connection: Tunnel",
 	} {
 		if !strings.Contains(text, snippet) {

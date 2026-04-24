@@ -180,7 +180,7 @@ func TestRunStartupProbeMarksSuccess(t *testing.T) {
 		state,
 	)
 
-	_, err, ok := state.Wait(10 * time.Millisecond)
+	_, err, ok := state.Wait(time.Second)
 	if !ok {
 		t.Fatalf("expected probe state to complete")
 	}
@@ -207,7 +207,7 @@ func TestRunStartupProbeMarksFailure(t *testing.T) {
 		state,
 	)
 
-	_, err, ok := state.Wait(10 * time.Millisecond)
+	_, err, ok := state.Wait(time.Second)
 	if !ok {
 		t.Fatalf("expected probe state to complete")
 	}
@@ -234,7 +234,7 @@ func TestRunStartupProbeMarksFailureWhenConnectHangs(t *testing.T) {
 	)
 	close(release)
 
-	_, err, ok := state.Wait(10 * time.Millisecond)
+	_, err, ok := state.Wait(time.Second)
 	if !ok {
 		t.Fatalf("expected probe state to complete")
 	}

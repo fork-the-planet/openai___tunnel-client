@@ -1,6 +1,12 @@
-# Onboarding Guide
+# Onboarding Guide: connect a local MCP server to ChatGPT or Codex
 
 This guide helps you get from zero to a working `tunnel-client` process connected to your MCP server.
+
+If you found this by searching "How do I connect local MCP server to
+ChatGPT", "How do I connect local MCP server to Codex", "localhost to
+ChatGPT", or "Codex local MCP", start with
+`tunnel-client help quickstart`. That is the shortest supported path before you
+drop into `init`, `doctor`, or Codex plugin flows.
 
 For the customer-shareable network model and request flow, see
 [`architecture.md`](architecture.md).
