@@ -934,24 +934,35 @@ func buildLoggingConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 		getValue(fs, "log.level"),
 		envOrDefault(lookupEnv, "LOG_LEVEL", defaultLogLevel),
 	)
+	logFile := firstSet(
+		getValue(fs, "log.file"),
+		envOrDefault(lookupEnv, "LOG_FILE", ""),
+	)
+	logFormatFlag := getValue(fs, "log.format")
+	logFormatEnv, logFormatEnvSet := lookupEnv("LOG_FORMAT")
+	logFormatExplicit := logFormatFlag != "" || (logFormatEnvSet && logFormatEnv != "")
 	logFormatRaw := firstSet(
-		getValue(fs, "log.format"),
-		envOrDefault(lookupEnv, "LOG_FORMAT", defaultLogFormat.String()),
+		logFormatFlag,
+		func() string {
+			if logFormatEnvSet && logFormatEnv != "" {
+				return logFormatEnv
+			}
+			if logFile != "" {
+				return LogFormatStructText.String()
+			}
+			return defaultLogFormat.String()
+		}(),
 	)
 	logFormat, err := ParseLogFormat(logFormatRaw)
 	if err != nil {
 		return LoggingConfig{}, err
 	}
-	logFile := firstSet(
-		getValue(fs, "log.file"),
-		envOrDefault(lookupEnv, "LOG_FILE", ""),
-	)
 
 	if !strings.EqualFold(logLevelRaw, defaultLogLevel) && logFormat == defaultLogFormat {
 		return LoggingConfig{}, fmt.Errorf("log level requires 'struct-text' or 'json' log format")
 	}
 
-	if logFormat == LogFormatUnset && logFile != "" {
+	if logFormat == LogFormatUnset && logFile != "" && !logFormatExplicit {
 		return LoggingConfig{}, fmt.Errorf("invalid logging configuration: file is only supported for json or struct-text")
 	}
 

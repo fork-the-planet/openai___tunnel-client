@@ -35,6 +35,7 @@ type startupParams struct {
 
 type startupSummary struct {
 	HealthURL              string
+	HealthURLFile          string
 	UIURL                  string
 	MetricsURL             string
 	ConfigSource           string
@@ -103,6 +104,7 @@ func registerStartup(p startupParams) error {
 			)
 			logger.InfoContext(ctx, "tunnel-client startup summary",
 				slog.String("health_url", summary.HealthURL),
+				slog.String("health_url_file", summary.HealthURLFile),
 				slog.String("ui_url", summary.UIURL),
 				slog.String("metrics_url", summary.MetricsURL),
 				slog.String("config_source", summary.ConfigSource),
@@ -181,6 +183,7 @@ func buildStartupSummary(
 		return summary
 	}
 
+	summary.HealthURLFile = cfg.Health.URLFile
 	summary.ConfigSource = startupConfigSource(cfg.Runtime)
 	summary.ProfileName = cfg.Runtime.ProfileName
 	summary.ProfilePath = cfg.Runtime.ProfilePath

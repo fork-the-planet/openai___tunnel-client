@@ -38,6 +38,9 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 			ProfileName: "demo",
 			ProfilePath: "/tmp/demo.yaml",
 		},
+		Health: config.HealthConfig{
+			URLFile: "/tmp/health-url",
+		},
 	}
 
 	summary := buildStartupSummary(cfg, "http://127.0.0.1:7777", nil, nil, codexplugin.Detection{
@@ -49,6 +52,7 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 	})
 
 	require.Equal(t, "http://127.0.0.1:7777", summary.HealthURL)
+	require.Equal(t, "/tmp/health-url", summary.HealthURLFile)
 	require.Equal(t, "http://127.0.0.1:7777/ui", summary.UIURL)
 	require.Equal(t, "profile:demo", summary.ConfigSource)
 	require.Equal(t, "demo", summary.ProfileName)
@@ -59,6 +63,17 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 	require.True(t, summary.CodexDetected)
 	require.False(t, summary.CodexPluginInstalled)
 	require.Equal(t, "tunnel-client codex plugin install", summary.CodexPluginInstallHint)
+}
+
+func TestBuildStartupSummaryHandlesNilConfig(t *testing.T) {
+	t.Parallel()
+
+	summary := buildStartupSummary(nil, "http://127.0.0.1:7777", nil, nil, codexplugin.Detection{})
+
+	require.Equal(t, "http://127.0.0.1:7777", summary.HealthURL)
+	require.Equal(t, "", summary.HealthURLFile)
+	require.Equal(t, "http://127.0.0.1:7777/ui", summary.UIURL)
+	require.Equal(t, "http://127.0.0.1:7777/metrics", summary.MetricsURL)
 }
 
 func TestStartupFirstFailingDependencyPrefersProbeOverOAuth(t *testing.T) {

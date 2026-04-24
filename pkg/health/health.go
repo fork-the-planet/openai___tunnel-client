@@ -176,7 +176,11 @@ func newHealthService(p healthParams) (*healthService, error) {
 					return fmt.Errorf("write health URL file %s: %w", p.HealthConfig.URLFile, err)
 				}
 				service.urlFile = p.HealthConfig.URLFile
-				logger.InfoContext(ctx, "health URL written", slog.String("url", healthURL), slog.String("path", p.HealthConfig.URLFile))
+				logger.InfoContext(ctx,
+					"🩺 HEALTH URL: "+healthURL+" (written to "+p.HealthConfig.URLFile+")",
+					slog.String("url", healthURL),
+					slog.String("path", p.HealthConfig.URLFile),
+				)
 			}
 			logger.InfoContext(ctx, "health server listening", slog.String("addr", srv.Addr))
 			go func() {

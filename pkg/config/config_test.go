@@ -872,6 +872,83 @@ func TestLoadRejectsLogLevelOverrideWithoutFormat(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsLogFileToStructTextWhenFormatUnset(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--log.file", "/tmp/tunnel.log",
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "MCP_SERVER_URL":
+			return "https://mcp.default", true
+		default:
+			return "", false
+		}
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Logging.Format != LogFormatStructText {
+		t.Fatalf("expected log format struct-text, got %s", cfg.Logging.Format)
+	}
+	if cfg.Logging.File != "/tmp/tunnel.log" {
+		t.Fatalf("expected log file /tmp/tunnel.log, got %s", cfg.Logging.File)
+	}
+}
+
+func TestLoadKeepsExplicitJSONFormatWhenLogFileIsSet(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--log.file", "/tmp/tunnel.jsonl",
+		"--log.format", "json",
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "MCP_SERVER_URL":
+			return "https://mcp.default", true
+		default:
+			return "", false
+		}
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Logging.Format != LogFormatJSON {
+		t.Fatalf("expected log format json, got %s", cfg.Logging.Format)
+	}
+	if cfg.Logging.File != "/tmp/tunnel.jsonl" {
+		t.Fatalf("expected log file /tmp/tunnel.jsonl, got %s", cfg.Logging.File)
+	}
+}
+
+func TestLoadRejectsUnsupportedFormatWhenLogFileIsSet(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--log.file", "/tmp/tunnel.log",
+		"--log.format", "yaml",
+	}
+	_, err := Load(args, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "MCP_SERVER_URL":
+			return "https://mcp.default", true
+		default:
+			return "", false
+		}
+	})
+	if err == nil {
+		t.Fatalf("expected error for unsupported log format when log.file is set")
+	}
+	if !strings.Contains(err.Error(), "unsupported log format") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadRequiresTunnelID(t *testing.T) {
 	cfgLookup := func(key string) (string, bool) {
 		switch key {
