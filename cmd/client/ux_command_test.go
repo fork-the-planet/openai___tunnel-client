@@ -184,7 +184,7 @@ func TestInitCanUseExplicitStdioSample(t *testing.T) {
 		"--profile", "local-stdio",
 		"--profile-dir", profileDir,
 		"--tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
-		"--mcp-command", "python /path/to/server.py",
+		"--mcp-command", testExecutableCommand(),
 	)
 
 	require.NoError(t, err, stderr)
@@ -192,8 +192,32 @@ func TestInitCanUseExplicitStdioSample(t *testing.T) {
 	data, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	require.NoError(t, config.ValidateProfileBytes(path, data))
-	require.Contains(t, string(data), `command: "python /path/to/server.py"`)
+	require.Contains(t, string(data), `command: "`+testExecutableCommand()+`"`)
 	require.Contains(t, stdout, "Sample: sample_mcp_stdio_local")
+}
+
+func TestInitRejectsNonExecutableStdioCommand(t *testing.T) {
+	t.Parallel()
+
+	profileDir := t.TempDir()
+	commandPath := filepath.Join(t.TempDir(), "non-executable-server")
+	require.NoError(t, os.WriteFile(commandPath, []byte("#!/bin/sh\n"), 0o600))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "init",
+		"--sample", "sample_mcp_stdio_local",
+		"--profile", "broken-stdio",
+		"--profile-dir", profileDir,
+		"--tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp-command", commandPath,
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Contains(t, err.Error(), "mcp-command preflight failed")
+	require.Contains(t, err.Error(), "is not executable")
+	require.NoFileExists(t, filepath.Join(profileDir, "broken-stdio.yaml"))
 }
 
 func TestEmbeddedProfileSamplesRenderAndValidate(t *testing.T) {

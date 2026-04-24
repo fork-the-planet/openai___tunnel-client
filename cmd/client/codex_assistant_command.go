@@ -25,6 +25,8 @@ const (
 	defaultCodexAssistantLoginTimeout   = 5 * time.Minute
 )
 
+var codexAssistantTurnIdleTimeout = 2 * time.Minute
+
 type codexAssistantOptions struct {
 	CWD                   string
 	Model                 string
@@ -396,20 +398,52 @@ func waitForCodexAssistantTurn(
 	if waiting != nil {
 		defer waiting.Finish()
 	}
+	stallTimer := time.NewTimer(codexAssistantTurnIdleTimeout)
+	defer stallTimer.Stop()
+	resetStallTimer := func() {
+		if !stallTimer.Stop() {
+			select {
+			case <-stallTimer.C:
+			default:
+			}
+		}
+		stallTimer.Reset(codexAssistantTurnIdleTimeout)
+	}
 	streamed := false
 	finalMessage := ""
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return codexAssistantWaitError("assistant turn canceled", bridge, ctx.Err().Error())
+		case <-stallTimer.C:
+			return codexAssistantWaitError(
+				"assistant turn stalled after turn/start",
+				bridge,
+				fmt.Sprintf("turn %s produced no completion or output for %s", turnID, codexAssistantTurnIdleTimeout),
+			)
 		case event, ok := <-events:
 			if !ok {
-				return errors.New("assistant event stream closed unexpectedly")
+				return codexAssistantWaitError("assistant event stream closed unexpectedly", bridge, "")
 			}
 			if event.TurnID != "" && event.TurnID != turnID {
 				continue
 			}
+			if event.TurnID == turnID {
+				resetStallTimer()
+			}
 			switch event.Method {
+			case "process/error", "process/exited":
+				detail := strings.TrimSpace(event.Summary)
+				if detail == "" {
+					detail = "codex app-server stopped while the assistant turn was in progress"
+				}
+				return codexAssistantWaitError("assistant bridge stopped", bridge, detail)
+			case "error":
+				detail := strings.TrimSpace(event.Summary)
+				if detail == "" {
+					detail = "codex app-server reported a turn error"
+				}
+				return codexAssistantWaitError("assistant turn failed", bridge, detail)
 			case "item/agentMessage/delta":
 				if event.Delta != "" {
 					if waiting != nil {
@@ -423,6 +457,7 @@ func waitForCodexAssistantTurn(
 					finalMessage = text
 				}
 			case "turn/completed":
+				resetStallTimer()
 				snapshot := bridge.Snapshot()
 				if !streamed && finalMessage != "" {
 					if waiting != nil {
@@ -444,6 +479,19 @@ func waitForCodexAssistantTurn(
 			}
 		}
 	}
+}
+
+func codexAssistantWaitError(stage string, bridge *codexappserver.Bridge, detail string) error {
+	message := strings.TrimSpace(stage)
+	if text := strings.TrimSpace(detail); text != "" {
+		message += ": " + text
+	}
+	if bridge != nil {
+		if diagnostics := strings.TrimSpace(bridge.RecentDiagnosticSummary(6)); diagnostics != "" {
+			message += "; " + diagnostics
+		}
+	}
+	return errors.New(message)
 }
 
 func newCodexAssistantWaitingRenderer(stderr io.Writer) *codexAssistantWaitingRenderer {

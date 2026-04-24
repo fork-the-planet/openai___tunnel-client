@@ -62,6 +62,11 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 			if err := config.ValidateProfileBytes(path, data); err != nil {
 				return err
 			}
+			if strings.TrimSpace(mcpCommand) != "" {
+				if _, err := preflightStdioCommand(mcpCommand); err != nil {
+					return fmt.Errorf("mcp-command preflight failed: %w", err)
+				}
+			}
 			if err := writeProfileFile(path, dir, data, force); err != nil {
 				return err
 			}

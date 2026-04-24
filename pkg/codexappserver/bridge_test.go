@@ -74,6 +74,62 @@ func TestBridgeSupportsLoginThreadAndTurn(t *testing.T) {
 	require.NoError(t, bridge.Stop(stopCtx))
 }
 
+func TestBridgeStartThreadTimeoutIncludesRecentDiagnostics(t *testing.T) {
+	bridge := NewBridge(nil, nil)
+	bridge.mu.Lock()
+	bridge.ready = true
+	bridge.stdin = discardWriteCloser{}
+	bridge.thread = &ThreadState{ID: "thread_ready"}
+	bridge.mu.Unlock()
+
+	bridge.appendStderrLine("thread/start is stuck")
+	bridge.publish(Event{
+		Time:    time.Now().UTC(),
+		Source:  "notification",
+		Method:  "thread/started",
+		Summary: "thread started",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	_, err := bridge.StartThread(ctx, ThreadStartParams{CWD: "/workspace/openai"})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "thread/start timed out")
+	require.ErrorContains(t, err, "recent stderr: thread/start is stuck")
+	require.ErrorContains(t, err, "recent bridge events: thread/started thread started")
+}
+
+func TestBridgeStartTurnTimeoutIncludesRecentDiagnostics(t *testing.T) {
+	bridge := NewBridge(nil, nil)
+	bridge.mu.Lock()
+	bridge.ready = true
+	bridge.stdin = discardWriteCloser{}
+	bridge.thread = &ThreadState{ID: "thread_123"}
+	bridge.mu.Unlock()
+
+	bridge.appendStderrLine("turn/start is stuck")
+	bridge.publish(Event{
+		Time:     time.Now().UTC(),
+		Source:   "notification",
+		Method:   "thread/started",
+		ThreadID: "thread_123",
+		Summary:  "thread started",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	_, err := bridge.StartTurn(ctx, TurnStartParams{
+		ThreadID: "thread_123",
+		Input:    []map[string]any{{"type": "text", "text": "diagnose"}},
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "turn/start timed out")
+	require.ErrorContains(t, err, "recent stderr: turn/start is stuck")
+	require.ErrorContains(t, err, "recent bridge events: thread/started thread started")
+}
+
 func newMockBridge(t *testing.T) *Bridge {
 	t.Helper()
 
@@ -116,6 +172,16 @@ func newMockBridge(t *testing.T) *Bridge {
 	})
 
 	return bridge
+}
+
+type discardWriteCloser struct{}
+
+func (discardWriteCloser) Write(data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (discardWriteCloser) Close() error {
+	return nil
 }
 
 func runMockCodexAppServer(requests io.Reader, responses io.Writer) error {

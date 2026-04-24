@@ -84,7 +84,7 @@ func TestDoctorMissingTunnelIDExplainIncludesConnectorRuntimeNote(t *testing.T) 
 		"HOME":                  t.TempDir(),
 		"CONTROL_PLANE_API_KEY": "test-api-key",
 	}, "doctor",
-		"--mcp.command", "python server.py",
+		"--mcp.command", testExecutableCommand(),
 		"--explain",
 	)
 
@@ -184,7 +184,7 @@ func TestDoctorReadsProfile(t *testing.T) {
 		TunnelID:         "tunnel_0123456789abcdef0123456789abcdef",
 		APIKeyRef:        "env:CONTROL_PLANE_API_KEY",
 		HealthListenAddr: "127.0.0.1:7777",
-		MCPCommand:       "python -m http.server",
+		MCPCommand:       testExecutableCommand(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, data, 0o600))
@@ -207,15 +207,37 @@ func TestDoctorUsesEphemeralUIHintForPortZero(t *testing.T) {
 		"CONTROL_PLANE_API_KEY": "test-api-key",
 	}, "doctor",
 		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
-		"--mcp.command", "python server.py",
+		"--mcp.command", testExecutableCommand(),
 		"--health.listen-addr", "127.0.0.1:0",
 	)
 
 	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "CHECK mcp_command_executable")
 	require.Contains(t, stdout, "CHECK health_listener")
 	require.Contains(t, stdout, "ephemeral bind ok")
 	require.Contains(t, stdout, "CHECK ui")
 	require.Contains(t, stdout, "inspect startup summary or HEALTH_URL_FILE")
+}
+
+func TestDoctorFailsWhenStdioExecutableMissing(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing-mcp-command")
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor",
+		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp.command", missing,
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Equal(t, 2, exitCode(err))
+	require.Contains(t, stdout, "CHECK mcp_command_executable")
+	require.Contains(t, stdout, "stdio MCP executable")
+	require.Contains(t, stdout, "FAILED_CHECKS mcp_command_executable")
 }
 
 func TestDoctorBaseURLUsesLoopbackForWildcardAndInvalidListenAddrs(t *testing.T) {
@@ -254,4 +276,8 @@ func exitCode(err error) int {
 
 func serverURLWithoutTrailingSlash(r *http.Request) string {
 	return strings.TrimSuffix("http://"+r.Host, "/")
+}
+
+func testExecutableCommand() string {
+	return os.Args[0]
 }

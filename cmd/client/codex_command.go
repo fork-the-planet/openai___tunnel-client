@@ -43,8 +43,13 @@ type codexStatusReport struct {
 	RecommendedUpgradeCommand   string                   `json:"recommended_upgrade_command,omitempty"`
 	RecommendedUninstallCommand string                   `json:"recommended_uninstall_command,omitempty"`
 	FallbackInstallCommands     []string                 `json:"fallback_install_commands,omitempty"`
+	BridgeReady                 bool                     `json:"bridge_ready"`
+	AssistantState              string                   `json:"assistant_state,omitempty"`
+	AssistantError              string                   `json:"assistant_error,omitempty"`
 	Snapshot                    *codexappserver.Snapshot `json:"snapshot,omitempty"`
 }
+
+var codexStatusAssistantProbeTimeout = 5 * time.Second
 
 func newCodexCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
@@ -181,14 +186,24 @@ func inspectCodexStatus(lookupEnv func(string) (string, bool)) codexStatusReport
 	defer func() { _ = bridge.Stop(stopCtx) }()
 
 	snapshot := bridge.Snapshot()
+	report.BridgeReady = snapshot.Ready
 	report.Snapshot = &snapshot
 	switch {
-	case snapshot.Account != nil && strings.TrimSpace(snapshot.Account.Type) != "":
-		report.State = "ready"
-	case snapshot.RequiresOpenAIAuth != nil && *snapshot.RequiresOpenAIAuth:
+	case (snapshot.Account == nil || strings.TrimSpace(snapshot.Account.Type) == "") &&
+		snapshot.RequiresOpenAIAuth != nil &&
+		*snapshot.RequiresOpenAIAuth:
 		report.State = "logged_out"
+		report.AssistantState = "logged_out"
+		return report
 	default:
-		report.State = "ready"
+		if probeErr := probeCodexAssistantReady(bridge); probeErr != nil {
+			report.State = "bridge_ready"
+			report.AssistantState = "unavailable"
+			report.AssistantError = probeErr.Error()
+		} else {
+			report.State = "ready"
+			report.AssistantState = "ready"
+		}
 	}
 	return report
 }
@@ -213,6 +228,15 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 	}
 	if report.BridgeError != "" {
 		_, _ = fmt.Fprintf(w, "Bridge error: %s\n", report.BridgeError)
+	}
+	if report.BridgeReady {
+		_, _ = fmt.Fprintln(w, "Bridge: ready")
+	}
+	if report.AssistantState != "" {
+		_, _ = fmt.Fprintf(w, "Assistant readiness: %s\n", report.AssistantState)
+	}
+	if report.AssistantError != "" {
+		_, _ = fmt.Fprintf(w, "Assistant error: %s\n", report.AssistantError)
 	}
 	if report.AppServerSupported {
 		_, _ = fmt.Fprintln(w, "Assistant: tunnel-client codex assistant")
@@ -240,6 +264,22 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 	_, _ = fmt.Fprintf(w, "Upgrade: %s\n", report.RecommendedUpgradeCommand)
 	_, _ = fmt.Fprintf(w, "Uninstall: %s\n", report.RecommendedUninstallCommand)
 	_, _ = fmt.Fprintf(w, "Docs: %s\n", report.DocsURL)
+}
+
+func probeCodexAssistantReady(bridge *codexappserver.Bridge) error {
+	if bridge == nil {
+		return nil
+	}
+	workingDir := assistantWorkingDirectory("")
+	ctx, cancel := context.WithTimeout(context.Background(), codexStatusAssistantProbeTimeout)
+	defer cancel()
+	_, err := bridge.StartThread(ctx, codexappserver.ThreadStartParams{
+		CWD:                   workingDir,
+		ApprovalPolicy:        defaultCodexAssistantApprovalPolicy,
+		SandboxType:           defaultCodexAssistantSandboxType,
+		DeveloperInstructions: buildCodexCLIDeveloperInstructions(workingDir, ""),
+	})
+	return err
 }
 
 func valueOrDash(value string) string {

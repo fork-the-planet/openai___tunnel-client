@@ -85,7 +85,7 @@ func TestStdioCommandTransportStartStop(t *testing.T) {
 	require.NoError(t, hook.OnStop(stopCtx))
 }
 
-func TestStdioCommandTransportRequestsShutdownOnExit(t *testing.T) {
+func TestStdioCommandTransportStaysAliveAfterExit(t *testing.T) {
 	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
 	t.Setenv("TEST_HELPER_MODE", "exit")
 
@@ -105,10 +105,18 @@ func TestStdioCommandTransportRequestsShutdownOnExit(t *testing.T) {
 	hook := lifecycle.hooks[0]
 	require.NoError(t, hook.OnStart(context.Background()))
 
+	require.Eventually(t, func() bool {
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		return transport.cmd != nil &&
+			transport.cmd.ProcessState != nil &&
+			transport.cmd.ProcessState.Exited()
+	}, 5*time.Second, 10*time.Millisecond)
+
 	select {
 	case <-shutdowner.ch:
-	case <-time.After(5 * time.Second):
-		t.Fatal("expected shutdown request after command exit")
+		t.Fatal("did not expect shutdown request after command exit")
+	default:
 	}
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)

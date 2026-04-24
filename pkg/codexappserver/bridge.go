@@ -23,6 +23,7 @@ import (
 const (
 	defaultEventCapacity  = 512
 	defaultRequestTimeout = 2 * time.Minute
+	defaultStderrCapacity = 32
 )
 
 type InitializeInfo struct {
@@ -403,6 +404,54 @@ func (b *Bridge) RecentEvents(limit int) []Event {
 	return out
 }
 
+func (b *Bridge) RecentStderr(limit int) []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if limit <= 0 || limit > len(b.processStderr) {
+		limit = len(b.processStderr)
+	}
+	if limit == 0 {
+		return nil
+	}
+	start := len(b.processStderr) - limit
+	out := make([]string, 0, limit)
+	out = append(out, b.processStderr[start:]...)
+	return out
+}
+
+func (b *Bridge) RecentDiagnosticSummary(limit int) string {
+	events := b.RecentEvents(limit)
+	stderr := b.RecentStderr(limit)
+
+	parts := make([]string, 0, 2)
+	if len(stderr) > 0 {
+		parts = append(parts, "recent stderr: "+strings.Join(stderr, " | "))
+	}
+	if len(events) > 0 {
+		summaries := make([]string, 0, len(events))
+		for _, event := range events {
+			if event.Source == "stderr" {
+				continue
+			}
+			label := strings.TrimSpace(event.Method)
+			summary := strings.TrimSpace(event.Summary)
+			switch {
+			case label == "":
+				label = summary
+			case summary != "" && summary != label:
+				label += " " + summary
+			}
+			if label != "" {
+				summaries = append(summaries, label)
+			}
+		}
+		if len(summaries) > 0 {
+			parts = append(parts, "recent bridge events: "+strings.Join(summaries, " | "))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (b *Bridge) Subscribe(ctx context.Context) <-chan Event {
 	ch := make(chan Event, 128)
 	b.mu.Lock()
@@ -489,6 +538,9 @@ func (b *Bridge) StartThread(ctx context.Context, params ThreadStartParams) (Thr
 	if err := b.EnsureStarted(ctx); err != nil {
 		return ThreadStartResult{}, err
 	}
+	stageTimeout := boundedTimeout(ctx, defaultRequestTimeout)
+	stageCtx, cancel := context.WithTimeout(ctx, stageTimeout)
+	defer cancel()
 	payload := map[string]any{
 		"experimentalRawEvents": false,
 	}
@@ -512,9 +564,9 @@ func (b *Bridge) StartThread(ctx context.Context, params ThreadStartParams) (Thr
 	}
 	payload["persistExtendedHistory"] = false
 	payload["ephemeral"] = true
-	result, err := b.request(ctx, "thread/start", payload)
+	result, err := b.request(stageCtx, "thread/start", payload)
 	if err != nil {
-		return ThreadStartResult{}, err
+		return ThreadStartResult{}, b.stageRequestError("thread/start", stageTimeout, err)
 	}
 
 	var response struct {
@@ -578,6 +630,9 @@ func (b *Bridge) StartTurn(ctx context.Context, params TurnStartParams) (TurnSta
 	if strings.TrimSpace(params.ThreadID) == "" {
 		return TurnStartResult{}, errors.New("thread id is required")
 	}
+	stageTimeout := boundedTimeout(ctx, defaultRequestTimeout)
+	stageCtx, cancel := context.WithTimeout(ctx, stageTimeout)
+	defer cancel()
 	payload := map[string]any{
 		"threadId": params.ThreadID,
 		"input":    params.Input,
@@ -600,9 +655,9 @@ func (b *Bridge) StartTurn(ctx context.Context, params TurnStartParams) (TurnSta
 	if params.Summary != "" {
 		payload["summary"] = params.Summary
 	}
-	result, err := b.request(ctx, "turn/start", payload)
+	result, err := b.request(stageCtx, "turn/start", payload)
 	if err != nil {
-		return TurnStartResult{}, err
+		return TurnStartResult{}, b.stageRequestError("turn/start", stageTimeout, err)
 	}
 
 	var response struct {
@@ -955,6 +1010,7 @@ func (b *Bridge) readStderr(stderr io.Reader) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		b.appendStderrLine(line)
 		b.publish(Event{
 			Time:    time.Now().UTC(),
 			Source:  "stderr",
@@ -963,6 +1019,63 @@ func (b *Bridge) readStderr(stderr io.Reader) {
 			Payload: json.RawMessage(strconv.Quote(line)),
 		})
 	}
+}
+
+func (b *Bridge) appendStderrLine(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	b.mu.Lock()
+	b.processStderr = append(b.processStderr, line)
+	if len(b.processStderr) > defaultStderrCapacity {
+		b.processStderr = append([]string(nil), b.processStderr[len(b.processStderr)-defaultStderrCapacity:]...)
+	}
+	b.mu.Unlock()
+}
+
+func boundedTimeout(ctx context.Context, fallback time.Duration) time.Duration {
+	if ctx == nil {
+		return fallback
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fallback
+	}
+	remaining := time.Until(deadline)
+	switch {
+	case remaining <= 0:
+		return 0
+	case remaining < fallback:
+		return remaining
+	default:
+		return fallback
+	}
+}
+
+func (b *Bridge) stageRequestError(stage string, timeout time.Duration, err error) error {
+	if err == nil {
+		return nil
+	}
+	detail := strings.TrimSpace(err.Error())
+	if strings.HasPrefix(detail, stage+":") {
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, stage+":"))
+	}
+	message := stage + " failed"
+	if errors.Is(err, context.DeadlineExceeded) {
+		message = fmt.Sprintf("%s timed out after %s", stage, timeout.Round(time.Millisecond))
+		detail = ""
+	}
+	if detail != "" && detail != context.DeadlineExceeded.Error() {
+		message += ": " + detail
+	}
+	if diagnostics := b.RecentDiagnosticSummary(6); diagnostics != "" {
+		message += "; " + diagnostics
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	return errors.New(message)
 }
 
 func (b *Bridge) waitForExit(cmd *exec.Cmd, done chan struct{}) {

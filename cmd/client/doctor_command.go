@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -172,6 +175,7 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 				Status:  doctorStatusPass,
 				Summary: mainBinding.Command,
 			})
+			checks = append(checks, doctorStdioCommandCheck(mainBinding.Command))
 			checks = append(checks, doctorCheck{
 				ID:      "mcp_server_reachable",
 				Status:  doctorStatusSkip,
@@ -562,4 +566,124 @@ func doctorCodexCheck(lookupEnv func(string) (string, bool)) doctorCheck {
 			detection.InstallHint,
 		},
 	}
+}
+
+func doctorStdioCommandCheck(command string) doctorCheck {
+	resolved, err := preflightStdioCommand(command)
+	if err != nil {
+		return doctorCheck{
+			ID:      "mcp_command_executable",
+			Status:  doctorStatusFail,
+			Summary: err.Error(),
+			Why:     "stdio MCP targets are spawned as local child processes during `tunnel-client run`; if the executable is missing or not executable, the daemon stays up but requests through that MCP target fail immediately.",
+			Evidence: []string{
+				command,
+				err.Error(),
+			},
+			Next: []string{
+				"install the command or fix the first executable token in mcp.command",
+				"use an absolute path or ensure the executable is on PATH and has execute permission",
+				"rerun: tunnel-client doctor",
+			},
+		}
+	}
+	return doctorCheck{
+		ID:      "mcp_command_executable",
+		Status:  doctorStatusPass,
+		Summary: resolved,
+	}
+}
+
+func preflightStdioCommand(raw string) (string, error) {
+	args, err := parseStdioCommandArgv(raw)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := exec.LookPath(args[0])
+	if err != nil {
+		return "", formatStdioPreflightError(args[0], err)
+	}
+	return resolved, nil
+}
+
+func formatStdioPreflightError(executable string, err error) error {
+	switch {
+	case errors.Is(err, iofs.ErrPermission):
+		return fmt.Errorf("stdio MCP executable %q is not executable: %w", executable, err)
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, iofs.ErrNotExist):
+		return fmt.Errorf("stdio MCP executable %q was not found: %w", executable, err)
+	default:
+		return fmt.Errorf("stdio MCP executable %q is unavailable: %w", executable, err)
+	}
+}
+
+func parseStdioCommandArgv(raw string) ([]string, error) {
+	input := strings.TrimSpace(raw)
+	if input == "" {
+		return nil, errors.New("command is empty")
+	}
+	var (
+		args     []string
+		builder  strings.Builder
+		inSingle bool
+		inDouble bool
+		escaped  bool
+	)
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		if escaped {
+			builder.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+				continue
+			}
+			builder.WriteByte(ch)
+			continue
+		}
+		if inDouble {
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inDouble = false
+			default:
+				builder.WriteByte(ch)
+			}
+			continue
+		}
+		switch ch {
+		case '\\':
+			escaped = true
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case ' ', '\t', '\n', '\r':
+			if builder.Len() > 0 {
+				args = append(args, builder.String())
+				builder.Reset()
+			}
+		default:
+			builder.WriteByte(ch)
+		}
+	}
+
+	if escaped {
+		return nil, errors.New("unterminated escape sequence")
+	}
+	if inSingle || inDouble {
+		return nil, errors.New("unterminated quoted string")
+	}
+	if builder.Len() > 0 {
+		args = append(args, builder.String())
+	}
+	if len(args) == 0 {
+		return nil, errors.New("command is empty")
+	}
+	return args, nil
 }

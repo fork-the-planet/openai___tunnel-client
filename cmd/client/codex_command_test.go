@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -49,6 +50,11 @@ func TestCodexCommandHelperProcess(t *testing.T) {
 			writef("{\"id\":%s,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"worker@example.com\",\"planType\":\"business\"},\"requiresOpenaiAuth\":true}}\n", marshalID(id))
 		case "thread/start":
 			maybeCaptureThreadStartParams(t, envelope["params"])
+			if os.Getenv("GO_WANT_CODEX_STALL_THREAD_START") == "1" {
+				_, _ = fmt.Fprintln(os.Stderr, "thread/start is stuck")
+				require.NoError(t, writer.Flush())
+				continue
+			}
 			writef("{\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001},\"model\":\"gpt-5.4\",\"modelProvider\":\"openai\",\"approvalPolicy\":\"never\",\"sandbox\":\"danger-full-access\"}}\n", marshalID(id))
 			writef("{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001}}}\n")
 		case "thread/inject_items":
@@ -69,6 +75,11 @@ func TestCodexCommandHelperProcess(t *testing.T) {
 			response := fmt.Sprintf("assistant heard: %s", prompt)
 			writef("{\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn_cli\",\"status\":\"in_progress\"}}}\n", marshalID(id))
 			writef("{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread_cli\",\"turn\":{\"id\":\"turn_cli\",\"status\":\"in_progress\"}}}\n")
+			if os.Getenv("GO_WANT_CODEX_STALL_AFTER_TURN_START") == "1" {
+				_, _ = fmt.Fprintln(os.Stderr, "turn started but no completion arrived")
+				require.NoError(t, writer.Flush())
+				continue
+			}
 			writef("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"thread_cli\",\"turnId\":\"turn_cli\",\"delta\":%q}}\n", response)
 			writef("{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"thread_cli\",\"turn\":{\"id\":\"turn_cli\",\"status\":\"completed\"}}}\n")
 		default:
@@ -100,8 +111,33 @@ func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
 	require.Contains(t, stdout, `"plugin_installed": true`)
 	require.Contains(t, stdout, `"plugin_binary_hint": "`+fakeTunnelClient+`"`)
 	require.Contains(t, stdout, `"version": "codex-cli 0.123.0-alpha.8"`)
+	require.Contains(t, stdout, `"bridge_ready": true`)
+	require.Contains(t, stdout, `"assistant_state": "ready"`)
 	require.NotContains(t, stdout, `update check warning`)
 	require.Contains(t, stdout, `"email": "worker@example.com"`)
+}
+
+func TestCodexStatusJSONReportsBridgeReadyWhenAssistantProbeStalls(t *testing.T) {
+	originalTimeout := codexStatusAssistantProbeTimeout
+	codexStatusAssistantProbeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		codexStatusAssistantProbeTimeout = originalTimeout
+	})
+	t.Setenv("GO_WANT_CODEX_STALL_THREAD_START", "1")
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "status", "--json")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, `"state": "bridge_ready"`)
+	require.Contains(t, stdout, `"bridge_ready": true`)
+	require.Contains(t, stdout, `"assistant_state": "unavailable"`)
+	require.Contains(t, stdout, `"assistant_error": "thread/start timed out after 50ms`)
+	require.Contains(t, stdout, `recent stderr: thread/start is stuck`)
 }
 
 func TestCodexInstallPrefersHostDefaultWhenMultipleInstallersAreAvailable(t *testing.T) {
@@ -150,6 +186,28 @@ func TestCodexAssistantReadsPromptFromStdin(t *testing.T) {
 	require.Contains(t, stdout, "assistant heard: stdin prompt for codex")
 	require.Contains(t, stderr, "assistant> ")
 	require.Contains(t, stderr, "waiting for response")
+}
+
+func TestCodexAssistantReportsTurnStallDiagnostics(t *testing.T) {
+	originalTimeout := codexAssistantTurnIdleTimeout
+	codexAssistantTurnIdleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		codexAssistantTurnIdleTimeout = originalTimeout
+	})
+	t.Setenv("GO_WANT_CODEX_STALL_AFTER_TURN_START", "1")
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "describe", "the", "tunnel")
+
+	require.Error(t, err)
+	require.Contains(t, stderr, "waiting for response")
+	require.ErrorContains(t, err, "assistant turn stalled after turn/start")
+	require.ErrorContains(t, err, "turn turn_cli produced no completion or output for 50ms")
+	require.ErrorContains(t, err, "recent stderr: turn started but no completion arrived")
 }
 
 func TestCodexAssistantDefaultsToMediumReasoning(t *testing.T) {
