@@ -122,15 +122,9 @@ From the `tunnel-client` module root:
 go build -o bin/tunnel-client ./cmd/client
 ```
 
-Or from the monorepo root:
+After building from source, use `./bin/tunnel-client` unless you add that
+location to your `PATH`.
 
-```bash
-bazel build //api/tunnel-client/cmd/client:client
-./bazel-bin/api/tunnel-client/cmd/client/client
-```
-
-After building from source, use `./bin/tunnel-client` or the Bazel output path
-unless you add that location to your `PATH`.
 ## 4) Configure
 
 At minimum, you must set:

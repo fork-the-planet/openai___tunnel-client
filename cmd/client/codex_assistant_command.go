@@ -603,7 +603,7 @@ func buildCodexCLIDeveloperInstructions(workingDir string, extra string) string 
 	base := strings.TrimSpace(`
 You are running inside tunnel-client's CLI assistant surface.
 Treat the request as being about tunnel-client unless the user explicitly asks about a different package or tool.
-Default to the tunnel-client workspace instead of the wider monorepo; avoid broad repository scans unless they are clearly necessary.
+Default to the tunnel-client workspace instead of the wider source tree; avoid broad repository scans unless they are clearly necessary.
 Prefer direct tunnel-client CLI actions, embedded help topics, and files under the tunnel-client workspace over generic repo exploration.
 Keep streamed progress updates concise because the terminal renders incremental deltas directly.
 Do not refer to browser-only controls or UI tabs unless the user explicitly asks about the admin UI.

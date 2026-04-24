@@ -5,6 +5,9 @@
 - Avoid referring to the larger repository structure in user-facing plugin
   installation instructions. Use terms like "this repository root", "source
   checkout", or "standalone `tunnel-client` checkout" instead.
+- Do not introduce private repository layout, internal package-manager,
+  mirror-pipeline, or private source-tree references in plugin code, docs,
+  prompts, examples, or runtime output.
 - Document upgrade as rerunning the installer against the newer plugin source.
   The installer should replace only
   `$CODEX_HOME/plugins/cache/<marketplace>/tunnel-mcp/local` and keep runtime
