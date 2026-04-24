@@ -87,10 +87,8 @@ func (s *DiscoveryState) Wait(
 	if s == nil {
 		return nil, nil, nil, nil, false
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-s.done:
+
+	snapshot := func() (*DiscoveryResult, *WWWAuthenticateProbeStatus, []string, error, bool) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		urlsCopy := append([]string{}, s.urls...)
@@ -100,8 +98,26 @@ func (s *DiscoveryState) Wait(
 			probeCopy = &copyVal
 		}
 		return s.result, probeCopy, urlsCopy, s.err, true
+	}
+
+	select {
+	case <-s.done:
+		return snapshot()
+	default:
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.done:
+		return snapshot()
 	case <-timer.C:
-		return nil, nil, nil, nil, false
+		select {
+		case <-s.done:
+			return snapshot()
+		default:
+			return nil, nil, nil, nil, false
+		}
 	}
 }
 
