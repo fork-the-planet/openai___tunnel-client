@@ -46,22 +46,28 @@ For a deeper explanation and more diagrams, see
 ## Glossary
 
 - **Tunnel**: A logical identifier that binds together:
-  - the connector's MCP URL, and
+  - the connector's ChatGPT tunnel selection (or pasted tunnel ID), and
   - the tunnel-client instance configured with that same identifier.
 - **Tunnel ID (`tunnel_id`)**: The identifier used in:
-  - connector URL: `/v1/mcp/{tunnel_id}`
+  - ChatGPT connector setup: selected from the tunnel dropdown or pasted into
+    the tunnel ID field
   - tunnel-client control plane: `/v1/tunnel/{tunnel_id}/poll` and
     `/v1/tunnel/{tunnel_id}/response`
   - Format: `tunnel_` followed by 32 lowercase letters or digits.
-- **OpenAI-hosted MCP tunnel URL**: The URL you paste into the connector
-  configuration UI. It is an OpenAI-hosted virtual MCP server endpoint.
+- **OpenAI-hosted MCP tunnel endpoint**: The OpenAI-managed virtual MCP server
+  endpoint that ChatGPT targets for the selected `tunnel_id`.
 - **Tunnel Client**: A customer-run process that:
   - long-polls OpenAI for MCP requests for its `tunnel_id`, and
   - forwards them to your MCP server.
 
 ## Key concept: two different URLs
 
-- **Connector UI uses the OpenAI-hosted MCP tunnel URL** provided by OpenAI:
+- **Current ChatGPT connector UI uses Tunnel mode**, where the operator either:
+  - selects an available tunnel from the dropdown, or
+  - pastes a `tunnel_id` manually.
+
+- **Under the hood**, ChatGPT still sends requests to the OpenAI-hosted MCP
+  tunnel endpoint for that tunnel:
 
 ```text
 <OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>
@@ -251,15 +257,35 @@ Use `--json` on any subcommand for structured output.
 
 ---
 
-## Step 2 - Configure the connector to use the OpenAI-hosted MCP tunnel URL
+## Step 2 - Configure the connector in ChatGPT
 
-When creating a connector in **ChatGPT**, you will be asked for the **MCP Server URL**.
+When creating a connector in **ChatGPT**, use **Connection: Tunnel**.
 
-Paste the **OpenAI-hosted MCP tunnel URL** (not your internal MCP URL):
+Then either:
+
+- select the tunnel from the **Available tunnels** dropdown, or
+- paste the `tunnel_id` into the tunnel field if it is not listed yet.
+
+Do **not** paste your private MCP server URL into ChatGPT.
+
+### What to enter in ChatGPT
+
+- **Connection mode**: `Tunnel`
+- **Tunnel value**: your `tunnel_id` (for example
+  `tunnel_0123456789abcdef0123456789abcdef`)
+
+### Legacy/internal note
+
+Older or internal setup surfaces may still refer to an **MCP Server URL** and
+show the underlying OpenAI-hosted endpoint shape:
 
 ```text
 <OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>
 ```
+
+That URL shape remains the transport path used by OpenAI, but in the current
+ChatGPT UI operators should choose **Tunnel** mode and provide the `tunnel_id`,
+not the full URL.
 
 ### What the connector sends (for reference)
 
@@ -410,7 +436,8 @@ curl -fsS "http://127.0.0.1:8080/readyz"
 
 In the ChatGPT connector UI:
 
-- Save the connector configuration with the OpenAI-hosted MCP tunnel URL.
+- Save the connector configuration after selecting a tunnel or pasting the
+  `tunnel_id`.
 - Run a "test connection" / "test tool call" flow (if available).
 
 On your MCP server, confirm you observe:

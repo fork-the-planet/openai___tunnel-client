@@ -1,6 +1,9 @@
 package adminui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCodexSandboxTypeNormalizesLegacyAliases(t *testing.T) {
 	t.Parallel()
@@ -32,5 +35,31 @@ func TestBuildTextInputItemUsesDirectTextVariant(t *testing.T) {
 	}
 	if _, ok := item["content"]; ok {
 		t.Fatalf("content should be omitted for text variant")
+	}
+}
+
+func TestBuildCodexKnowledgeItemUsesPackagedDocs(t *testing.T) {
+	t.Parallel()
+
+	item := buildCodexKnowledgeItem("How do I connect this tunnel to ChatGPT?")
+	if item == nil {
+		t.Fatal("expected knowledge item")
+	}
+	content, ok := item["content"].([]map[string]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("unexpected content payload: %#v", item["content"])
+	}
+	text, _ := content[0]["text"].(string)
+	if text == "" {
+		t.Fatalf("expected knowledge text, got %#v", content[0]["text"])
+	}
+	for _, snippet := range []string{
+		"Packaged tunnel-client knowledge base injected from the binary.",
+		"knowledge.match.1.path=docs/enterprise-customer-onboarding.md",
+		"Connection: Tunnel",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("expected knowledge text to contain %q, got:\n%s", snippet, text)
+		}
 	}
 }

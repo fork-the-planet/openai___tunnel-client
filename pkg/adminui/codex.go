@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	assistantkb "go.openai.org/api/tunnel-client/docs"
 	"go.openai.org/api/tunnel-client/pkg/codexappserver"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/httpguard"
@@ -258,7 +259,7 @@ func handleCodexTurnStart(p routeParams) http.HandlerFunc {
 			if injectErr := p.CodexBridge.InjectThreadItems(
 				r.Context(),
 				threadID,
-				[]map[string]any{buildCodexContextItem(p)},
+				buildCodexTurnContextItems(p, prompt),
 			); injectErr != nil {
 				writeAPIError(w, http.StatusBadGateway, injectErr)
 				return
@@ -342,13 +343,33 @@ func buildCodexContextItem(p routeParams) map[string]any {
 	if len(status.Warnings) > 0 {
 		lines = append(lines, "warnings="+strings.Join(status.Warnings, " | "))
 	}
+	return buildCodexDeveloperItem(strings.Join(lines, "\n"))
+}
+
+func buildCodexTurnContextItems(p routeParams, prompt string) []map[string]any {
+	items := []map[string]any{buildCodexContextItem(p)}
+	if item := buildCodexKnowledgeItem(prompt); item != nil {
+		items = append(items, item)
+	}
+	return items
+}
+
+func buildCodexKnowledgeItem(prompt string) map[string]any {
+	text := assistantkb.BuildPromptContext(prompt)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return buildCodexDeveloperItem(text)
+}
+
+func buildCodexDeveloperItem(text string) map[string]any {
 	return map[string]any{
 		"type": "message",
 		"role": "developer",
 		"content": []map[string]any{
 			{
 				"type": "input_text",
-				"text": strings.Join(lines, "\n"),
+				"text": text,
 			},
 		},
 	}

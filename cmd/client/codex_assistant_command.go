@@ -357,6 +357,11 @@ func runCodexAssistantPrompt(
 		return errors.New("assistant prompt is required")
 	}
 	workingDir := assistantWorkingDirectory(options.CWD)
+	if item := buildCodexAssistantKnowledgeItem(prompt); item != nil {
+		if err := bridge.InjectThreadItems(ctx, threadID, []map[string]any{item}); err != nil {
+			return fmt.Errorf("inject assistant knowledge base context: %w", err)
+		}
+	}
 
 	eventsCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

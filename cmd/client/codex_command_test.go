@@ -51,6 +51,9 @@ func TestCodexCommandHelperProcess(t *testing.T) {
 			maybeCaptureThreadStartParams(t, envelope["params"])
 			writef("{\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001},\"model\":\"gpt-5.4\",\"modelProvider\":\"openai\",\"approvalPolicy\":\"never\",\"sandbox\":\"danger-full-access\"}}\n", marshalID(id))
 			writef("{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thread_cli\",\"preview\":\"CLI assistant\",\"cwd\":\"/workspace/openai\",\"createdAt\":1713740000,\"updatedAt\":1713740001}}}\n")
+		case "thread/inject_items":
+			maybeCaptureInjectItems(t, envelope["params"])
+			writef("{\"id\":%s,\"result\":{}}\n", marshalID(id))
 		case "turn/start":
 			maybeCaptureTurnStartParams(t, envelope["params"])
 			prompt := "unknown"
@@ -163,6 +166,42 @@ func TestCodexAssistantDefaultsToMediumReasoning(t *testing.T) {
 	require.NoError(t, err, stderr)
 	params := readCapturedTurnStartParams(t, capturePath)
 	require.Equal(t, defaultCodexAssistantEffort, params.Effort)
+}
+
+func TestCodexAssistantInjectsPackagedKnowledgeWhenRepoDocsMayBeAbsent(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "inject_items.json")
+	t.Setenv("GO_WANT_CODEX_INJECT_CAPTURE", capturePath)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "--cwd", "/tmp", "How", "do", "I", "connect", "this", "tunnel", "to", "ChatGPT?")
+
+	require.NoError(t, err, stderr)
+	payload := readCapturedInjectItems(t, capturePath)
+	items, ok := payload["items"].([]any)
+	require.True(t, ok)
+
+	var found string
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok)
+		content, ok := item["content"].([]any)
+		require.True(t, ok)
+		for _, partRaw := range content {
+			part, ok := partRaw.(map[string]any)
+			require.True(t, ok)
+			text, _ := part["text"].(string)
+			if strings.Contains(text, "Packaged tunnel-client knowledge base injected from the binary.") {
+				found = text
+			}
+		}
+	}
+	require.NotEmpty(t, found)
+	require.Contains(t, found, "knowledge.match.1.path=docs/enterprise-customer-onboarding.md")
+	require.Contains(t, found, "Connection: Tunnel")
 }
 
 func TestCodexHelpIncludesAssistantSubcommand(t *testing.T) {
@@ -364,6 +403,26 @@ func readCapturedTurnStartParams(t *testing.T, path string) capturedTurnStartPar
 	var params capturedTurnStartParams
 	require.NoError(t, json.Unmarshal(data, &params))
 	return params
+}
+
+func maybeCaptureInjectItems(t *testing.T, params any) {
+	t.Helper()
+	path := strings.TrimSpace(os.Getenv("GO_WANT_CODEX_INJECT_CAPTURE"))
+	if path == "" {
+		return
+	}
+	data, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+}
+
+func readCapturedInjectItems(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload))
+	return payload
 }
 
 func executeCommandWithInput(

@@ -47,10 +47,12 @@ flowchart LR
   class ops opsNode
 ```
 
-The customer-facing connector URL points at the OpenAI tunnel service, for
-example `<OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>`. The tunnel client is
-configured separately with the same `tunnel_id`, an API key, and the private MCP
-server address that is reachable from inside the customer network.
+In the current ChatGPT connector UI, operators attach a tunnel by selecting an
+available tunnel or pasting a `tunnel_id`. Under the hood, the product still
+targets the OpenAI tunnel service endpoint
+`<OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>`. The tunnel client is
+configured separately with the same `tunnel_id`, an API key, and the private
+MCP server address that is reachable from inside the customer network.
 
 ## Request lifecycle
 
