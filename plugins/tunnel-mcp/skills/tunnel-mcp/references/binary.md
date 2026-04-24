@@ -1,0 +1,45 @@
+# Obtaining a tunnel-client binary
+
+First try existing binary discovery:
+
+- `--tunnel-client-bin /path/to/tunnel-client`
+- `TUNNEL_CLIENT_BIN`
+- the installed plugin bundle's `.tunnel-client-bin` hint
+- adjacent local build outputs
+- `PATH`
+
+If `tunnel-client` is still missing, use one of these public-safe setup paths:
+
+- latest releases: `https://github.com/openai/tunnel-client/releases/latest`
+- public repo: `https://github.com/openai/tunnel-client`
+
+Source build from the public repo:
+
+```bash
+git clone https://github.com/openai/tunnel-client.git
+cd tunnel-client
+go build -o bin/tunnel-client ./cmd/client
+```
+
+Windows source build:
+
+```powershell
+git clone https://github.com/openai/tunnel-client.git
+cd tunnel-client
+go build -o bin/tunnel-client.exe ./cmd/client
+```
+
+After you have a binary:
+
+- set `TUNNEL_CLIENT_BIN` to the full path to the binary
+- or rerun the plugin/install command with `--tunnel-client-bin /path/to/tunnel-client`
+- or reinstall the plugin with `--tunnel-client-bin /path/to/tunnel-client`
+
+Executable naming:
+
+- macOS/Linux: `tunnel-client`
+- Windows: `tunnel-client.exe`
+
+Do not auto-download, auto-clone, or auto-run remote binaries just because the
+plugin cannot find `tunnel-client`. Only clone/build when the user explicitly
+asks Codex to set up or install it.

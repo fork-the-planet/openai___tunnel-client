@@ -128,14 +128,14 @@ func TestSessionsCreateConnectStatusStopJSON(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := newSessionsCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
+	cmd := newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"create", "--alias", "docs-mcp", "--organization-id", "org_123", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"alias": "docs-mcp"`)
 
 	stdout.Reset()
 	stderr.Reset()
-	cmd = newSessionsCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
+	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"connect", "--alias", "docs-mcp", "--organization-id", "org_123", "--mcp-server-url", "http://127.0.0.1:3001/mcp", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"healthy": true`)
@@ -143,7 +143,7 @@ func TestSessionsCreateConnectStatusStopJSON(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	cmd = newSessionsCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
+	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"status", "docs-mcp", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"alias": "docs-mcp"`)
@@ -151,17 +151,41 @@ func TestSessionsCreateConnectStatusStopJSON(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	cmd = newSessionsCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
+	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"stop", "docs-mcp", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"stopped": true`)
 
 	stdout.Reset()
 	stderr.Reset()
-	cmd = newSessionsCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
+	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"rm", "docs-mcp", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"removed": true`)
+}
+
+func TestRuntimesListRejectsMixedRemoteScopeFamilies(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newRuntimesCommandWithRuntime(lookupEnvMap(map[string]string{}), &stdout, &stderr, session.DefaultRuntime())
+	cmd.SetArgs([]string{"list", "--organization-id", "org_123", "--workspace-id", "ws_123"})
+
+	err := cmd.Execute()
+	require.EqualError(t, err, "runtimes list accepts exactly one remote scope family: --organization-id, --workspace-id, or --tenant-id")
+}
+
+func TestRuntimesListRejectsMultipleOrganizationIDs(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newRuntimesCommandWithRuntime(lookupEnvMap(map[string]string{}), &stdout, &stderr, session.DefaultRuntime())
+	cmd.SetArgs([]string{"list", "--organization-id", "org_123", "--organization-id", "org_456"})
+
+	err := cmd.Execute()
+	require.EqualError(t, err, "runtimes list accepts at most one --organization-id for remote listing")
 }
 
 func lookupEnvMap(env map[string]string) func(string) (string, bool) {

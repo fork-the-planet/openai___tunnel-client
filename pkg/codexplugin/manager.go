@@ -656,7 +656,7 @@ func (m *Manager) Remove(opts AliasOptions) (map[string]any, error) {
 		return nil, fmt.Errorf("alias %s is not known", alias)
 	}
 	if process.Alias != "" && process.Mode != "" && process.Mode != "stopped" {
-		return nil, fmt.Errorf("alias %s still has a managed runtime; run `tunnel-client sessions stop %s` first", alias, alias)
+		return nil, fmt.Errorf("alias %s still has a managed runtime; run `tunnel-client runtimes stop %s` first", alias, alias)
 	}
 	delete(aliases, alias)
 	if err := pluginstate.SaveAliases(root, aliases); err != nil {
@@ -927,7 +927,7 @@ func (m *Manager) statusPayload(root pluginstate.Root, alias string, record plug
 		"process_running":         local["process_running"],
 		"process":                 nil,
 		"local":                   local,
-		"next_steps":              []string{doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true), repairCommand(alias, record, process), "tunnel-client sessions status " + alias},
+		"next_steps":              []string{doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true), repairCommand(alias, record, process), "tunnel-client runtimes status " + alias},
 	}
 	if remote != nil {
 		payload["remote"] = tunnelToMap(*remote)
@@ -1146,7 +1146,7 @@ func controlPlaneAPIKeyRefFromProfile(pathValue string) string {
 }
 
 func repairCommand(alias string, record pluginstate.AliasRecord, process pluginstate.ProcessRecord) string {
-	parts := []string{"tunnel-client", "sessions", "connect", "--alias", alias}
+	parts := []string{"tunnel-client", "runtimes", "connect", "--alias", alias}
 	if record.AdminProfile != "" {
 		parts = append(parts, "--admin-profile", record.AdminProfile)
 	}

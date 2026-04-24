@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -13,25 +14,55 @@ ENTRYPOINT = PLUGIN_ROOT / "scripts" / "tunnel_mcp"
 
 def _write_fake_tunnel_client(path: pathlib.Path) -> None:
     path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
-        "pathlib.Path(os.environ['ROUTER_TEST_OUTPUT']).write_text(json.dumps(sys.argv[1:]))\n",
+        "#!/bin/sh\n"
+        ': > "$ROUTER_TEST_OUTPUT"\n'
+        'for arg in "$@"; do\n'
+        '  printf \'%s\\n\' "$arg" >> "$ROUTER_TEST_OUTPUT"\n'
+        "done\n",
         encoding="utf-8",
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _make_isolated_plugin_root(tmp_path: pathlib.Path) -> pathlib.Path:
+    plugin_root = tmp_path / "plugin"
+    scripts_dir = plugin_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    shutil.copy2(ENTRYPOINT, scripts_dir / "tunnel_mcp")
+    (scripts_dir / "tunnel_mcp").chmod((scripts_dir / "tunnel_mcp").stat().st_mode | stat.S_IXUSR)
+    return plugin_root
+
+
+def _run_router(
+    entrypoint: pathlib.Path, args: list[str], env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(entrypoint), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 class TunnelMCPRouterTest(unittest.TestCase):
-    def test_router_forwards_sessions_command_and_adds_json(self) -> None:
+    def assert_output_args(self, output_path: pathlib.Path, expected: list[str]) -> None:
+        self.assertEqual(
+            output_path.read_text(encoding="utf-8").splitlines(),
+            expected,
+        )
+
+    def test_router_forwards_runtimes_command_and_adds_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
             output_path = tmp_path / "args.json"
             fake_bin = tmp_path / "tunnel-client"
             _write_fake_tunnel_client(fake_bin)
 
-            result = subprocess.run(
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
                 [
-                    str(ENTRYPOINT),
                     "--tunnel-client-bin",
                     str(fake_bin),
                     "connect",
@@ -40,85 +71,149 @@ class TunnelMCPRouterTest(unittest.TestCase):
                     "--mcp-command",
                     "python server.py",
                 ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                output_path.read_text(encoding="utf-8"),
-                '["sessions", "connect", "--alias", "docs-mcp", "--mcp-command", '
-                '"python server.py", "--json"]',
+            self.assert_output_args(
+                output_path,
+                [
+                    "runtimes",
+                    "connect",
+                    "--alias",
+                    "docs-mcp",
+                    "--mcp-command",
+                    "python server.py",
+                    "--json",
+                ],
             )
 
     def test_router_forwards_admin_profiles_command_and_adds_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
             output_path = tmp_path / "args.json"
             fake_bin = tmp_path / "tunnel-client"
             _write_fake_tunnel_client(fake_bin)
 
-            result = subprocess.run(
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
                 [
-                    str(ENTRYPOINT),
                     "--tunnel-client-bin",
                     str(fake_bin),
                     "admin-profiles",
                     "list",
                 ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                output_path.read_text(encoding="utf-8"),
-                '["admin-profiles", "list", "--json"]',
-            )
+            self.assert_output_args(output_path, ["admin-profiles", "list", "--json"])
 
     def test_router_forwards_rm_alias_and_adds_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
             output_path = tmp_path / "args.json"
             fake_bin = tmp_path / "tunnel-client"
             _write_fake_tunnel_client(fake_bin)
 
-            result = subprocess.run(
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
                 [
-                    str(ENTRYPOINT),
                     "--tunnel-client-bin",
                     str(fake_bin),
                     "rm",
                     "docs-mcp",
                 ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                output_path.read_text(encoding="utf-8"),
-                '["sessions", "rm", "docs-mcp", "--json"]',
-            )
+            self.assert_output_args(output_path, ["runtimes", "rm", "docs-mcp", "--json"])
 
     def test_router_help_lists_supported_routes(self) -> None:
-        result = subprocess.run(
-            [str(ENTRYPOINT), "--help"],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=os.environ,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["--help"],
+                dict(os.environ),
+            )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("admin-profiles", result.stdout)
         self.assertIn("rm", result.stdout)
+
+    def test_router_uses_tunnel_client_bin_env_var(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            output_path = tmp_path / "args.json"
+            fake_bin = tmp_path / "tunnel-client"
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                [
+                    "status",
+                    "docs-mcp",
+                ],
+                {
+                    **os.environ,
+                    "ROUTER_TEST_OUTPUT": str(output_path),
+                    "TUNNEL_CLIENT_BIN": str(fake_bin),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_output_args(output_path, ["runtimes", "status", "docs-mcp", "--json"])
+
+    def test_plugin_only_missing_binary_guidance_includes_public_setup_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["status", "docs-mcp"],
+                {"PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("tunnel-client was not found", result.stderr)
+            self.assertIn("Discovery methods tried:", result.stderr)
+            self.assertIn("--tunnel-client-bin: not provided", result.stderr)
+            self.assertIn("TUNNEL_CLIENT_BIN: not set", result.stderr)
+            self.assertIn("installed .tunnel-client-bin hint: not present", result.stderr)
+            self.assertIn("adjacent build outputs:", result.stderr)
+            self.assertIn("PATH: no tunnel-client executable found", result.stderr)
+            self.assertIn("https://github.com/openai/tunnel-client", result.stderr)
+            self.assertIn("https://github.com/openai/tunnel-client/releases/latest", result.stderr)
+            self.assertIn("git clone https://github.com/openai/tunnel-client.git", result.stderr)
+            self.assertIn("go build -o bin/tunnel-client ./cmd/client", result.stderr)
+            self.assertIn("go build -o bin/tunnel-client.exe ./cmd/client", result.stderr)
+            self.assertIn("tunnel-client.exe", result.stderr)
+            self.assertIn("does not auto-download, auto-clone, or auto-run", result.stderr)
+
+    def test_adjacent_windows_style_exe_name_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            output_path = tmp_path / "args.json"
+            bin_dir = plugin_root / "bin"
+            bin_dir.mkdir(parents=True)
+            fake_bin = bin_dir / "tunnel-client.exe"
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["status", "docs-mcp"],
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path), "PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_output_args(output_path, ["runtimes", "status", "docs-mcp", "--json"])
 
 
 if __name__ == "__main__":

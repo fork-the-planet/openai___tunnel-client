@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/skills/tunnel-mcp/SKILL.md
+//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/scripts/tunnel_mcp.cmd tunnel-mcp/scripts/tunnel_mcp.ps1 tunnel-mcp/skills/tunnel-mcp/SKILL.md tunnel-mcp/skills/tunnel-mcp/references/*.md
 var embeddedPluginFiles embed.FS
 
 var tunnelMCPPluginFiles = []string{
@@ -21,7 +21,14 @@ var tunnelMCPPluginFiles = []string{
 	"tunnel-mcp/AGENTS.md",
 	"tunnel-mcp/scripts/install_plugin.py",
 	"tunnel-mcp/scripts/tunnel_mcp",
+	"tunnel-mcp/scripts/tunnel_mcp.cmd",
+	"tunnel-mcp/scripts/tunnel_mcp.ps1",
 	"tunnel-mcp/skills/tunnel-mcp/SKILL.md",
+	"tunnel-mcp/skills/tunnel-mcp/references/binary.md",
+	"tunnel-mcp/skills/tunnel-mcp/references/profiles-state-and-keys.md",
+	"tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md",
+	"tunnel-mcp/skills/tunnel-mcp/references/setup-and-install.md",
+	"tunnel-mcp/skills/tunnel-mcp/references/troubleshooting.md",
 }
 
 type PluginManifest struct {
@@ -73,7 +80,12 @@ func TunnelMCPExportToDir(dir string) error {
 			return fmt.Errorf("create embedded plugin directory for %s: %w", targetPath, err)
 		}
 		mode := fs.FileMode(0o644)
-		if slices.Contains([]string{"tunnel-mcp/scripts/install_plugin.py", "tunnel-mcp/scripts/tunnel_mcp"}, path) {
+		if slices.Contains([]string{
+			"tunnel-mcp/scripts/install_plugin.py",
+			"tunnel-mcp/scripts/tunnel_mcp",
+			"tunnel-mcp/scripts/tunnel_mcp.cmd",
+			"tunnel-mcp/scripts/tunnel_mcp.ps1",
+		}, path) {
 			mode = 0o755
 		}
 		if err := os.WriteFile(targetPath, data, mode); err != nil {

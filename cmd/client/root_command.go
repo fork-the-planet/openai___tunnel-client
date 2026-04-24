@@ -31,7 +31,7 @@ func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 	rootCmd.AddCommand(newCodexCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(newProfilesCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(newAdminProfilesCommand(lookupEnv, stdout, stderr))
-	rootCmd.AddCommand(newSessionsCommand(lookupEnv, stdout, stderr))
+	rootCmd.AddCommand(newRuntimesCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(newPluginCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(admincmd.NewAdminCommand(lookupEnv, stdout, stderr))
 	rootCmd.SetHelpCommand(newHelpCommand(rootCmd, stdout, stderr))

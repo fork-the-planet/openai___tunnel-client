@@ -271,8 +271,10 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	configData, readErr := os.ReadFile(filepath.Join(codexHome, "config.toml"))
 	require.NoError(t, readErr)
 	require.NotContains(t, string(configData), `[plugins."tunnel-mcp@debug"]`)
-	require.Contains(t, stdout, "Removed tunnel-mcp")
+	require.Contains(t, stdout, "Removed on-disk tunnel-mcp plugin bundle")
+	require.Contains(t, stdout, "Removed on-disk Codex config section")
 	require.Contains(t, stdout, "tunnel-client codex plugin install")
+	require.Contains(t, stdout, "restart any existing Codex session if the plugin was already loaded")
 }
 
 func TestPluginCodexUninstallIsIdempotent(t *testing.T) {

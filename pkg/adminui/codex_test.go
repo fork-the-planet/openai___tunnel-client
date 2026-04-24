@@ -64,3 +64,56 @@ func TestBuildCodexKnowledgeItemUsesPackagedDocs(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCodexKnowledgeItemUsesBundledPluginReferences(t *testing.T) {
+	t.Parallel()
+
+	item := buildCodexKnowledgeItem("How do I install the codex plugin from the tunnel-client binary?")
+	if item == nil {
+		t.Fatal("expected knowledge item")
+	}
+	content, ok := item["content"].([]map[string]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("unexpected content payload: %#v", item["content"])
+	}
+	text, _ := content[0]["text"].(string)
+	if text == "" {
+		t.Fatalf("expected knowledge text, got %#v", content[0]["text"])
+	}
+	for _, snippet := range []string{
+		"Curated tunnel-mcp plugin references injected from the binary.",
+		"plugins/tunnel-mcp/skills/tunnel-mcp/references/setup-and-install.md",
+		"tunnel-client codex plugin install",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("expected knowledge text to contain %q, got:\n%s", snippet, text)
+		}
+	}
+}
+
+func TestBuildCodexKnowledgeItemUsesBundledBinaryGuidance(t *testing.T) {
+	t.Parallel()
+
+	item := buildCodexKnowledgeItem("The plugin is installed but tunnel-client is missing. How do I install the binary?")
+	if item == nil {
+		t.Fatal("expected knowledge item")
+	}
+	content, ok := item["content"].([]map[string]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("unexpected content payload: %#v", item["content"])
+	}
+	text, _ := content[0]["text"].(string)
+	if text == "" {
+		t.Fatalf("expected knowledge text, got %#v", content[0]["text"])
+	}
+	for _, snippet := range []string{
+		"Curated tunnel-mcp plugin references injected from the binary.",
+		"plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md",
+		"https://github.com/openai/tunnel-client/releases/latest",
+		"git clone https://github.com/openai/tunnel-client.git",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("expected knowledge text to contain %q, got:\n%s", snippet, text)
+		}
+	}
+}

@@ -104,7 +104,7 @@ binary flow, install it directly from the binary:
 tunnel-client codex assistant "Summarize what tunnel-client is for."
 tunnel-client codex status
 tunnel-client codex plugin install
-tunnel-client sessions list
+tunnel-client runtimes list
 tunnel-client codex plugin uninstall
 ```
 Starter prompts for Codex:

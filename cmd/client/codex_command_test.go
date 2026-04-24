@@ -117,6 +117,26 @@ func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
 	require.Contains(t, stdout, `"email": "worker@example.com"`)
 }
 
+func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
+	codexHome := t.TempDir()
+	fakeTunnelClient := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	_, err := codexplugin.Install(codexHome, fakeTunnelClient)
+	require.NoError(t, err)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "status")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "Plugin on disk: installed in "+codexplugin.PluginTargetDir(codexHome))
+	require.NotContains(t, stdout, "Plugin: installed")
+}
+
 func TestCodexStatusJSONReportsBridgeReadyWhenAssistantProbeStalls(t *testing.T) {
 	originalTimeout := codexStatusAssistantProbeTimeout
 	codexStatusAssistantProbeTimeout = 50 * time.Millisecond
@@ -263,6 +283,83 @@ func TestCodexAssistantInjectsPackagedKnowledgeWhenRepoDocsMayBeAbsent(t *testin
 	require.Contains(t, found, "Connection: Tunnel")
 }
 
+func TestCodexAssistantInjectsBundledPluginReferences(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "inject_items.json")
+	t.Setenv("GO_WANT_CODEX_INJECT_CAPTURE", capturePath)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	prompt := "How do I install the codex plugin and set up tunnel-client from the binary?"
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "--cwd", "/tmp", "How", "do", "I", "install", "the", "codex", "plugin", "and", "set", "up", "tunnel-client", "from", "the", "binary?")
+
+	require.NoError(t, err, stderr)
+	payload := readCapturedInjectItems(t, capturePath)
+	items, ok := payload["items"].([]any)
+	require.True(t, ok)
+
+	var found string
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok)
+		content, ok := item["content"].([]any)
+		require.True(t, ok)
+		for _, partRaw := range content {
+			part, ok := partRaw.(map[string]any)
+			require.True(t, ok)
+			text, _ := part["text"].(string)
+			if strings.Contains(text, "Curated tunnel-mcp plugin references injected from the binary.") {
+				found = text
+			}
+		}
+	}
+	require.NotEmpty(t, found)
+	require.Contains(t, found, "plugins/tunnel-mcp/skills/tunnel-mcp/references/setup-and-install.md")
+	require.Contains(t, found, "tunnel-client codex plugin install")
+	require.NotContains(t, found, prompt)
+}
+
+func TestCodexAssistantInjectsBundledBinaryAcquisitionGuidance(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "inject_items.json")
+	t.Setenv("GO_WANT_CODEX_INJECT_CAPTURE", capturePath)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	prompt := "The tunnel-mcp plugin is installed but tunnel-client is missing. How do I download and install the binary?"
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "assistant", "--cwd", "/tmp", "The", "tunnel-mcp", "plugin", "is", "installed", "but", "tunnel-client", "is", "missing.", "How", "do", "I", "download", "and", "install", "the", "binary?")
+
+	require.NoError(t, err, stderr)
+	payload := readCapturedInjectItems(t, capturePath)
+	items, ok := payload["items"].([]any)
+	require.True(t, ok)
+
+	var found string
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok)
+		content, ok := item["content"].([]any)
+		require.True(t, ok)
+		for _, partRaw := range content {
+			part, ok := partRaw.(map[string]any)
+			require.True(t, ok)
+			text, _ := part["text"].(string)
+			if strings.Contains(text, "Curated tunnel-mcp plugin references injected from the binary.") {
+				found = text
+			}
+		}
+	}
+	require.NotEmpty(t, found)
+	require.Contains(t, found, "plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md")
+	require.Contains(t, found, "https://github.com/openai/tunnel-client/releases/latest")
+	require.Contains(t, found, "git clone https://github.com/openai/tunnel-client.git")
+	require.NotContains(t, found, prompt)
+}
+
 func TestCodexHelpIncludesAssistantSubcommand(t *testing.T) {
 	var stdout bytes.Buffer
 	root := newRootCommand(func(string) (string, bool) { return "", false }, &stdout, &bytes.Buffer{})
@@ -290,7 +387,7 @@ func TestCodexPluginCommandInstallAndLegacyAliasBothWork(t *testing.T) {
 	}, "plugin", "codex", "uninstall", "--codex-home", codexHome)
 
 	require.NoError(t, err, stderr)
-	require.Contains(t, stdout, "Removed tunnel-mcp")
+	require.Contains(t, stdout, "Removed on-disk tunnel-mcp plugin bundle")
 }
 
 func TestAssistantWorkingDirectoryPrefersNestedTunnelClientWorkspace(t *testing.T) {

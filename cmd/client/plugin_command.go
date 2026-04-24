@@ -122,15 +122,19 @@ func newCodexPluginUninstallCommand(lookupEnv func(string) (string, bool), stdou
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tunnel MCP plugin is not installed in %s\n", home)
 				return nil
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed %s from %s\n", result.PluginName, result.PluginDir)
-			if result.RemovedConfigSection {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed Codex config section from %s\n", result.ConfigPath)
+			if result.RemovedPluginDir {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed on-disk %s plugin bundle from %s\n", result.PluginName, result.PluginDir)
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No matching Codex config section found in %s\n", result.ConfigPath)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No on-disk %s plugin bundle found in %s\n", result.PluginName, result.PluginDir)
+			}
+			if result.RemovedConfigSection {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed on-disk Codex config section from %s\n", result.ConfigPath)
+			} else {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No matching on-disk Codex config section found in %s\n", result.ConfigPath)
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  tunnel-client codex plugin install")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  start a new Codex session if plugins were already loaded")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  restart any existing Codex session if the plugin was already loaded")
 			return nil
 		},
 	}

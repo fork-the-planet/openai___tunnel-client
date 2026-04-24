@@ -13,6 +13,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/codexappserver"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/httpguard"
+	pluginsbundle "go.openai.org/api/tunnel-client/plugins"
 )
 
 const (
@@ -355,11 +356,27 @@ func buildCodexTurnContextItems(p routeParams, prompt string) []map[string]any {
 }
 
 func buildCodexKnowledgeItem(prompt string) map[string]any {
-	text := assistantkb.BuildPromptContext(prompt)
+	parts := []string{
+		strings.TrimSpace(assistantkb.BuildPromptContext(prompt)),
+		strings.TrimSpace(pluginsbundle.BuildTunnelMCPPromptContext(prompt)),
+	}
+	text := strings.Join(compactCodexKnowledgeParts(parts), "\n\n")
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	return buildCodexDeveloperItem(text)
+}
+
+func compactCodexKnowledgeParts(parts []string) []string {
+	compacted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		compacted = append(compacted, part)
+	}
+	return compacted
 }
 
 func buildCodexDeveloperItem(text string) map[string]any {

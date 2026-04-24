@@ -28,7 +28,7 @@ Use the first-run helpers before editing YAML by hand:
 - `tunnel-client dev mcp-stub`
 - `tunnel-client codex assistant "Summarize what tunnel-client is for."`
 - `tunnel-client codex status`
-- `tunnel-client sessions list`
+- `tunnel-client runtimes list`
 - `tunnel-client admin-profiles list`
 - `tunnel-client codex plugin install`
 - `tunnel-client codex plugin uninstall`
@@ -166,8 +166,8 @@ secrets are redacted before export.
 - `codex plugin export --dir <path>`: export the embedded plugin bundle for
   inspection or manual installation.
 - `admin-profiles list|set|delete`: manage saved admin-key profiles used by
-  native session workflows.
-- `sessions create|connect|list|status|stop|rm`: manage native alias state and
+  native runtime workflows.
+- `runtimes create|connect|list|status|stop|rm`: manage native alias state and
   local tunnel-client runtime supervision.
 - `admin tunnels`: manage tunnel metadata via the admin API (`/v1/tunnels*`).
 - `admin tunnels get <id>`: read-only tunnel metadata lookup; accepts the

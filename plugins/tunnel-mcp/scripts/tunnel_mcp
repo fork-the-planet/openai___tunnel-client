@@ -1,50 +1,115 @@
 #!/bin/sh
 set -eu
 
-plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+case "$0" in
+  */*) script_dir=${0%/*} ;;
+  *) script_dir=. ;;
+esac
+plugin_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 tunnel_client_bin=""
+attempts=""
+
+append_attempt() {
+  if [ -z "$attempts" ]; then
+    attempts="- $1"
+  else
+    attempts="$attempts
+- $1"
+  fi
+}
+
+is_executable_file() {
+  [ -f "$1" ] && [ -x "$1" ]
+}
+
+find_adjacent_binary() {
+  search_root=$plugin_root
+  while [ -n "$search_root" ]; do
+    for candidate in \
+      "$search_root/tunnel-client" \
+      "$search_root/tunnel-client.exe" \
+      "$search_root/bin/tunnel-client" \
+      "$search_root/bin/tunnel-client.exe" \
+      "$search_root/bazel-bin/cmd/client/client" \
+      "$search_root/bazel-bin/cmd/client/client.exe" \
+      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client" \
+      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client.exe"
+    do
+      if is_executable_file "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+    case "$search_root" in
+      */*) parent=${search_root%/*} ;;
+      *) parent=. ;;
+    esac
+    if [ -z "$parent" ]; then
+      parent=/
+    fi
+    if [ "$parent" = "$search_root" ]; then
+      break
+    fi
+    search_root=$parent
+  done
+  return 1
+}
 
 if [ "${1:-}" = "--tunnel-client-bin" ]; then
   if [ $# -lt 2 ]; then
     echo "error: --tunnel-client-bin requires a value" >&2
     exit 2
   fi
-  tunnel_client_bin=$2
+  if is_executable_file "$2"; then
+    tunnel_client_bin=$2
+  else
+    append_attempt "--tunnel-client-bin: $2 was not an executable file"
+  fi
   shift 2
+else
+  append_attempt "--tunnel-client-bin: not provided"
 fi
 
 if [ -z "$tunnel_client_bin" ] && [ -n "${TUNNEL_CLIENT_BIN:-}" ]; then
-  tunnel_client_bin=$TUNNEL_CLIENT_BIN
+  if is_executable_file "$TUNNEL_CLIENT_BIN"; then
+    tunnel_client_bin=$TUNNEL_CLIENT_BIN
+  else
+    append_attempt "TUNNEL_CLIENT_BIN: $TUNNEL_CLIENT_BIN was not an executable file"
+  fi
+elif [ -z "$tunnel_client_bin" ]; then
+  append_attempt "TUNNEL_CLIENT_BIN: not set"
 fi
 
 if [ -z "$tunnel_client_bin" ] && [ -f "$plugin_root/.tunnel-client-bin" ]; then
-  IFS= read -r tunnel_client_bin < "$plugin_root/.tunnel-client-bin" || true
+  IFS= read -r hinted_bin < "$plugin_root/.tunnel-client-bin" || true
+  if [ -n "${hinted_bin:-}" ] && is_executable_file "$hinted_bin"; then
+    tunnel_client_bin=$hinted_bin
+  else
+    append_attempt "installed .tunnel-client-bin hint: ${hinted_bin:-empty} was not an executable file"
+  fi
+elif [ -z "$tunnel_client_bin" ]; then
+  append_attempt "installed .tunnel-client-bin hint: not present"
 fi
 
 if [ -z "$tunnel_client_bin" ]; then
-  search_root=$plugin_root
-  while [ -n "$search_root" ]; do
-    for candidate in \
-      "$search_root/tunnel-client" \
-      "$search_root/bin/tunnel-client" \
-      "$search_root/bazel-bin/cmd/client/client" \
-      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client"
-    do
-      if [ -x "$candidate" ]; then
-        tunnel_client_bin=$candidate
-        break 2
-      fi
-    done
-    parent=$(dirname "$search_root")
-    if [ "$parent" = "$search_root" ]; then
-      break
-    fi
-    search_root=$parent
-  done
+  adjacent_bin=$(find_adjacent_binary || true)
+  if [ -n "$adjacent_bin" ]; then
+    tunnel_client_bin=$adjacent_bin
+  else
+    append_attempt "adjacent build outputs: no executable tunnel-client binary found next to the plugin"
+  fi
 fi
 
 if [ -z "$tunnel_client_bin" ]; then
-  tunnel_client_bin=tunnel-client
+  path_candidate=$(command -v tunnel-client 2>/dev/null || true)
+  if [ -z "$path_candidate" ]; then
+    path_candidate=$(command -v tunnel-client.exe 2>/dev/null || true)
+  fi
+  if [ -n "$path_candidate" ]; then
+    tunnel_client_bin=$path_candidate
+  else
+    append_attempt "PATH: no tunnel-client executable found"
+  fi
 fi
 
 if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -68,11 +133,11 @@ case "$1" in
   create|connect|list|status|stop|disconnect)
     command=$1
     shift
-    set -- sessions "$command" "$@"
+    set -- runtimes "$command" "$@"
     ;;
   rm|remove)
     shift
-    set -- sessions rm "$@"
+    set -- runtimes rm "$@"
     ;;
   *)
     echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, or admin-profiles" >&2
@@ -90,6 +155,31 @@ done
 
 if [ "$has_json" -eq 0 ]; then
   set -- "$@" --json
+fi
+
+if [ -z "$tunnel_client_bin" ]; then
+  printf 'error: tunnel-client was not found.\n\n' >&2
+  printf 'Discovery methods tried:\n%s\n\n' "$attempts" >&2
+  printf '%s\n' \
+    'Next steps:' \
+    '- Download a release binary from https://github.com/openai/tunnel-client/releases/latest' \
+    '- Or clone and build from source from https://github.com/openai/tunnel-client:' \
+    '  git clone https://github.com/openai/tunnel-client.git' \
+    '  cd tunnel-client' \
+    '  go build -o bin/tunnel-client ./cmd/client' \
+    '  # Windows: go build -o bin/tunnel-client.exe ./cmd/client' \
+    '- Then point the plugin at the binary with one of:' \
+    '  - set TUNNEL_CLIENT_BIN to the full path to tunnel-client' \
+    '  - rerun with --tunnel-client-bin /path/to/tunnel-client' \
+    '- Or reinstall the plugin with --tunnel-client-bin /path/to/tunnel-client' \
+    '' \
+    'Executable naming guidance:' \
+    '- macOS/Linux: tunnel-client' \
+    '- Windows: tunnel-client.exe' \
+    '' \
+    'This plugin does not auto-download, auto-clone, or auto-run remote tunnel-client binaries.' \
+    'If the user explicitly asks Codex to set up tunnel-client, Codex may clone and build it from the public repo commands above.' >&2
+  exit 2
 fi
 
 exec "$tunnel_client_bin" "$@"

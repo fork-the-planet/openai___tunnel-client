@@ -250,7 +250,7 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 		_, _ = fmt.Fprintf(w, "Account: %s\n", label)
 	}
 	if report.PluginInstalled {
-		_, _ = fmt.Fprintf(w, "Plugin: installed in %s\n", report.PluginDir)
+		_, _ = fmt.Fprintf(w, "Plugin on disk: installed in %s\n", report.PluginDir)
 		if report.PluginBinaryHint != "" {
 			_, _ = fmt.Fprintf(w, "Plugin binary hint: %s\n", report.PluginBinaryHint)
 		}
@@ -258,7 +258,7 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 			_, _ = fmt.Fprintf(w, "Plugin matches current tunnel-client: %t\n", *report.PluginMatchesCurrentBinary)
 		}
 	} else if report.PluginDir != "" {
-		_, _ = fmt.Fprintf(w, "Plugin: not installed (%s)\n", report.PluginDir)
+		_, _ = fmt.Fprintf(w, "Plugin on disk: not installed (%s)\n", report.PluginDir)
 	}
 	_, _ = fmt.Fprintf(w, "Install: %s\n", report.RecommendedInstallCommand)
 	_, _ = fmt.Fprintf(w, "Upgrade: %s\n", report.RecommendedUpgradeCommand)

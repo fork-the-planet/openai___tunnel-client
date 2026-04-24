@@ -48,8 +48,8 @@ def parse_args() -> argparse.Namespace:
         "--tunnel-client-bin",
         help=(
             "Path to the tunnel-client binary to persist into the installed plugin bundle. "
-            "Defaults to auto-detecting a local build, an existing bundle hint, or "
-            "$TUNNEL_CLIENT_BIN."
+            "Defaults to auto-detecting --tunnel-client-bin, TUNNEL_CLIENT_BIN, "
+            "an existing bundle hint, adjacent build outputs, or PATH."
         ),
     )
     return parser.parse_args()
@@ -99,9 +99,13 @@ def tunnel_client_bin_candidates(source: Path) -> list[Path]:
     for root in [source, *source.parents]:
         for candidate in (
             root / "tunnel-client",
+            root / "tunnel-client.exe",
             root / "bin" / "tunnel-client",
+            root / "bin" / "tunnel-client.exe",
             root / "bazel-bin" / "cmd" / "client" / "client",
+            root / "bazel-bin" / "cmd" / "client" / "client.exe",
             root / "bazel-bin" / "api" / "tunnel-client" / "cmd" / "client" / "client",
+            root / "bazel-bin" / "api" / "tunnel-client" / "cmd" / "client" / "client.exe",
         ):
             key = str(candidate)
             if key in seen:
@@ -126,6 +130,11 @@ def discover_tunnel_client_bin(source: Path, explicit: Optional[str]) -> Optiona
     for candidate in tunnel_client_bin_candidates(source):
         if is_executable_file(candidate):
             return candidate.resolve()
+
+    for path_name in ("tunnel-client", "tunnel-client.exe"):
+        discovered = shutil.which(path_name)
+        if discovered:
+            return Path(discovered).expanduser().resolve()
     return None
 
 

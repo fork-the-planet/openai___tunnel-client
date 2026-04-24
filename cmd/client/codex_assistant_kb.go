@@ -4,10 +4,15 @@ import (
 	"strings"
 
 	assistantkb "go.openai.org/api/tunnel-client/docs"
+	pluginsbundle "go.openai.org/api/tunnel-client/plugins"
 )
 
 func buildCodexAssistantKnowledgeItem(prompt string) map[string]any {
-	text := assistantkb.BuildPromptContext(prompt)
+	parts := []string{
+		strings.TrimSpace(assistantkb.BuildPromptContext(prompt)),
+		strings.TrimSpace(pluginsbundle.BuildTunnelMCPPromptContext(prompt)),
+	}
+	text := strings.Join(compactKnowledgeParts(parts), "\n\n")
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -21,4 +26,16 @@ func buildCodexAssistantKnowledgeItem(prompt string) map[string]any {
 			},
 		},
 	}
+}
+
+func compactKnowledgeParts(parts []string) []string {
+	compacted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		compacted = append(compacted, part)
+	}
+	return compacted
 }

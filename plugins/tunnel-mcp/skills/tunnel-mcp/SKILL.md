@@ -7,8 +7,34 @@ description: Create, connect, list, and inspect MCP tunnels through the local tu
 
 Use `scripts/tunnel_mcp` from this plugin when a user asks Codex to manage MCP
 tunnels through `tunnel-client`. The plugin entrypoint is a thin router onto
-the public native `tunnel-client sessions ...` and
+the public native `tunnel-client runtimes ...` and
 `tunnel-client admin-profiles ...` command trees.
+
+Before acting, consult only the relevant curated reference file under
+`references/`:
+
+- `references/binary.md`: how to find or obtain a public-safe `tunnel-client` binary
+- `references/setup-and-install.md`: install, export, reset, binary-vs-bundle setup
+- `references/profiles-state-and-keys.md`: profiles, state dirs, admin/runtime key split
+- `references/runtime-flows.md`: create, connect, status, stop, rm, attach by tunnel id
+- `references/troubleshooting.md`: `/healthz`, `/readyz`, `/ui`, status, logs, stale aliases
+
+Do not open every reference by default. Pick the smallest relevant set for the
+current prompt, use those files as the repository-specific source of truth, and
+then route the action through native `tunnel-client` commands.
+
+Binary setup order:
+
+- first try the existing binary discovery path:
+  `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, the installed bundle hint,
+  adjacent build outputs, then `PATH`
+- if the binary is missing, consult `references/binary.md`
+- do not auto-download, auto-clone, or execute remote binaries just because the
+  plugin cannot find `tunnel-client`
+- if the user explicitly asks Codex to set up or install `tunnel-client`, Codex
+  may clone and build it from `https://github.com/openai/tunnel-client`
+- after building, set `TUNNEL_CLIENT_BIN` or reinstall the plugin with
+  `--tunnel-client-bin`
 
 Preferred install surfaces:
 
@@ -22,7 +48,7 @@ Preferred install surfaces:
 - Use `tunnel-client admin tunnels` for remote tunnel CRUD. Do not call raw
   tunnel-service HTTP endpoints from this plugin.
 - Route operational actions through the public native CLI:
-  `tunnel-client sessions ...` and `tunnel-client admin-profiles ...`.
+  `tunnel-client runtimes ...` and `tunnel-client admin-profiles ...`.
 - Use native `tunnel-client run --profile <name>` for runtime processes. Do not
   use a helper shim that translates profile files into flags.
 - Do not assume a specific source checkout, build system, internal helper, or

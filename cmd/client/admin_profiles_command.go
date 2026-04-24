@@ -21,7 +21,7 @@ func newAdminProfilesCommandWithRuntime(lookupEnv func(string) (string, bool), s
 
 	cmd := &cobra.Command{
 		Use:   "admin-profiles",
-		Short: "Manage tunnel-client admin profiles used by sessions commands",
+		Short: "Manage tunnel-client admin profiles used by runtimes commands",
 	}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)

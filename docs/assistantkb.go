@@ -28,7 +28,7 @@ type knowledgeSection struct {
 	SearchText   string
 }
 
-type knowledgeMatch struct {
+type Match struct {
 	Path    string
 	Heading string
 	Excerpt string
@@ -55,31 +55,37 @@ var (
 
 func BuildPromptContext(prompt string) string {
 	matches := Search(prompt, 3)
-	if len(matches) == 0 {
-		return ""
-	}
-
-	lines := []string{
+	return FormatPromptContext([]string{
 		"Packaged tunnel-client knowledge base injected from the binary.",
 		"These markdown snippets remain available even when the source checkout is not present on disk.",
 		"Use them as repository-specific reference before falling back to generic assumptions.",
+	}, "knowledge.match", matches)
+}
+
+func FormatPromptContext(intro []string, matchPrefix string, matches []Match) string {
+	if len(matches) == 0 {
+		return ""
 	}
+	if strings.TrimSpace(matchPrefix) == "" {
+		matchPrefix = "knowledge.match"
+	}
+	lines := append([]string{}, intro...)
 	for i, match := range matches {
 		index := i + 1
-		lines = append(lines, fmt.Sprintf("knowledge.match.%d.path=%s", index, match.Path))
+		lines = append(lines, fmt.Sprintf("%s.%d.path=%s", matchPrefix, index, match.Path))
 		if match.Heading != "" {
-			lines = append(lines, fmt.Sprintf("knowledge.match.%d.heading=%s", index, match.Heading))
+			lines = append(lines, fmt.Sprintf("%s.%d.heading=%s", matchPrefix, index, match.Heading))
 		}
 		lines = append(lines,
-			fmt.Sprintf("knowledge.match.%d.excerpt_begin", index),
+			fmt.Sprintf("%s.%d.excerpt_begin", matchPrefix, index),
 			match.Excerpt,
-			fmt.Sprintf("knowledge.match.%d.excerpt_end", index),
+			fmt.Sprintf("%s.%d.excerpt_end", matchPrefix, index),
 		)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func Search(prompt string, limit int) []knowledgeMatch {
+func Search(prompt string, limit int) []Match {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -87,15 +93,29 @@ func Search(prompt string, limit int) []knowledgeMatch {
 	if err != nil || len(docs) == 0 {
 		return nil
 	}
+	return searchKnowledgeDocuments(docs, prompt, limit, 1200)
+}
 
+func SearchFS(prompt string, fsys fs.ReadFileFS, paths []string, sourcePrefix string, limit int, maxExcerptChars int) []Match {
+	if limit <= 0 {
+		limit = 1
+	}
+	docs, err := loadKnowledgeDocumentsFromPaths(fsys, paths, sourcePrefix)
+	if err != nil || len(docs) == 0 {
+		return nil
+	}
+	return searchKnowledgeDocuments(docs, prompt, limit, maxExcerptChars)
+}
+
+func searchKnowledgeDocuments(docs []knowledgeDocument, prompt string, limit int, maxExcerptChars int) []Match {
 	terms := tokenizeKnowledgePrompt(prompt)
 	if len(terms) == 0 {
 		terms = []string{"tunnel-client"}
 	}
 
-	matches := make([]knowledgeMatch, 0, len(docs))
+	matches := make([]Match, 0, len(docs))
 	for _, doc := range docs {
-		best := knowledgeMatch{Path: doc.Path}
+		best := Match{Path: doc.Path}
 		for _, section := range doc.Sections {
 			score := knowledgeScore(doc, section, terms)
 			if score <= 0 {
@@ -104,14 +124,13 @@ func Search(prompt string, limit int) []knowledgeMatch {
 			if score > best.Score {
 				best.Score = score
 				best.Heading = section.Heading
-				best.Excerpt = excerptKnowledgeSection(section, terms, 1200)
+				best.Excerpt = excerptKnowledgeSection(section, terms, maxExcerptChars)
 			}
 		}
 		if best.Score > 0 {
 			matches = append(matches, best)
 		}
 	}
-
 	if len(matches) == 0 {
 		return nil
 	}
@@ -144,34 +163,36 @@ func loadKnowledgeDocuments() ([]knowledgeDocument, error) {
 		paths = append(paths, topLevel...)
 		paths = append(paths, deployment...)
 		sort.Strings(paths)
-
-		docs := make([]knowledgeDocument, 0, len(paths))
-		for _, path := range paths {
-			data, err := knowledgeFS.ReadFile(path)
-			if err != nil {
-				knowledgeDocsErr = err
-				return
-			}
-			displayPath := "docs/" + path
-			sections := splitKnowledgeSections(string(data))
-			if len(sections) == 0 {
-				continue
-			}
-			title := sections[0].Heading
-			if title == "" {
-				title = displayPath
-			}
-			docs = append(docs, knowledgeDocument{
-				Path:       displayPath,
-				PathLower:  strings.ToLower(displayPath),
-				Title:      title,
-				TitleLower: strings.ToLower(title),
-				Sections:   sections,
-			})
-		}
-		knowledgeDocs = docs
+		knowledgeDocs, knowledgeDocsErr = loadKnowledgeDocumentsFromPaths(knowledgeFS, paths, "docs/")
 	})
 	return knowledgeDocs, knowledgeDocsErr
+}
+
+func loadKnowledgeDocumentsFromPaths(fsys fs.ReadFileFS, paths []string, sourcePrefix string) ([]knowledgeDocument, error) {
+	docs := make([]knowledgeDocument, 0, len(paths))
+	for _, path := range paths {
+		data, err := fsys.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		displayPath := sourcePrefix + path
+		sections := splitKnowledgeSections(string(data))
+		if len(sections) == 0 {
+			continue
+		}
+		title := sections[0].Heading
+		if title == "" {
+			title = displayPath
+		}
+		docs = append(docs, knowledgeDocument{
+			Path:       displayPath,
+			PathLower:  strings.ToLower(displayPath),
+			Title:      title,
+			TitleLower: strings.ToLower(title),
+			Sections:   sections,
+		})
+	}
+	return docs, nil
 }
 
 func splitKnowledgeSections(body string) []knowledgeSection {

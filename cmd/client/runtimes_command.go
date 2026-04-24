@@ -18,17 +18,17 @@ type sessionsCommonFlags struct {
 	jsonOutput          bool
 }
 
-func newSessionsCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
-	return newSessionsCommandWithRuntime(lookupEnv, stdout, stderr, session.DefaultRuntime())
+func newRuntimesCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
+	return newRuntimesCommandWithRuntime(lookupEnv, stdout, stderr, session.DefaultRuntime())
 }
 
-func newSessionsCommandWithRuntime(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer, runtime session.Runtime) *cobra.Command {
+func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer, runtime session.Runtime) *cobra.Command {
 	manager := codexplugin.NewManager(lookupEnv, runtime)
 	common := &sessionsCommonFlags{}
 
 	cmd := &cobra.Command{
-		Use:   "sessions",
-		Short: "Manage native tunnel-client Codex sessions",
+		Use:   "runtimes",
+		Short: "Manage native tunnel-client runtimes",
 	}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
@@ -148,6 +148,9 @@ func newSessionsCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 		Use:   "list",
 		Short: "List local aliases and optionally remote scoped tunnels",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateRuntimeListScope(listOrgIDs, listWorkspaceIDs, listTenantID); err != nil {
+				return err
+			}
 			payload, err := manager.ListSessions(codexplugin.ListOptions{
 				AdminProfileName:    common.adminProfileName,
 				AdminKeyRef:         common.adminKeyRef,
@@ -164,7 +167,7 @@ func newSessionsCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 			}
 			aliases, _ := payload["aliases"].([]map[string]any)
 			if len(aliases) == 0 {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "No session aliases found in %s\n", payload["state_root"])
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "No runtime aliases found in %s\n", payload["state_root"])
 				return err
 			}
 			for _, alias := range aliases {
@@ -230,7 +233,7 @@ func newSessionsCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 	removeCmd := &cobra.Command{
 		Use:     "rm <alias>",
 		Aliases: []string{"remove"},
-		Short:   "Remove local session metadata without deleting the remote tunnel",
+		Short:   "Remove local runtime metadata without deleting the remote tunnel",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			payload, err := manager.Remove(codexplugin.AliasOptions{Alias: args[0]})
@@ -240,13 +243,36 @@ func newSessionsCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 			if common.jsonOutput {
 				return writeJSON(cmd.OutOrStdout(), payload)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Removed local session metadata for %s\n", args[0])
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Removed local runtime metadata for %s\n", args[0])
 			return err
 		},
 	}
 	cmd.AddCommand(removeCmd)
 
 	return cmd
+}
+
+func validateRuntimeListScope(organizationIDs, workspaceIDs []string, tenantID string) error {
+	filterCount := 0
+	if len(organizationIDs) > 0 {
+		filterCount++
+	}
+	if len(workspaceIDs) > 0 {
+		filterCount++
+	}
+	if tenantID != "" {
+		filterCount++
+	}
+	if filterCount > 1 {
+		return errors.New("runtimes list accepts exactly one remote scope family: --organization-id, --workspace-id, or --tenant-id")
+	}
+	if len(organizationIDs) > 1 {
+		return errors.New("runtimes list accepts at most one --organization-id for remote listing")
+	}
+	if len(workspaceIDs) > 1 {
+		return errors.New("runtimes list accepts at most one --workspace-id for remote listing")
+	}
+	return nil
 }
 
 func maybeWritePayloadError(cmd *cobra.Command, jsonOutput bool, payload map[string]any, err error) error {

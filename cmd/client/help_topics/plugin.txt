@@ -1,14 +1,14 @@
-Use the Codex plugin when you want a Codex-local entrypoint over the public native tunnel session commands.
+Use the Codex plugin when you want a Codex-local entrypoint over the public native tunnel runtime commands.
 If you only need a terminal assistant over the same Codex app-server bridge, start with:
   tunnel-client codex assistant "Summarize the current tunnel setup."
 
 Native command surfaces:
-  tunnel-client sessions create ...
-  tunnel-client sessions connect ...
-  tunnel-client sessions list
-  tunnel-client sessions status <alias>
-  tunnel-client sessions stop <alias>
-  tunnel-client sessions rm <alias>
+  tunnel-client runtimes create ...
+  tunnel-client runtimes connect ...
+  tunnel-client runtimes list
+  tunnel-client runtimes status <alias>
+  tunnel-client runtimes stop <alias>
+  tunnel-client runtimes rm <alias>
   tunnel-client admin-profiles list
   tunnel-client admin-profiles set <name> --admin-key env:OPENAI_ADMIN_KEY
   tunnel-client codex status
@@ -27,7 +27,7 @@ If Codex is installed locally but the plugin is missing, doctor and startup guid
   tunnel-client codex plugin install
 
 Plugin runtime semantics:
-  - the installed plugin is a thin router onto `tunnel-client sessions ...` and `tunnel-client admin-profiles ...`
+  - the installed plugin is a thin router onto `tunnel-client runtimes ...` and `tunnel-client admin-profiles ...`
   - connect success means a usable local runtime exists, not merely that a launch command was issued
   - healthy = the managed runtime is alive and /healthz is reachable
   - ready is reported separately so agents can distinguish startup success from the full OAuth/MCP ready contract
@@ -35,9 +35,9 @@ Plugin runtime semantics:
   - stop or disconnect tears down the managed local runtime without deleting the tunnel itself
 
 Useful native commands:
-  tunnel-client sessions status <alias>
-  tunnel-client sessions stop <alias>
-  tunnel-client sessions disconnect <alias>
+  tunnel-client runtimes status <alias>
+  tunnel-client runtimes stop <alias>
+  tunnel-client runtimes disconnect <alias>
   tunnel-client admin-profiles list
 
 Useful plugin aliases inside Codex:

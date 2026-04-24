@@ -78,7 +78,7 @@ Fastest Codex terminal path:
 tunnel-client codex assistant "Summarize what tunnel-client is doing in this checkout."
 tunnel-client codex status
 tunnel-client codex plugin install
-tunnel-client sessions list
+tunnel-client runtimes list
 tunnel-client help plugin
 tunnel-client codex plugin uninstall
 ```
@@ -86,7 +86,7 @@ tunnel-client codex plugin uninstall
 Choose the raw binary when you want the smallest possible setup surface.
 Choose `tunnel-client codex assistant` when you want the fastest Codex-native
 terminal path. Choose the plugin when you want a Codex-local entrypoint over
-the native `sessions` / `admin-profiles` command trees.
+the native `runtimes` / `admin-profiles` command trees.
 
 Starter prompts for Codex:
 
@@ -161,8 +161,8 @@ make admin-ui
 - `sample_mcp_enterprise_proxy` is the built-in starter for outbound proxies
   and private PKI, with env-backed proxy and CA bundle references.
 - `tunnel-client admin-profiles list|set|delete` manages saved admin-key
-  profiles for native session workflows.
-- `tunnel-client sessions create|connect|list|status|stop|rm` manages native
+  profiles for native runtime workflows.
+- `tunnel-client runtimes create|connect|list|status|stop|rm` manages native
   alias state and local runtime supervision.
 - `tunnel-client run` starts the client poller.
 - `tunnel-client admin tunnels get <id>` is the read-only metadata lookup used
