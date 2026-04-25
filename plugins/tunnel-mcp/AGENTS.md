@@ -5,8 +5,8 @@
 - Avoid referring to the larger repository structure in user-facing plugin
   installation instructions. Use terms like "this repository root", "source
   checkout", or "standalone `tunnel-client` checkout" instead.
-- Do not introduce private repository layout, internal package-manager,
-  mirror-pipeline, or private source-tree references in plugin code, docs,
+- Do not introduce non-public repository layout, package-manager,
+  mirror-pipeline, or source-tree references in plugin code, docs,
   prompts, examples, or runtime output.
 - Keep binary-owned install/uninstall paths primary, and use POSIX shell or
   PowerShell wrapper examples for exported/source-checkout fallback flows. Do
@@ -33,3 +33,7 @@
   auto-download, auto-clone, or auto-run remote binaries by themselves.
   Codex may only clone/build from the public repo when the user explicitly asks
   it to set up or install `tunnel-client`.
+- For installed-plugin runtime questions, answer from
+  `skills/tunnel-mcp/references/runtime-flows.md` and use
+  `tunnel-client runtimes ...` commands for create, connect, list, status,
+  stop, and remove operations.

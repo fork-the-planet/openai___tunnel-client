@@ -42,6 +42,21 @@ func BuildTunnelMCPPromptContext(prompt string) string {
 			},
 		})
 	}
+	if isRuntimeOperationPrompt(prompt) {
+		runtimeExcerpt := buildBundledRuntimeFlowsExcerpt()
+		return assistantkb.FormatPromptContext([]string{
+			"Curated tunnel-mcp plugin runtime guidance injected from the binary.",
+			"Use this deterministic snippet for installed-plugin create, connect, list, status, stop, remove, and debug questions.",
+			"The plugin is a thin router over native tunnel-client runtime commands, so keep answers on the public runtimes command family.",
+		}, "plugin_knowledge.match", []assistantkb.Match{
+			{
+				Path:    "plugins/tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md",
+				Heading: "Runtime flows",
+				Excerpt: runtimeExcerpt,
+				Score:   100,
+			},
+		})
+	}
 	matches := assistantkb.SearchFS(
 		prompt,
 		embeddedPluginFiles,
@@ -65,16 +80,103 @@ func isBinaryAcquisitionPrompt(prompt string) bool {
 	if !containsPluginPrompt(lower, "tunnel-client", "tunnel client", "tunnel-mcp", "tunnel mcp") {
 		return false
 	}
-	if !containsPluginPrompt(lower, "missing", "not found", "can't find", "cannot find", "could not find", "not installed", "download", "install", "get a binary") {
+
+	hasMissingSignal := containsPluginPrompt(lower,
+		"missing",
+		"not found",
+		"can't find",
+		"cannot find",
+		"could not find",
+		"can't locate",
+		"cannot locate",
+		"could not locate",
+		"no such file or directory",
+		"command not found",
+		"not installed",
+		"not on path",
+		"download",
+		"get a binary",
+		"obtain a binary",
+	)
+	hasBinarySubject := containsPluginPrompt(lower,
+		"binary",
+		"executable",
+		"plugin",
+		"path",
+		"on path",
+		"command",
+		"command -v",
+		"download",
+		"get a binary",
+		"obtain a binary",
+	)
+	if hasMissingSignal && hasBinarySubject {
+		return true
+	}
+
+	if containsPluginPrompt(lower, "install tunnel-client", "install the tunnel-client", "set up tunnel-client", "setup tunnel-client", "build tunnel-client") &&
+		containsPluginPrompt(lower, "binary", "executable", "from source", "public repo", "github") {
+		return true
+	}
+
+	if containsPluginPrompt(lower, "download tunnel-client", "download the tunnel-client") {
+		return true
+	}
+
+	if !containsPluginPrompt(lower, "install", "download") {
 		return false
 	}
-	return containsPluginPrompt(lower, "binary", "executable", "plugin", "path", "on path", "command -v")
+	return containsPluginPrompt(lower, "binary", "executable")
+}
+
+func isRuntimeOperationPrompt(prompt string) bool {
+	lower := strings.ToLower(strings.TrimSpace(prompt))
+	if lower == "" {
+		return false
+	}
+	if !containsPluginPrompt(lower, "tunnel-client", "tunnel client", "tunnel-mcp", "tunnel mcp", "plugin") {
+		return false
+	}
+	if !containsPluginPrompt(lower, "runtime", "runtimes", "alias", "mcp server", "local server", "status", "connect", "create", "list", "stop", "remove", "debug", "logs") &&
+		!containsPluginWord(lower, "rm") {
+		return false
+	}
+	return containsPluginWord(lower,
+		"create",
+		"connect",
+		"list",
+		"status",
+		"stop",
+		"remove",
+		"rm",
+		"start",
+		"run",
+		"launch",
+		"inspect",
+		"debug",
+		"logs",
+		"check",
+	)
 }
 
 func containsPluginPrompt(text string, needles ...string) bool {
 	for _, needle := range needles {
 		if strings.Contains(text, needle) {
 			return true
+		}
+	}
+	return false
+}
+
+func containsPluginWord(text string, words ...string) bool {
+	tokens := strings.FieldsFunc(text, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	})
+	for _, token := range tokens {
+		for _, word := range words {
+			if token == word {
+				return true
+			}
 		}
 	}
 	return false
@@ -110,7 +212,7 @@ func buildBundledBinaryGuidanceExcerpt(goos string) string {
 		"- or rerun the plugin/install command with " + binaryFlag,
 		"- or reinstall the plugin with " + binaryFlag,
 		"",
-		"Do not suggest internal-only installer or checkout-specific commands for generic missing-binary help.",
+		"Do not suggest non-public installer or checkout-specific commands for generic missing-binary help.",
 		"",
 		"Do not auto-download, auto-clone, or auto-run remote binaries just because the plugin cannot find tunnel-client.",
 		"",
@@ -137,5 +239,39 @@ func buildBundledSetupInstallExcerpt(goos string) string {
 		"- From the exported bundle root on this OS, run: " + wrapperCommand,
 		"",
 		"After install, prefer the installed plugin router and persisted .tunnel-client-bin hint over an ambient tunnel-client found on PATH.",
+	}, "\n")
+}
+
+func buildBundledRuntimeFlowsExcerpt() string {
+	return strings.Join([]string{
+		"# Runtime flows",
+		"",
+		"Use tunnel-client runtimes ... for native runtime lifecycle management.",
+		"",
+		"Create or reuse a remote tunnel alias:",
+		"",
+		"- tunnel-client runtimes create --alias docs-mcp --organization-id org_123",
+		"",
+		"Connect a local HTTP MCP server:",
+		"",
+		"- tunnel-client runtimes connect --alias docs-mcp --organization-id org_123 --mcp-server-url http://127.0.0.1:3001/mcp",
+		"",
+		"Connect a local stdio MCP server:",
+		"",
+		"- tunnel-client runtimes connect --alias docs-mcp --organization-id org_123 --mcp-command \"python /path/to/server.py\"",
+		"",
+		"Attach to an existing tunnel without admin CRUD:",
+		"",
+		"- tunnel-client runtimes connect --alias existing-mcp --tunnel-id tunnel_... --runtime-api-key env:TUNNEL_RUNTIME_KEY --mcp-command \"python /path/to/server.py\"",
+		"",
+		"Inspect or stop the managed local runtime:",
+		"",
+		"- tunnel-client runtimes list",
+		"- tunnel-client runtimes status docs-mcp",
+		"- tunnel-client runtimes stop docs-mcp",
+		"- tunnel-client runtimes rm docs-mcp",
+		"",
+		"The plugin router forwards create, connect, list, status, stop, disconnect, and rm to these native runtime commands.",
+		"Keep generic plugin guidance limited to public releases, the public repository, native tunnel-client commands, and exported bundle wrappers.",
 	}, "\n")
 }

@@ -22,6 +22,10 @@ Before acting, consult only the relevant curated reference file under
 Do not open every reference by default. Pick the smallest relevant set for the
 current prompt, use those files as the repository-specific source of truth, and
 then route the action through native `tunnel-client` commands.
+When the plugin is already installed and the user asks how to create, connect,
+list, inspect, stop, remove, or debug a runtime, choose
+`references/runtime-flows.md` and answer with `tunnel-client runtimes ...`
+commands.
 
 Binary setup order:
 
@@ -75,7 +79,7 @@ Preferred install surfaces:
   `tunnel-client runtimes ...` and `tunnel-client admin-profiles ...`.
 - Use native `tunnel-client run --profile <name>` for runtime processes. Do not
   use a helper shim that translates profile files into flags.
-- Do not assume a specific source checkout, build system, internal helper, or
+- Do not assume a specific source checkout, build system, helper, or
   tmux is available. The installed plugin must work with `tunnel-client` alone;
   the public fallback install path should stay shell/PowerShell-first and delegate to the selected `tunnel-client` binary.
 - Use tmux when available; otherwise start `tunnel-client run --profile <name>`

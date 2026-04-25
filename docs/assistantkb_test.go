@@ -64,7 +64,7 @@ func TestBuildPromptContextDoesNotEchoRawUserPrompt(t *testing.T) {
 func TestBuildPromptContextUsesDeterministicBinaryMissingGuidance(t *testing.T) {
 	t.Parallel()
 
-	text := BuildPromptContext("The tunnel-client binary is missing. How do I install the plugin?")
+	text := BuildPromptContext("Codex cannot locate the tunnel-client executable. How do I fix the plugin?")
 	if text == "" {
 		t.Fatal("expected deterministic binary-missing context")
 	}
@@ -92,6 +92,24 @@ func TestBuildPromptContextUsesDeterministicBinaryMissingGuidance(t *testing.T) 
 			t.Fatalf("expected deterministic context to omit %q, got:\n%s", bad, text)
 		}
 	}
+}
+
+func TestBuildPromptContextHandlesCommandNotFoundBinaryPrompt(t *testing.T) {
+	t.Parallel()
+
+	text := BuildPromptContext("tunnel-client: command not found")
+	if text == "" {
+		t.Fatal("expected deterministic binary-missing context")
+	}
+	buildCommand, _, binaryFlag := BinaryAcquisitionGuidanceForOS(runtime.GOOS)
+	requireContainsAll(t, text,
+		"https://github.com/openai/tunnel-client/releases/latest",
+		"https://github.com/openai/tunnel-client",
+		"git clone https://github.com/openai/tunnel-client.git",
+		buildCommand,
+		"TUNNEL_CLIENT_BIN",
+		binaryFlag,
+	)
 }
 
 func TestBuildPromptContextUsesWindowsSpecificBinaryGuidance(t *testing.T) {

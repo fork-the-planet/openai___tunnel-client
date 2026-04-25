@@ -50,7 +50,7 @@ func TestBuildTunnelMCPPromptContextSelectsSetupReference(t *testing.T) {
 func TestBuildTunnelMCPPromptContextSelectsBinaryReference(t *testing.T) {
 	t.Parallel()
 
-	text := BuildTunnelMCPPromptContext("tunnel-client was not found, how do I get a binary?")
+	text := BuildTunnelMCPPromptContext("Codex cannot locate the tunnel-client executable, how do I get a binary?")
 	buildCommand, wrapperCommand, binaryFlag := assistantkb.BinaryAcquisitionGuidanceForOS(runtime.GOOS)
 	if !strings.Contains(text, "plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md") {
 		t.Fatalf("expected binary reference in prompt context, got:\n%s", text)
@@ -77,6 +77,44 @@ func TestBuildTunnelMCPPromptContextSelectsBinaryReference(t *testing.T) {
 			t.Fatalf("expected binary guidance to omit %q, got:\n%s", bad, text)
 		}
 	}
+}
+
+func TestBuildTunnelMCPPromptContextSelectsRuntimeGuidanceForInstalledPlugin(t *testing.T) {
+	t.Parallel()
+
+	text := BuildTunnelMCPPromptContext("I installed the tunnel-mcp plugin. How do I create, connect, and check a local runtime?")
+	requirePluginContainsAll(t, text,
+		"plugins/tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md",
+		"Use tunnel-client runtimes ... for native runtime lifecycle management.",
+		"tunnel-client runtimes create --alias docs-mcp --organization-id org_123",
+		"tunnel-client runtimes connect --alias docs-mcp --organization-id org_123 --mcp-server-url http://127.0.0.1:3001/mcp",
+		"tunnel-client runtimes status docs-mcp",
+	)
+	requirePluginOmitsAll(t, text,
+		"tunnel-client sessions",
+		"oaipkg",
+		"Bazel",
+	)
+}
+
+func TestBuildTunnelMCPPromptContextDoesNotTreatPermissionsAsRuntimeRM(t *testing.T) {
+	t.Parallel()
+
+	text := BuildTunnelMCPPromptContext("What plugin permissions are required for tunnel-mcp?")
+	requirePluginOmitsAll(t, text,
+		"plugins/tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md",
+		"tunnel-client runtimes rm docs-mcp",
+	)
+}
+
+func TestBuildTunnelMCPPromptContextAcceptsRMRuntimeCommand(t *testing.T) {
+	t.Parallel()
+
+	text := BuildTunnelMCPPromptContext("I installed the tunnel-mcp plugin. How do I rm a runtime alias?")
+	requirePluginContainsAll(t, text,
+		"plugins/tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md",
+		"tunnel-client runtimes rm docs-mcp",
+	)
 }
 
 func TestBundledBinaryGuidanceUsesWindowsSpecificCommands(t *testing.T) {

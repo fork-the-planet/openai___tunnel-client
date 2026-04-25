@@ -1,6 +1,7 @@
 # Runtime flows
 
-Use `tunnel-client runtimes ...` for native runtime lifecycle management.
+Use `tunnel-client runtimes ...` for native runtime lifecycle management. The
+plugin router is only a thin wrapper over this command family.
 
 Create or reuse a remote tunnel alias:
 

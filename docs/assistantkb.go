@@ -113,7 +113,7 @@ func buildMissingBinaryPromptContextForOS(prompt string, goos string) string {
 		"You can also point the plugin at the binary directly with:",
 		"TUNNEL_CLIENT_BIN",
 		binaryFlag,
-		"Do not suggest internal-only installer or checkout-specific commands for generic missing-binary guidance.",
+		"Do not suggest non-public installer or checkout-specific commands for generic missing-binary guidance.",
 	}
 	return strings.Join(lines, "\n")
 }
@@ -139,10 +139,53 @@ func isMissingBinaryPrompt(prompt string) bool {
 	if !containsKnowledgeAny(lower, "tunnel-client", "tunnel client", "tunnel-mcp", "tunnel mcp") {
 		return false
 	}
-	if !containsKnowledgeAny(lower, "missing", "not found", "can't find", "cannot find", "could not find", "not installed", "download", "install") {
+
+	hasMissingSignal := containsKnowledgeAny(lower,
+		"missing",
+		"not found",
+		"can't find",
+		"cannot find",
+		"could not find",
+		"can't locate",
+		"cannot locate",
+		"could not locate",
+		"no such file or directory",
+		"command not found",
+		"not installed",
+		"not on path",
+		"download",
+		"get a binary",
+		"obtain a binary",
+	)
+	hasBinarySubject := containsKnowledgeAny(lower,
+		"binary",
+		"executable",
+		"plugin",
+		"path",
+		"on path",
+		"command",
+		"command -v",
+		"download",
+		"get a binary",
+		"obtain a binary",
+	)
+	if hasMissingSignal && hasBinarySubject {
+		return true
+	}
+
+	if containsKnowledgeAny(lower, "install tunnel-client", "install the tunnel-client", "set up tunnel-client", "setup tunnel-client", "build tunnel-client") &&
+		containsKnowledgeAny(lower, "binary", "executable", "from source", "public repo", "github") {
+		return true
+	}
+
+	if containsKnowledgeAny(lower, "download tunnel-client", "download the tunnel-client") {
+		return true
+	}
+
+	if !containsKnowledgeAny(lower, "install", "download") {
 		return false
 	}
-	return containsKnowledgeAny(lower, "binary", "executable", "plugin", "path", "on path", "command -v")
+	return containsKnowledgeAny(lower, "binary", "executable")
 }
 
 func containsKnowledgeAny(text string, needles ...string) bool {
