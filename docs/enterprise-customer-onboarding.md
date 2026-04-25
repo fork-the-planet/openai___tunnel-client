@@ -105,81 +105,26 @@ Depending on your rollout, OpenAI may either:
 1. **Create a tunnel for you** and provide the resulting `tunnel_id`, or
 2. Provide access to the **Tunnel Management API** so you can create it yourself.
 
-### Prerequisite: permission to manage tunnels
+### Prerequisite: permission to manage or use tunnels
 
-Before you can create/update/delete tunnels via the **Tunnel Management API**
-(`/v1/tunnels*`), you must:
+Before anyone creates keys or tunnels, assign the Platform roles described in
+[`permissions.md`](permissions.md):
 
-- Use an **admin API key** (not the tunnel-client `CONTROL_PLANE_API_KEY`).
-- Have the **tunnel management permission** in your org/workspace context:
-  - **Organization-scoped**: `api.organization.tunnel.write`
-  - **Workspace-scoped**: `chatgpt.workspace.tunnel.write`
+- Runtime daemon operators and the principal that creates `CONTROL_PLANE_API_KEY`
+  need Tunnels **Read** + **Use**.
+- Tunnel CRUD operators need Tunnels **Read** + **Manage**.
+- Operators who create `OPENAI_ADMIN_KEY` need Platform admin-key permission in
+  addition to the tunnel permissions needed for their workflow.
 
-If you do not have this permission, `POST /v1/tunnels` will fail with `403`
-("missing tunnel management permission"). If your admin API key is not operating
-in an organization or workspace context, it will fail with `400` ("Tunnel must
-be created with an active organization or workspace context.").
+The Platform UI maps those labels to these permission atoms:
 
-If OpenAI has not already provisioned this permission for your admins, an org
-admin can grant it using Organization RBAC.
+- `api.organization.tunnel.read`
+- `api.organization.tunnel.write`
+- `api.organization.tunnel.use`
 
-#### Example (org-scoped): create a "Tunnel Managers" group and assign tunnel-write permission
-
-> These RBAC calls require an **org admin API key** with permission to manage
-> groups/roles in your organization.
-
-**1) Create a group**
-
-```bash
-curl -X POST https://api.openai.com/v1/organization/groups \
-  -H "Authorization: Bearer $OPENAI_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-      "name": "Tunnel Managers"
-  }'
-```
-
-**2) Create a Role with Tunnel Permissions**
-
-```bash
-curl -X POST https://api.openai.com/v1/organization/roles \
-  -H "Authorization: Bearer $OPENAI_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-      "role_name": "API Tunnel Manager",
-      "permissions": [
-          "api.organization.tunnel.write"
-      ],
-      "description": "Allows managing organization tunnels"
-  }'
-```
-
-**3) Assign the role to the group**
-
-```bash
-curl -X POST https://api.openai.com/v1/organization/groups/<group_id>/roles \
-  -H "Authorization: Bearer $OPENAI_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-      "role_id": "<role_id>"
-  }'
-```
-
-**4) Add the admin user(s) to the group**
-
-You can also manage group membership in the organization settings UI.
-
-```bash
-curl -X POST https://api.openai.com/v1/organization/groups/<group_id>/users \
-  -H "Authorization: Bearer $OPENAI_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-      "user_id": "<user_id>"
-  }'
-```
-
-After this, the admin user(s) who will call `/v1/tunnels*` should have the
-tunnel management permission through group membership.
+If you do not have the right permission, tunnel CRUD can fail with `403`. If a
+tunnel is created without the ChatGPT workspace ID, it may be visible in
+Platform but absent from the ChatGPT connector tunnel picker.
 
 ### Tunnel Management API (admin endpoints)
 
@@ -193,9 +138,10 @@ for you.
 - **Update**: `POST /v1/tunnels/{tunnel_id}`
 - **Delete**: `DELETE /v1/tunnels/{tunnel_id}`
 
-**AuthZ note:** these endpoints require an **admin API key** and a principal
-with tunnel management permission (for example `api.organization.tunnel.write`)
-in the caller's active org/workspace context.
+**AuthZ note:** `list`, `create`, `update`, and `delete` require an **admin API
+key** plus Tunnels **Manage** (`api.organization.tunnel.write`) in the caller's
+active organization/workspace context. `get <tunnel_id>` can use the runtime key
+for read-only metadata lookup.
 
 ### Example: create a tunnel
 

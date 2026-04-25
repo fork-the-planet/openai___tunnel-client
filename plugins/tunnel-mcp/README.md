@@ -210,6 +210,14 @@ Optional:
 
 ## Environment
 
+- Required Platform permissions:
+  - Runtime-only users need Tunnels **Read** + **Use** on the target tunnel.
+  - Remote tunnel CRUD users need Tunnels **Read** + **Manage** plus an admin
+    API key.
+  - Users who create admin keys need Platform admin-key permission separately.
+  - ChatGPT connector admins need Tunnels **Read** + **Use** and the tunnel
+    must include the target workspace ID to appear in the connector tunnel
+    picker.
 - `TUNNEL_CLIENT_BIN` overrides the `tunnel-client` binary path.
 - `CONTROL_PLANE_BASE_URL` overrides the tunnel control-plane host root. The
   default is `https://api.openai.com`.
@@ -337,10 +345,11 @@ remote tunnel itself intact.
 Auth split to keep straight:
 
 - runtime key: `CONTROL_PLANE_API_KEY` / `OPENAI_API_KEY`
+- runtime-key principal: needs Tunnels **Read** + **Use** on the target tunnel
 - read-only lookup: `tunnel-client admin tunnels get <tunnel_id>` can use the
   runtime key
 - admin CRUD: `list`, `create`, `update`, and `delete` still require
-  `OPENAI_ADMIN_KEY` or `--admin-key`
+  `OPENAI_ADMIN_KEY` or `--admin-key` plus Tunnels **Manage**
 
 ## State Files
 

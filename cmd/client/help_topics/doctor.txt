@@ -7,6 +7,8 @@ Recommended flow:
 
 Canonical setup URLs:
   Tunnels management: https://platform.openai.com/settings/organization/tunnels
+  Organization roles: https://platform.openai.com/settings/organization/people/roles
+  Organization groups: https://platform.openai.com/settings/organization/people/groups
   Runtime API keys: https://platform.openai.com/settings/organization/api-keys
   Admin API keys: https://platform.openai.com/settings/organization/admin-keys
   ChatGPT connector settings: https://chatgpt.com/#settings/Connectors
@@ -36,10 +38,11 @@ ChatGPT connector note:
 
 Auth model to keep straight:
   - tunnel-client runtime uses CONTROL_PLANE_API_KEY / OPENAI_API_KEY
+  - the runtime-key principal needs Tunnels Read + Use for the target tunnel
   - tunnel-client admin tunnels get <id> can use that runtime key
   - `tunnel-client admin --json tunnels get <id>` returns `organization_ids` / `workspace_ids`;
     reuse those live values for admin list/create/update/delete scope instead of guessing ids
-  - admin tunnels list/create/update/delete require OPENAI_ADMIN_KEY / --admin-key
+  - admin tunnels list/create/update/delete require OPENAI_ADMIN_KEY / --admin-key and Tunnels Manage
 
 Self-serve tunnel flow:
   - create or inspect the tunnel in Tunnels management or with `tunnel-client admin tunnels create`

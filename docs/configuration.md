@@ -43,6 +43,14 @@ Keep the key split straight during first use:
   list|create|update|delete`. Do not use the admin key for the long-lived
   daemon.
 
+Tunnel permission split:
+
+- Runtime daemon and ChatGPT connector users need Tunnels **Read** + **Use**.
+- Tunnel CRUD operators need Tunnels **Read** + **Manage**.
+- Admin-key creators need Platform admin-key permission separately.
+
+See [`permissions.md`](permissions.md) before creating roles, groups, or keys.
+
 `run --help` also advertises the config precedence, the sample-discovery path,
 and the embedded UI convention `http://<health.listen-addr>/ui`.
 

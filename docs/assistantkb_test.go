@@ -151,6 +151,25 @@ func TestSearchFindsTroubleshootingDocForReadyzPrompt(t *testing.T) {
 	}
 }
 
+func TestSearchFindsPermissionsDocForTunnelRolePrompt(t *testing.T) {
+	t.Parallel()
+
+	matches := Search("what permissions and groups do tunnel runtime users need", 3)
+	if len(matches) == 0 {
+		t.Fatal("expected permissions matches")
+	}
+	found := false
+	for _, match := range matches {
+		if match.Path == "docs/permissions.md" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected permissions.md in matches, got %#v", matches)
+	}
+}
+
 func requireContainsAll(t *testing.T, text string, snippets ...string) {
 	t.Helper()
 	for _, snippet := range snippets {

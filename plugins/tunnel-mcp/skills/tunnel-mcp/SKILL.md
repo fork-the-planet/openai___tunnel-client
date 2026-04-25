@@ -97,6 +97,14 @@ Preferred install surfaces:
   runtime tunnel key should differ from the default `env:CONTROL_PLANE_API_KEY`.
   Use `connect --tunnel-id <id>` to attach to a known existing tunnel without
   admin CRUD.
+- For permissions, keep this split:
+  - existing-tunnel runtime/connect flows need a runtime key whose principal has
+    Tunnels Read + Use for that tunnel
+  - create/list/update/delete remote tunnel flows need an admin key plus
+    Tunnels Read + Manage
+  - ChatGPT connector setup also needs Tunnels Read + Use and the tunnel's
+    workspace ID attached to the tunnel metadata
+  - users who create admin keys need Platform admin-key permission separately
 - Never write literal API keys, bearer tokens, cookies, or inline `sk-` style
   secret material into plugin state or generated configs.
 - Treat stale local aliases as recoverable for `create` and `connect`. If a

@@ -20,6 +20,8 @@ For the customer-shareable network model and request flow, see
 Use these exact setup pages when you need to create or inspect those values:
 
 - Tunnels management: `https://platform.openai.com/settings/organization/tunnels`
+- Organization roles: `https://platform.openai.com/settings/organization/people/roles`
+- Organization groups: `https://platform.openai.com/settings/organization/people/groups`
 - Runtime API keys: `https://platform.openai.com/settings/organization/api-keys`
 - Admin API keys: `https://platform.openai.com/settings/organization/admin-keys`
 - ChatGPT connector settings: `https://chatgpt.com/#settings/Connectors`
@@ -33,6 +35,17 @@ Which value comes from where:
 - `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels
   list|create|update|delete`. Do not use the admin key for the long-lived
   daemon.
+
+Required permissions:
+
+- The runtime key principal needs Tunnels **Read** + **Use** for the target
+  tunnel.
+- People who create or edit tunnels need Tunnels **Read** + **Manage**.
+- People who create `OPENAI_ADMIN_KEY` need Platform admin-key permission as
+  well as any tunnel permissions they need for the task.
+
+For the recommended roles/groups and screenshots, see
+[`permissions.md`](permissions.md).
 
 ## 2) First-run paths
 
@@ -202,6 +215,7 @@ curl -fsS "http://127.0.0.1:8080/metrics" | head
 
 ## 7) Next reads
 
+- **Permissions, roles, and groups**: [`permissions.md`](permissions.md)
 - **Deployments**: [`deployment/overview.md`](deployment/overview.md)
 - **Architecture**: [`architecture.md`](architecture.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)

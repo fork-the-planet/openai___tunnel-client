@@ -21,6 +21,8 @@ What tunnel-client is for:
 
 Canonical setup URLs:
   Tunnels management: https://platform.openai.com/settings/organization/tunnels
+  Organization roles: https://platform.openai.com/settings/organization/people/roles
+  Organization groups: https://platform.openai.com/settings/organization/people/groups
   Runtime API keys: https://platform.openai.com/settings/organization/api-keys
   Admin API keys: https://platform.openai.com/settings/organization/admin-keys
   ChatGPT connector settings: https://chatgpt.com/#settings/Connectors
@@ -32,6 +34,12 @@ Which value comes from where:
     uses for `tunnel-client doctor` and `tunnel-client run`.
   - `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels list|create|update|delete`.
     Do not give the admin key to the long-lived daemon.
+
+Tunnel permission split:
+  - Runtime users and the principal that creates CONTROL_PLANE_API_KEY need Tunnels Read + Use.
+  - Tunnel CRUD operators need Tunnels Read + Manage.
+  - Admin-key creators need Platform admin-key permission separately.
+  - Full role/group guidance lives in docs/permissions.md.
 
 Pick the shortest matching starter sample:
 
@@ -86,6 +94,7 @@ If your rollout has self-serve tunnel access:
   - create the tunnel yourself in Tunnels management or with `tunnel-client admin tunnels create`
   - use the returned tunnel id as `CONTROL_PLANE_TUNNEL_ID`
   - create a separate runtime key from Runtime API keys and export it as `CONTROL_PLANE_API_KEY`
+  - make sure the runtime-key principal has Tunnels Read + Use for the tunnel
 
 Useful follow-ups:
   tunnel-client codex assistant "Summarize what tunnel-client is for."

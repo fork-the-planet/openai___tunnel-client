@@ -6,6 +6,7 @@ documentation for `tunnel-client`.
 ## Start here
 
 - **Onboarding (recommended first read)**: [`onboarding.md`](onboarding.md)
+- **Permissions, roles, and groups**: [`permissions.md`](permissions.md)
 - **Architecture diagrams**: [`architecture.md`](architecture.md)
 - **Enterprise customer handoff**: [`enterprise-customer-onboarding.md`](enterprise-customer-onboarding.md)
 

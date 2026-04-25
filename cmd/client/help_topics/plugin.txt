@@ -13,6 +13,12 @@ Native command surfaces:
   tunnel-client admin-profiles set <name> --admin-key env:OPENAI_ADMIN_KEY
   tunnel-client codex status
 
+Permission model:
+  - connect --tunnel-id with an existing tunnel needs a runtime key whose principal has Tunnels Read + Use.
+  - create/connect without --tunnel-id, and remote list/update/delete workflows, need an admin key plus Tunnels Read + Manage.
+  - if the same Codex user will select the tunnel in ChatGPT connector settings, also grant Tunnels Use.
+  - store admin/runtime key references such as env:OPENAI_ADMIN_KEY and env:CONTROL_PLANE_API_KEY; never pass literal keys.
+
 Preferred install path from the binary:
   tunnel-client codex plugin install
 

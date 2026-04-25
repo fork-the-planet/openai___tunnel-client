@@ -13,6 +13,7 @@ If you searched for "How do I connect local MCP server to ChatGPT",
 ## Documentation
 
 - **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
+- **Permissions, roles, and groups**: [`docs/permissions.md`](docs/permissions.md)
 - **Architecture diagrams**: [`docs/architecture.md`](docs/architecture.md)
 - **Enterprise customer handoff**:
   [`docs/enterprise-customer-onboarding.md`](docs/enterprise-customer-onboarding.md)
@@ -30,6 +31,8 @@ ChatGPT or Codex, start with `tunnel-client help quickstart`.
 Use these exact setup pages during first use:
 
 - Tunnels management: `https://platform.openai.com/settings/organization/tunnels`
+- Organization roles: `https://platform.openai.com/settings/organization/people/roles`
+- Organization groups: `https://platform.openai.com/settings/organization/people/groups`
 - Runtime API keys: `https://platform.openai.com/settings/organization/api-keys`
 - Admin API keys: `https://platform.openai.com/settings/organization/admin-keys`
 - ChatGPT connector settings: `https://chatgpt.com/#settings/Connectors`
@@ -43,6 +46,18 @@ Which value comes from where:
 - `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels
   list|create|update|delete`. Do not use the admin key for the long-lived
   daemon.
+
+Required tunnel permissions:
+
+- Runtime users and the principal that creates `CONTROL_PLANE_API_KEY` need
+  Tunnels **Read** + **Use**.
+- Tunnel managers need Tunnels **Read** + **Manage**, plus **Use** if they also
+  run the daemon or attach ChatGPT connectors.
+- Admin-key creators need the Platform admin-key permission in addition to any
+  tunnel permissions they need.
+
+See [`docs/permissions.md`](docs/permissions.md) for the group/role workflow
+and screenshots.
 
 Binary-first flow:
 
