@@ -107,10 +107,9 @@ func TestStdioCommandTransportStaysAliveAfterExit(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		transport.mu.Lock()
-		defer transport.mu.Unlock()
-		return transport.cmd != nil &&
-			transport.cmd.ProcessState != nil &&
-			transport.cmd.ProcessState.Exited()
+		waitDone := transport.waitDone
+		transport.mu.Unlock()
+		return len(waitDone) > 0
 	}, 5*time.Second, 10*time.Millisecond)
 
 	select {
