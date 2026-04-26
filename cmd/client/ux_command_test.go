@@ -223,6 +223,9 @@ func TestInitCanUseExplicitStdioSample(t *testing.T) {
 
 func TestInitRejectsNonExecutableStdioCommand(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("execute-bit preflight is Unix-specific")
+	}
 
 	profileDir := t.TempDir()
 	commandPath := filepath.Join(t.TempDir(), "non-executable-server")
@@ -243,6 +246,63 @@ func TestInitRejectsNonExecutableStdioCommand(t *testing.T) {
 	require.Contains(t, err.Error(), "mcp-command preflight failed")
 	require.Contains(t, err.Error(), "is not executable")
 	require.NoFileExists(t, filepath.Join(profileDir, "broken-stdio.yaml"))
+}
+
+func TestInitSTDIO0305RejectsShellCWrapperForNonExecutableScript(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("execute-bit preflight is Unix-specific")
+	}
+
+	profileDir := t.TempDir()
+	commandPath := filepath.Join(t.TempDir(), "stdio_server.sh")
+	require.NoError(t, os.WriteFile(commandPath, []byte("#!/bin/sh\n"), 0o600))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "init",
+		"--sample", "sample_mcp_stdio_local",
+		"--profile", "broken-stdio-shell",
+		"--profile-dir", profileDir,
+		"--tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp-command", "/bin/sh -c "+shellQuote(commandPath),
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Contains(t, err.Error(), "mcp-command preflight failed")
+	require.Contains(t, err.Error(), "chmod +x")
+	require.NoFileExists(t, filepath.Join(profileDir, "broken-stdio-shell.yaml"))
+}
+
+func TestInitSTDIO0305RejectsDirectScriptWithMissingInterpreter(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shebang preflight is Unix-specific")
+	}
+
+	profileDir := t.TempDir()
+	dir := t.TempDir()
+	missingInterpreter := filepath.Join(dir, "missing-interpreter")
+	commandPath := filepath.Join(dir, "stdio_server.sh")
+	require.NoError(t, os.WriteFile(commandPath, []byte("#!"+missingInterpreter+"\n"), 0o700))
+
+	_, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "init",
+		"--sample", "sample_mcp_stdio_local",
+		"--profile", "broken-stdio-interpreter",
+		"--profile-dir", profileDir,
+		"--tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp-command", commandPath,
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Contains(t, err.Error(), "mcp-command preflight failed")
+	require.Contains(t, err.Error(), "uses an unavailable interpreter")
+	require.Contains(t, err.Error(), "update the shebang")
+	require.NoFileExists(t, filepath.Join(profileDir, "broken-stdio-interpreter.yaml"))
 }
 
 func TestEmbeddedProfileSamplesRenderAndValidate(t *testing.T) {

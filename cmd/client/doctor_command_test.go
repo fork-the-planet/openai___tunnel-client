@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -237,6 +238,61 @@ func TestDoctorFailsWhenStdioExecutableMissing(t *testing.T) {
 	require.Equal(t, 2, exitCode(err))
 	require.Contains(t, stdout, "CHECK mcp_command_executable")
 	require.Contains(t, stdout, "stdio MCP executable")
+	require.Contains(t, stdout, "FAILED_CHECKS mcp_command_executable")
+}
+
+func TestDoctorSTDIO0305FailsWhenDirectScriptLacksExecuteBit(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("execute-bit preflight is Unix-specific")
+	}
+
+	script := filepath.Join(t.TempDir(), "stdio_server.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n"), 0o600))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor",
+		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp.command", script,
+		"--explain",
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Equal(t, 2, exitCode(err))
+	require.Contains(t, stdout, "CHECK mcp_command_executable")
+	require.Contains(t, stdout, "chmod +x")
+	require.Contains(t, stdout, "FAILED_CHECKS mcp_command_executable")
+}
+
+func TestDoctorSTDIO0305FailsWhenDirectScriptInterpreterIsMissing(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shebang preflight is Unix-specific")
+	}
+
+	dir := t.TempDir()
+	missingInterpreter := filepath.Join(dir, "missing-interpreter")
+	script := filepath.Join(dir, "stdio_server.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!"+missingInterpreter+"\n"), 0o700))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor",
+		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp.command", script,
+		"--explain",
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Equal(t, 2, exitCode(err))
+	require.Contains(t, stdout, "CHECK mcp_command_executable")
+	require.Contains(t, stdout, "uses an unavailable interpreter")
+	require.Contains(t, stdout, "update the shebang")
 	require.Contains(t, stdout, "FAILED_CHECKS mcp_command_executable")
 }
 

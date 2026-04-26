@@ -2,15 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	iofs "io/fs"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -582,7 +579,8 @@ func doctorStdioCommandCheck(command string) doctorCheck {
 			},
 			Next: []string{
 				"install the command or fix the first executable token in mcp.command",
-				"use an absolute path or ensure the executable is on PATH and has execute permission",
+				"if the command is a script, run chmod +x on the script and ensure its shebang points to an installed interpreter",
+				"for wrapper commands, verify the shell or interpreter exists and that the wrapped script path is readable or executable as invoked",
 				"rerun: tunnel-client doctor",
 			},
 		}
@@ -592,98 +590,4 @@ func doctorStdioCommandCheck(command string) doctorCheck {
 		Status:  doctorStatusPass,
 		Summary: resolved,
 	}
-}
-
-func preflightStdioCommand(raw string) (string, error) {
-	args, err := parseStdioCommandArgv(raw)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := exec.LookPath(args[0])
-	if err != nil {
-		return "", formatStdioPreflightError(args[0], err)
-	}
-	return resolved, nil
-}
-
-func formatStdioPreflightError(executable string, err error) error {
-	switch {
-	case errors.Is(err, iofs.ErrPermission):
-		return fmt.Errorf("stdio MCP executable %q is not executable: %w", executable, err)
-	case errors.Is(err, exec.ErrNotFound), errors.Is(err, iofs.ErrNotExist):
-		return fmt.Errorf("stdio MCP executable %q was not found: %w", executable, err)
-	default:
-		return fmt.Errorf("stdio MCP executable %q is unavailable: %w", executable, err)
-	}
-}
-
-func parseStdioCommandArgv(raw string) ([]string, error) {
-	input := strings.TrimSpace(raw)
-	if input == "" {
-		return nil, errors.New("command is empty")
-	}
-	var (
-		args     []string
-		builder  strings.Builder
-		inSingle bool
-		inDouble bool
-		escaped  bool
-	)
-
-	for i := 0; i < len(input); i++ {
-		ch := input[i]
-		if escaped {
-			builder.WriteByte(ch)
-			escaped = false
-			continue
-		}
-		if inSingle {
-			if ch == '\'' {
-				inSingle = false
-				continue
-			}
-			builder.WriteByte(ch)
-			continue
-		}
-		if inDouble {
-			switch ch {
-			case '\\':
-				escaped = true
-			case '"':
-				inDouble = false
-			default:
-				builder.WriteByte(ch)
-			}
-			continue
-		}
-		switch ch {
-		case '\\':
-			escaped = true
-		case '\'':
-			inSingle = true
-		case '"':
-			inDouble = true
-		case ' ', '\t', '\n', '\r':
-			if builder.Len() > 0 {
-				args = append(args, builder.String())
-				builder.Reset()
-			}
-		default:
-			builder.WriteByte(ch)
-		}
-	}
-
-	if escaped {
-		return nil, errors.New("unterminated escape sequence")
-	}
-	if inSingle || inDouble {
-		return nil, errors.New("unterminated quoted string")
-	}
-	if builder.Len() > 0 {
-		args = append(args, builder.String())
-	}
-	if len(args) == 0 {
-		return nil, errors.New("command is empty")
-	}
-	return args, nil
 }
