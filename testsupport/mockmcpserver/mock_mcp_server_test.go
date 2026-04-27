@@ -67,7 +67,10 @@ func TestMockMCPServerUsage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: baseURL.String()}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   baseURL.String(),
+		HTTPClient: httpClientForServer(t, server),
+	}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP client: %v", err)
 	}
@@ -226,7 +229,7 @@ func TestMockMCPServerWWWAuthenticateProbe(t *testing.T) {
 		t.Fatalf("build probe request: %v", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClientForServer(t, server).Do(req)
 	if err != nil {
 		t.Fatalf("probe request failed: %v", err)
 	}
@@ -261,7 +264,7 @@ func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	}
 	metadataURL := baseURL.ResolveReference(&url.URL{Path: wellKnownOAuthProtectedResourcePath})
 
-	resp, err := http.Get(metadataURL.String())
+	resp, err := httpClientForServer(t, server).Get(metadataURL.String())
 	if err != nil {
 		t.Fatalf("GET metadata: %v", err)
 	}
@@ -288,7 +291,7 @@ func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create OPTIONS request: %v", err)
 	}
-	optionsResp, err := http.DefaultClient.Do(optionsReq)
+	optionsResp, err := httpClientForServer(t, server).Do(optionsReq)
 	if err != nil {
 		t.Fatalf("OPTIONS metadata: %v", err)
 	}
@@ -303,7 +306,10 @@ func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: baseURL.String()}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   baseURL.String(),
+		HTTPClient: httpClientForServer(t, server),
+	}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP client: %v", err)
 	}
@@ -341,7 +347,7 @@ func TestMockMCPServerOAuthProtection(t *testing.T) {
 
 	// Unauthorized initialize should return 401 with WWW-Authenticate header.
 	initPayload := `{"jsonrpc":"2.0","id":"init-unauth","method":"initialize","params":{"protocolVersion":"2025-06-18"}}`
-	resp, err := http.Post(baseURL.String(), "application/json", strings.NewReader(initPayload))
+	resp, err := httpClientForServer(t, server).Post(baseURL.String(), "application/json", strings.NewReader(initPayload))
 	if err != nil {
 		t.Fatalf("POST initialize without auth: %v", err)
 	}
@@ -355,7 +361,7 @@ func TestMockMCPServerOAuthProtection(t *testing.T) {
 
 	// Metadata remains public.
 	metadataURL := baseURL.ResolveReference(&url.URL{Path: wellKnownOAuthProtectedResourcePath})
-	metadataResp, err := http.Get(metadataURL.String())
+	metadataResp, err := httpClientForServer(t, server).Get(metadataURL.String())
 	if err != nil {
 		t.Fatalf("GET metadata: %v", err)
 	}
@@ -367,14 +373,13 @@ func TestMockMCPServerOAuthProtection(t *testing.T) {
 	}
 
 	// Authorized client can initialize and call tools.
-	authClient := &http.Client{
-		Transport: roundTripperWithBearer{token: "sk-1234567890abcdef", base: http.DefaultTransport},
-		Timeout:   3 * time.Second,
-	}
+	baseClient := httpClientForServer(t, server)
+	authClient := *baseClient
+	authClient.Transport = roundTripperWithBearer{token: "sk-1234567890abcdef", base: baseClient.Transport}
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
 	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:   baseURL.String(),
-		HTTPClient: authClient,
+		HTTPClient: &authClient,
 	}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP client with auth: %v", err)
@@ -389,6 +394,19 @@ func TestMockMCPServerOAuthProtection(t *testing.T) {
 	if err := server.WaitForRequests(ctx, 1); err != nil {
 		t.Fatalf("wait for requests: %v", err)
 	}
+}
+
+func httpClientForServer(t testing.TB, server *MockMCPServer) *http.Client {
+	t.Helper()
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.httpServer == nil {
+		t.Fatal("mock MCP server did not expose an HTTP client")
+	}
+	client := server.httpServer.Client()
+	client.Timeout = 3 * time.Second
+	return client
 }
 
 type roundTripperWithBearer struct {

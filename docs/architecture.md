@@ -52,7 +52,9 @@ available tunnel or pasting a `tunnel_id`. Under the hood, the product still
 targets the OpenAI tunnel service endpoint
 `<OPENAI_MCP_TUNNEL_BASE_URL>/v1/mcp/<tunnel_id>`. The tunnel client is
 configured separately with the same `tunnel_id`, an API key, and the private
-MCP server address that is reachable from inside the customer network.
+MCP server address that is reachable from inside the customer network. See
+[`connectors.md`](connectors.md) for connector-specific setup, channel routing,
+and troubleshooting notes.
 
 ## Request lifecycle
 

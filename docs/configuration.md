@@ -232,6 +232,7 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - Required: yes
 - **HTTP proxy (optional)**
   - Flag: `--control-plane.http-proxy=<url|env:VAR>`
+  - Env: `CONTROL_PLANE_HTTP_PROXY`
 - **Poll timeout**
   - Flag: `--control-plane.poll-timeout`
   - Env: `CONTROL_PLANE_POLL_TIMEOUT`
@@ -258,7 +259,8 @@ Harpoon).
 ## Outbound HTTP proxy
 
 Use explicit proxy flags to force tunnel-client traffic through a corporate
-proxy. Each flag accepts a proxy URL or `env:VAR` reference.
+proxy. Each flag and matching tunnel-client-specific proxy env var accepts a
+proxy URL or `env:VAR` reference.
 
 If you want a ready-made profile instead of wiring the YAML by hand, start from
 `sample_mcp_enterprise_proxy` and export `HTTPS_PROXY` plus
@@ -266,15 +268,19 @@ If you want a ready-made profile instead of wiring the YAML by hand, start from
 
 - **Global proxy (all outbound HTTP)**
   - Flag: `--http-proxy=<url|env:VAR>`
+  - Env: `TUNNEL_CLIENT_HTTP_PROXY`
   - Applies to control plane, MCP HTTP, OAuth discovery, and Harpoon unless overridden.
 - **Control plane proxy**
   - Flag: `--control-plane.http-proxy=<url|env:VAR>`
+  - Env: `CONTROL_PLANE_HTTP_PROXY`
 - **MCP proxy default**
   - Flag: `--mcp.http-proxy=<url|env:VAR>`
+  - Env: `MCP_HTTP_PROXY`
   - Per-channel override: `--mcp.server-url="channel=...,url=...,http-proxy=<url|env:VAR>"`
   - Note: stdio MCP bindings ignore proxy settings.
 - **Harpoon proxy**
   - Flag: `--harpoon.http-proxy=<url|env:VAR>`
+  - Env: `HARPOON_HTTP_PROXY`
 
 - **Proxy health checks**
   - Flag: `--proxy.check-interval=60s`
@@ -289,6 +295,12 @@ If you want a ready-made profile instead of wiring the YAML by hand, start from
 
 When an explicit proxy flag is set for a target, environment proxy variables
 (including `NO_PROXY`) are ignored for that target.
+
+## Connector and MCP routing
+
+For a contributor-focused walkthrough of connector request flow, channel
+routing, streaming, OAuth discovery, and common setup pitfalls, see
+[`connectors.md`](connectors.md).
 
 ## MCP server
 
@@ -325,6 +337,7 @@ When an explicit proxy flag is set for a target, environment proxy variables
   - Default: `10`
 - **HTTP proxy default (optional)**
   - Flag: `--mcp.http-proxy=<url|env:VAR>`
+  - Env: `MCP_HTTP_PROXY`
 - **mTLS client certificate default (optional)**
   - Flag: `--mcp.client-cert=<path|env:VAR>`
   - Env: `MCP_CLIENT_CERT`
@@ -407,6 +420,7 @@ registered. If there are no targets, `harpoon` commands return
   - Note: this is the upper ceiling for per-call overrides.
 - **HTTP proxy (optional)**
   - Flag: `--harpoon.http-proxy=<url|env:VAR>`
+  - Env: `HARPOON_HTTP_PROXY`
 - **Additional transport (optional)**
   - Flag: `--harpoon.additional-transport=http-streamable`
   - Env: `HARPOON_ADDITIONAL_TRANSPORTS` (semicolon- or newline-delimited list)

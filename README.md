@@ -15,6 +15,7 @@ If you searched for "How do I connect local MCP server to ChatGPT",
 - **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
 - **Permissions, roles, and groups**: [`docs/permissions.md`](docs/permissions.md)
 - **Architecture diagrams**: [`docs/architecture.md`](docs/architecture.md)
+- **Connector behavior**: [`docs/connectors.md`](docs/connectors.md)
 - **Enterprise customer handoff**:
   [`docs/enterprise-customer-onboarding.md`](docs/enterprise-customer-onboarding.md)
 - **Configuration reference**: [`docs/configuration.md`](docs/configuration.md)
@@ -122,9 +123,10 @@ Starter prompts for Codex:
 - On startup, it fetches tunnel metadata for operator visibility:
   - `GET /v1/tunnels/{tunnel_id}`
 - It forwards received JSON-RPC requests to your configured MCP server over
-  HTTP(S), stdio, or in-memory transport.
-- It routes commands by channel: `main` always targets the configured MCP
-  server, while `harpoon` is enabled only when Harpoon has registered targets.
+  Streamable HTTP, stdio, or in-memory transport.
+- It routes commands by channel: `main` targets the configured MCP binding,
+  additional configured channels can target their own MCP bindings, and
+  `harpoon` is routable only when Harpoon has registered targets.
 - On startup, it fetches OAuth Protected Resource Metadata from the MCP server
   for diagnostics.
 - For OAuth auth-server handling, `authorization_servers[0]` from PRMD is the

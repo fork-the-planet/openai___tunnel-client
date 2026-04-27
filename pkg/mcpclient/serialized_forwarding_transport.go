@@ -9,8 +9,13 @@ import (
 )
 
 // NewSerializedForwardingTransport wraps a ForwardingTransport so only one
-// request lifecycle (Write -> notifications -> matching response) is active on
-// the shared underlying connection at a time.
+// request lifecycle is active on the shared underlying connection at a time.
+//
+// Some MCP transports multiplex poorly when several connector calls write to the
+// same long-lived connection and then each reader waits for its own response. The
+// wrapper holds a lifecycle lock from Write through any streamed notifications
+// until the matching final JSON-RPC response, an error, or Close. Notifications
+// without ids release immediately after the write because no response is legal.
 func NewSerializedForwardingTransport(base ForwardingTransport) ForwardingTransport {
 	if base == nil {
 		return nil

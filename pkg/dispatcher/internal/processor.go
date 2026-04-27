@@ -43,7 +43,10 @@ type Processor interface {
 	Process(ctx context.Context, cmd controlplane.PolledCommand) error
 }
 
-// ChannelBinding describes routing behavior for a specific channel.
+// ChannelBinding describes routing behavior for a specific tunnel-service
+// channel. SupportsMCP gates normal JSON-RPC forwarding; SupportsOAuth is kept
+// on the main channel only because OAuth discovery is derived from the primary
+// MCP server URL rather than arbitrary auxiliary channels.
 type ChannelBinding struct {
 	Transport     mcpclient.ForwardingTransport
 	Priority      int
@@ -240,7 +243,10 @@ func NewProcessor(p processorParams) (Processor, error) {
 	}, nil
 }
 
-// Process delivers the command to the MCP server and logs the response.
+// Process delivers one polled control-plane command to the channel-specific
+// downstream service. Unsupported or temporarily unroutable channels are posted
+// back as connector-visible errors; they never fall back to main because that
+// could send a product request to the wrong private MCP server.
 func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledCommand) error {
 	if cmd == nil {
 		return fmt.Errorf("dispatcher processor: nil command")
@@ -565,8 +571,12 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 	return nil
 }
 
-// forwardResponses streams MCP responses for the request to the control plane
-// while respecting the configured TTL window.
+// forwardResponses streams MCP notifications and the final JSON-RPC response
+// back to the control plane while respecting the configured TTL window. The
+// connector is considered complete only after a response with the same id as the
+// original request is posted; intermediate JSON-RPC notifications remain stream
+// events. If the downstream connection ends first, the dispatcher posts a
+// terminal error response so product callers do not wait forever.
 func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.ForwardingConnection, logger *slog.Logger, cmd controlplane.JsonRpcCommand, responseCode int, responseHeaders http.Header, metricAttrs []attribute.KeyValue, latencyRecorded *latencyFlags, channel types.Channel) {
 	ttlCtx := ctx
 	cancel := func() {}

@@ -8,6 +8,7 @@ documentation for `tunnel-client`.
 - **Onboarding (recommended first read)**: [`onboarding.md`](onboarding.md)
 - **Permissions, roles, and groups**: [`permissions.md`](permissions.md)
 - **Architecture diagrams**: [`architecture.md`](architecture.md)
+- **Connector behavior**: [`connectors.md`](connectors.md)
 - **Enterprise customer handoff**: [`enterprise-customer-onboarding.md`](enterprise-customer-onboarding.md)
 
 ## Operator docs
@@ -15,6 +16,7 @@ documentation for `tunnel-client`.
 - **Configuration reference**: [`configuration.md`](configuration.md)
 - **Deployments**: [`deployment/overview.md`](deployment/overview.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
+- **Connector behavior and pitfalls**: [`connectors.md`](connectors.md)
 
 ## Maintainer / contributor docs
 

@@ -164,7 +164,13 @@ type ProcessConfig struct {
 	PIDFile string
 }
 
-// MCPConfig captures configuration for the Model Control Plane integration.
+// MCPConfig captures configuration for the Model Context Protocol integration.
+//
+// The legacy top-level ServerURL/Command fields mirror the main channel so older
+// call sites can keep reading cfg.MCP.ServerURL while the dispatcher routes from
+// ChannelBindings. New connector/channel behavior should be modeled as an
+// MCPChannelBinding first, then projected to the legacy fields only for
+// compatibility.
 type MCPConfig struct {
 	ServerURL             *url.URL
 	Command               string
@@ -178,7 +184,13 @@ type MCPConfig struct {
 	HTTPProxySource       ProxySource
 }
 
-// MCPChannelBinding maps a channel to its MCP transport configuration.
+// MCPChannelBinding maps one tunnel-service channel to one MCP transport.
+//
+// Exactly one binding may exist per channel. The reserved harpoon channel is
+// supplied by the embedded Harpoon server, not by user MCP config. Streamable
+// HTTP bindings may carry proxy and mTLS settings; stdio bindings deliberately
+// ignore HTTP-only settings because they communicate over child-process
+// stdin/stdout rather than a network socket.
 type MCPChannelBinding struct {
 	Channel           types.Channel
 	TransportKind     MCPTransportKind
@@ -1232,6 +1244,9 @@ func splitMCPEnvEntries(raw string) []string {
 	return out
 }
 
+// parseMCPChannelBindings normalizes all configured MCP endpoints into the
+// dispatcher routing table. It rejects duplicate channels across HTTP and stdio
+// so a connector command has a single deterministic downstream target.
 func parseMCPChannelBindings(commandEntries, serverEntries []string, lookupEnv func(string) (string, bool)) ([]MCPChannelBinding, error) {
 	bindings := make([]MCPChannelBinding, 0, len(commandEntries)+len(serverEntries))
 	seen := make(map[types.Channel]MCPChannelBinding, len(commandEntries)+len(serverEntries))

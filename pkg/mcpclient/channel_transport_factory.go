@@ -19,7 +19,14 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 )
 
-// ChannelTransportFactory builds MCP transports for configured channel bindings.
+// ChannelTransportFactory builds and caches MCP transports for configured
+// channel bindings.
+//
+// A connector request can arrive on any logical tunnel-service channel. The
+// dispatcher asks this factory for the binding-specific transport, and the
+// factory keeps one cached transport/HTTP client per channel so session headers,
+// proxy selection, mTLS config, and raw-HTTP logging remain stable across
+// requests for that channel.
 type ChannelTransportFactory struct {
 	config        *config.MCPConfig
 	logger        *slog.Logger
@@ -84,7 +91,10 @@ func (f *ChannelTransportFactory) HTTPClientForBinding(binding config.MCPChannel
 	return f.httpClientForKey(channelName.String(), binding.HTTPProxy, binding.ClientCertificate)
 }
 
-// Build returns a cached transport for the requested binding.
+// Build returns a cached transport for the requested binding. Concurrent first
+// use of the same channel is collapsed with singleflight so duplicate connector
+// traffic cannot race into multiple stdio child processes or independent HTTP
+// transport wrappers.
 func (f *ChannelTransportFactory) Build(binding config.MCPChannelBinding) (mcp.Transport, error) {
 	if f == nil {
 		return nil, fmt.Errorf("mcpclient: channel transport factory is nil")

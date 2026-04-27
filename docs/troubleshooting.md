@@ -26,7 +26,10 @@
 - If using `--control-plane.api-key=env:VARNAME`, ensure that env var is set
   and non-empty.
 
-## Client never becomes "healthy/ready"
+## Debug why `/readyz` is failing
+
+If you are debugging why `/readyz` is failing or why the client never becomes
+"healthy/ready", start here:
 
 - `/healthz` is liveness only. A `200 live` response means the process is up.
 - `/readyz` includes startup gating:
@@ -71,6 +74,40 @@ done
   configured `tunnel_id`, route state, probe status, and OAuth discovery state
   alongside the log stream.
 - The archive is redacted before it is returned.
+
+## Connector setup and runtime pitfalls
+
+- **ChatGPT connector setup cannot discover tools**
+  - Keep `tunnel-client run ...` running while creating or testing the connector.
+    The remote tunnel object can exist even when no local runtime is polling it.
+  - Confirm the connector selected the same `CONTROL_PLANE_TUNNEL_ID` that the
+    daemon is using.
+  - Check `/readyz`, not only `/healthz`; liveness does not prove MCP probing or
+    OAuth discovery finished.
+
+- **Connector URL returns 404 or does not stream on GET**
+  - Connector MCP traffic is POST-based JSON-RPC. GET requests to `/v1/mcp/...`
+    are not a diagnostic SSE stream.
+  - If client logs show doubled paths, set `CONTROL_PLANE_BASE_URL` to the host
+    root, for example `https://api.openai.com`, not a `/v1/tunnel/...` URL. <!-- citadel-ignore: public endpoint example for external tunnel-client config -->
+
+- **`unsupported_channel` from the connector path**
+  - The incoming command named a channel that is not configured. Add a
+    channel-qualified `--mcp.server-url` / `--mcp.command` entry, or update the
+    product configuration to send `main`.
+  - For `harpoon`, register at least one `--harpoon.target` / `HARPOON_TARGETS`
+    entry. Harpoon intentionally stays unroutable with an empty target registry.
+
+- **OAuth-protected connector succeeds locally but fails in product**
+  - The MCP server can stay private, but the authorization server itself is not
+    automatically tunneled. It must be reachable wherever the OAuth browser flow
+    and metadata fetches require it.
+  - Issuer mismatch diagnostics are allowed for external enterprise IdPs; focus
+    first on wrong URLs, unreachable metadata endpoints, or missing
+    `Authorization` forwarding.
+
+See [`connectors.md`](connectors.md) for the full connector request lifecycle,
+channel routing model, and environment-variable checklist.
 
 ## MCP connectivity issues
 

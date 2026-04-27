@@ -9,7 +9,8 @@ ChatGPT", or "Codex local MCP", start with
 drop into `init`, `doctor`, or Codex plugin flows.
 
 For the customer-shareable network model and request flow, see
-[`architecture.md`](architecture.md).
+[`architecture.md`](architecture.md). For contributor-level connector routing,
+streaming, and troubleshooting details, see [`connectors.md`](connectors.md).
 
 ## 1) Prerequisites
 
@@ -66,8 +67,10 @@ open "$(cat /tmp/tunnel-client-health.url)/ui"
 ```
 
 If Codex is installed locally and you want the plugin surface instead of the raw
-binary flow, install it directly from the binary and keep lifecycle operations
-on the native `runtimes` command family:
+binary flow, install it directly from the binary. The canonical command is
+`tunnel-client codex plugin ...`; `tunnel-client plugin codex ...` remains a
+compatibility alias. Keep lifecycle operations on the native `runtimes` command
+family:
 
 ```bash
 tunnel-client codex plugin install
@@ -136,11 +139,23 @@ Starter prompts for Codex:
 From the `tunnel-client` module root:
 
 ```bash
+make admin-ui
 go build -o bin/tunnel-client ./cmd/client
 ```
 
-After building from source, use `./bin/tunnel-client` unless you add that
-location to your `PATH`.
+`make admin-ui` refreshes embedded UI assets before the local binary build. You
+can skip it for a docs-only checkout when the committed assets under
+`pkg/adminui/assets` are already present and unchanged.
+
+Or from the monorepo root:
+
+```bash
+bazel build //api/tunnel-client/cmd/client:client
+./bazel-bin/api/tunnel-client/cmd/client/client
+```
+
+After building from source, use `./bin/tunnel-client` or the Bazel output path
+unless you add that location to your `PATH`.
 
 ## 4) Configure
 
