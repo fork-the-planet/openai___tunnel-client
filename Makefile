@@ -21,7 +21,7 @@ ABS_BIN := $(abspath $(BIN))
 GIT_SHA    := $(if $(GIT_SHA),$(GIT_SHA),$(shell git rev-parse --short HEAD 2>/dev/null))
 LDFLAGS    := -X go.openai.org/api/tunnel-client/pkg/version.GitSHA=$(GIT_SHA)
 
-.PHONY: all help fmt test clean build-image mod-tidy admin-ui
+.PHONY: all help fmt test clean build-image mod-tidy admin-ui release-tag
 
 all: clean mod-tidy fmt test $(TARGET)
 
@@ -33,6 +33,7 @@ help:
 	@echo "  $(TARGET)     - Build the tunnel-client binary"
 	@echo "  test          - Run tests"
 	@echo "  admin-ui      - Build the admin UI assets (manual; not part of make all)"
+	@echo "  release-tag   - Generate a release tag like v1.2.3--ember-orchid"
 	@echo "  clean         - Remove built binaries"
 	@echo "  build-image   - Build Docker image with tunnel-client binary"
 	@echo ""
@@ -44,6 +45,8 @@ help:
 	@echo "  GOOS         - Target OS (default: $(OS))"
 	@echo "  GOARCH       - Target architecture (default: $(ARCH))"
 	@echo "  GIT_SHA      - Git SHA/tag for version info and Docker tagging"
+	@echo "  VERSION      - Version for make release-tag (required)"
+	@echo "  WORD         - Required release word for make release-tag"
 	@echo ""
 	@echo "Artifacts:"
 	@echo "  $(STABLE_BIN) -> $(BIN)"
@@ -74,6 +77,13 @@ fmt:
 admin-ui:
 	./$(ADMIN_UI_BUILD_SCRIPT) $(ADMIN_UI_DIR) $(ADMIN_UI_ASSETS_DIR)
 	@echo "Admin UI assets copied to $(abspath $(ADMIN_UI_ASSETS_DIR))"
+
+release-tag:
+	@if [ -z "$(VERSION)" ] || [ -z "$(WORD)" ]; then \
+		echo "usage: make release-tag VERSION=1.2.3 WORD=ember-orchid"; \
+		exit 1; \
+	fi
+	@./scripts/release_tag.sh make "$(VERSION)" "$(WORD)"
 
 $(TARGET): clean | $(dir $(BIN))
 	CGO_ENABLED=$(if $(CGO_ENABLED),$(CGO_ENABLED),0) go build -o $(BIN) -ldflags "$(LDFLAGS)" $(GO_PACKAGE)

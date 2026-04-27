@@ -5,10 +5,11 @@ on:
     branches:
       - master
     tags:
-      - "v*"  # e.g., v1.2.3, v1.2.3-rc.1
+      - "v*"  # release tags must be v<semver>--<operator-word>
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,6 +19,13 @@ env:
   GO_VERSION: "1.25.x"
   MODULE_PATH: go.openai.org/api/tunnel-client
   BINARY_NAME: tunnel-client
+  PUBLIC_STORAGE_ACCOUNT: prod1pstatic
+  PUBLIC_STORAGE_CONTAINER: persistent
+  PUBLIC_BUCKET_PREFIX: tunnel-client
+  PUBLIC_BASE_URL_ROOT: https://persistent.oaistatic.com
+  AZURE_TENANT_ID: a48cca56-e6da-484e-a814-9c849652bcb3
+  AZURE_CLIENT_ID: 14c0c62b-2f5a-4a7f-aaca-bfbc980645fa
+  AZURE_SUBSCRIPTION_ID: c24a3833-f66c-4c0b-8263-91c5cc408ff9
 
 jobs:
   test:
@@ -29,6 +37,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - name: Validate release tag
+        if: ${{ github.ref_type == 'tag' }}
+        run: ./scripts/release_tag.sh parse "${GITHUB_REF_NAME}"
       - name: Validate
         run: |
           go env
@@ -74,15 +85,21 @@ jobs:
           CGO_ENABLED: 0
           TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           mkdir -p dist
           BIN_NAME=${{ env.BINARY_NAME }}${{ matrix.ext }}
-          # Embed Git SHA and tag version (strip leading 'v') into the binary
-          LDFLAGS="-s -w -X ${{ env.MODULE_PATH }}/pkg/version.GitSHA=${GITHUB_SHA} -X ${{ env.MODULE_PATH }}/pkg/version.semanticVersion=${TAG#v}"
+          LDFLAGS="-s -w -X ${{ env.MODULE_PATH }}/pkg/version.GitSHA=${GITHUB_SHA}"
+          ASSET_TAG="${GITHUB_SHA::12}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            eval "$(./scripts/release_tag.sh parse "${TAG}")"
+            LDFLAGS="${LDFLAGS} -X ${{ env.MODULE_PATH }}/pkg/version.semanticVersion=${release_version}"
+            ASSET_TAG="${release_tag}"
+          fi
           GOFLAGS="-trimpath -buildvcs=false"
           go build $GOFLAGS -ldflags "$LDFLAGS" -o "dist/$BIN_NAME" ./cmd/client
 
           # Package as zip with OS/Arch/Tag in name
-          ASSET_NAME=${{ env.BINARY_NAME }}-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}
+          ASSET_NAME=${{ env.BINARY_NAME }}-${ASSET_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}
           (cd dist && zip -9 "$ASSET_NAME.zip" "$BIN_NAME")
 
       - name: Upload artifact
@@ -98,6 +115,13 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Derive release metadata
+        id: release_meta
+        run: |
+          while IFS='=' read -r key value; do
+            echo "${key}=${value}" >> "${GITHUB_OUTPUT}"
+          done < <(./scripts/release_tag.sh parse "${GITHUB_REF_NAME}")
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: zips-*
@@ -109,6 +133,51 @@ jobs:
         run: |
           shopt -s nullglob
           sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Generate public URLs
+        working-directory: dist
+        env:
+          PUBLIC_BASE_URL: ${{ steps.release_meta.outputs.public_base_url }}
+        run: |
+          {
+            for file in *.zip SHA256SUMS.txt; do
+              printf '%s/%s\n' "${PUBLIC_BASE_URL}" "${file}"
+            done
+          } > PUBLIC_URLS.txt
+
+      - name: Azure login for public artifact upload
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Upload public artifacts
+        run: |
+          az storage blob upload-batch \
+            --subscription "${AZURE_SUBSCRIPTION_ID}" \
+            --account-name "${PUBLIC_STORAGE_ACCOUNT}" \
+            --destination "${PUBLIC_STORAGE_CONTAINER}" \
+            --destination-path "${{ steps.release_meta.outputs.public_blob_path }}" \
+            --source dist \
+            --auth-mode login \
+            --overwrite true
+
+      - name: Verify public artifact URLs
+        working-directory: dist
+        run: |
+          while IFS= read -r url; do
+            for attempt in 1 2 3 4 5; do
+              if curl -fsSI "${url}" >/dev/null; then
+                break
+              fi
+              if [[ "${attempt}" -eq 5 ]]; then
+                echo "failed to verify ${url}" >&2
+                exit 1
+              fi
+              sleep 2
+            done
+          done < PUBLIC_URLS.txt
 
       # Optional signing:
       # - name: Import GPG key
@@ -132,8 +201,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
+            dist/PUBLIC_URLS.txt
