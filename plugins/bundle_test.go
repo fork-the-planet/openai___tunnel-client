@@ -1,6 +1,7 @@
 package pluginsbundle
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -241,6 +242,59 @@ func TestTunnelMCPExportToDirIncludesSkillReferences(t *testing.T) {
 	}
 }
 
+func TestBundledCodexPluginManifestPointsAtBundledSkillDir(t *testing.T) {
+	t.Parallel()
+
+	type interfaceManifest struct {
+		DisplayName      string   `json:"displayName"`
+		Capabilities     []string `json:"capabilities"`
+		ShortDescription string   `json:"shortDescription"`
+	}
+	type manifest struct {
+		Name        string            `json:"name"`
+		Version     string            `json:"version"`
+		Skills      string            `json:"skills"`
+		Keywords    []string          `json:"keywords"`
+		Interface   interfaceManifest `json:"interface"`
+		Description string            `json:"description"`
+	}
+
+	data, err := embeddedPluginFiles.ReadFile("tunnel-mcp/.codex-plugin/plugin.json")
+	if err != nil {
+		t.Fatalf("read bundled codex plugin manifest: %v", err)
+	}
+
+	var parsed manifest
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse bundled codex plugin manifest: %v", err)
+	}
+
+	if parsed.Name != "tunnel-mcp" {
+		t.Fatalf("unexpected plugin name %q", parsed.Name)
+	}
+	if parsed.Version == "" {
+		t.Fatalf("expected non-empty version in bundled codex plugin manifest")
+	}
+	if parsed.Description == "" {
+		t.Fatalf("expected non-empty description in bundled codex plugin manifest")
+	}
+	if parsed.Skills != "./skills/" {
+		t.Fatalf("unexpected skills path %q", parsed.Skills)
+	}
+	if parsed.Interface.DisplayName != "Tunnel MCP" {
+		t.Fatalf("unexpected display name %q", parsed.Interface.DisplayName)
+	}
+	if parsed.Interface.ShortDescription == "" {
+		t.Fatalf("expected non-empty shortDescription in bundled codex plugin manifest")
+	}
+	if len(parsed.Interface.Capabilities) == 0 {
+		t.Fatalf("expected at least one capability in bundled codex plugin manifest")
+	}
+	if !containsString(parsed.Keywords, "tunnel-client") {
+		t.Fatalf("expected tunnel-client keyword in bundled codex plugin manifest: %#v", parsed.Keywords)
+	}
+}
+
 func TestEmbeddedSkillIncludesMissingBinaryResponseContract(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +352,15 @@ func requirePluginContainsAll(t *testing.T, text string, snippets ...string) {
 			t.Fatalf("expected text to contain %q, got:\n%s", snippet, text)
 		}
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func requirePluginOmitsAll(t *testing.T, text string, snippets ...string) {
