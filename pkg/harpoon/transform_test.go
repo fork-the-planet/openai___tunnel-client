@@ -93,6 +93,55 @@ func TestTransformJSONBodyNormalizesFormatting(t *testing.T) {
 	require.JSONEq(t, `{"url":"harpoon://api"}`, string(updated))
 }
 
+func TestTransformJSONBodyUsesOAuthFieldContextForDuplicateURLs(t *testing.T) {
+	rewriter := newURLRewriter([]Target{
+		{
+			Label:   "oauth-prmd-resource-0",
+			BaseURL: mustParseURL(t, "https://mcp.example.test"),
+			Tags:    []string{"protected-resource-metadata", "resource"},
+		},
+		{
+			Label:   "oauth-prmd-auth-server-0",
+			BaseURL: mustParseURL(t, "https://mcp.example.test"),
+			Tags:    []string{"authorization-server", "protected-resource-metadata"},
+		},
+		{
+			Label:   "oauth-issuer-0",
+			BaseURL: mustParseURL(t, "https://mcp.example.test"),
+			Tags:    []string{"auth-server-metadata", "issuer"},
+		},
+		{
+			Label:   "oauth-token-endpoint-0",
+			BaseURL: mustParseURL(t, "https://mcp.example.test/oauth/token"),
+			Tags:    []string{"auth-server-metadata", "token-endpoint"},
+		},
+		{
+			Label:   "oauth-registration-endpoint-0",
+			BaseURL: mustParseURL(t, "https://mcp.example.test/oauth/register"),
+			Tags:    []string{"auth-server-metadata", "registration-endpoint"},
+		},
+	})
+
+	body := []byte(`{
+			"resource":"https://mcp.example.test",
+			"authorization_servers":["https://mcp.example.test"],
+			"issuer":"https://mcp.example.test",
+			"token_endpoint":"https://mcp.example.test/oauth/token",
+			"registration_endpoint":"https://mcp.example.test/oauth/register"
+		}`)
+
+	updated, changed := transformJSONBody(body, rewriter)
+	require.True(t, changed)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(updated, &payload))
+	require.Equal(t, "harpoon://oauth-prmd-resource-0", payload["resource"])
+	require.Equal(t, "harpoon://oauth-issuer-0", payload["issuer"])
+	require.Equal(t, "harpoon://oauth-token-endpoint-0", payload["token_endpoint"])
+	require.Equal(t, "harpoon://oauth-registration-endpoint-0", payload["registration_endpoint"])
+	require.Equal(t, []any{"harpoon://oauth-prmd-auth-server-0"}, payload["authorization_servers"])
+}
+
 func TestTransformHeadersRewritesLocations(t *testing.T) {
 	rewriter := newURLRewriter([]Target{
 		{Label: "api", BaseURL: mustParseURL(t, "https://example.com/api")},

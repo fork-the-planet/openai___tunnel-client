@@ -19,14 +19,14 @@ var urlPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
 // urlRewriter rewrites absolute http/https URLs to Harpoon URLs using known
 // targets. Matching is exact after URL normalization (host/scheme case only).
 type urlRewriter struct {
-	labelsByURL map[string]string
+	targetsByURL map[string][]Target
 }
 
 func newURLRewriter(targets []Target) *urlRewriter {
 	if len(targets) == 0 {
 		return &urlRewriter{}
 	}
-	labelsByURL := make(map[string]string, len(targets))
+	targetsByURL := make(map[string][]Target, len(targets))
 	for _, target := range targets {
 		if target.BaseURL == nil {
 			continue
@@ -39,15 +39,27 @@ func newURLRewriter(targets []Target) *urlRewriter {
 		if err != nil {
 			continue
 		}
-		if _, exists := labelsByURL[key]; exists {
-			continue
-		}
-		labelsByURL[key] = target.Label
+		targetsByURL[key] = append(targetsByURL[key], target)
 	}
-	return &urlRewriter{labelsByURL: labelsByURL}
+	return &urlRewriter{targetsByURL: targetsByURL}
+}
+
+var preferredOAuthTagByJSONKey = map[string]string{
+	"authorization_servers":  "authorization-server",
+	"introspection_endpoint": "introspection-endpoint",
+	"issuer":                 "issuer",
+	"jwks_uri":               "jwks-uri",
+	"registration_endpoint":  "registration-endpoint",
+	"resource":               "resource",
+	"revocation_endpoint":    "revocation-endpoint",
+	"token_endpoint":         "token-endpoint",
 }
 
 func (r *urlRewriter) RewriteURLString(raw string) (string, bool) {
+	return r.rewriteURLStringWithHint(raw, "")
+}
+
+func (r *urlRewriter) rewriteURLStringWithHint(raw string, jsonKey string) (string, bool) {
 	if r == nil || raw == "" {
 		return raw, false
 	}
@@ -63,11 +75,29 @@ func (r *urlRewriter) RewriteURLString(raw string) (string, bool) {
 	if err != nil {
 		return raw, false
 	}
-	label, ok := r.labelsByURL[key]
-	if !ok {
+	candidates := r.targetsByURL[key]
+	if len(candidates) == 0 {
 		return raw, false
 	}
-	return "harpoon://" + label, true
+	if target, ok := preferredTargetForJSONKey(candidates, jsonKey); ok {
+		return "harpoon://" + target.Label, true
+	}
+	return "harpoon://" + candidates[0].Label, true
+}
+
+func preferredTargetForJSONKey(candidates []Target, jsonKey string) (Target, bool) {
+	preferredTag := preferredOAuthTagByJSONKey[jsonKey]
+	if preferredTag == "" {
+		return Target{}, false
+	}
+	for _, candidate := range candidates {
+		for _, tag := range candidate.Tags {
+			if normalizeToken(tag) == preferredTag {
+				return candidate, true
+			}
+		}
+	}
+	return Target{}, false
 }
 
 func transformJSONBody(body []byte, rewriter *urlRewriter) ([]byte, bool) {
@@ -80,7 +110,7 @@ func transformJSONBody(body []byte, rewriter *urlRewriter) ([]byte, bool) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
 	}
-	updated, changed := rewriteJSONValue(payload, rewriter)
+	updated, changed := rewriteJSONValue(payload, rewriter, "")
 	if !changed {
 		return body, false
 	}
@@ -91,12 +121,12 @@ func transformJSONBody(body []byte, rewriter *urlRewriter) ([]byte, bool) {
 	return encoded, true
 }
 
-func rewriteJSONValue(value any, rewriter *urlRewriter) (any, bool) {
+func rewriteJSONValue(value any, rewriter *urlRewriter, jsonKey string) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
 		changed := false
 		for key, val := range typed {
-			updated, ok := rewriteJSONValue(val, rewriter)
+			updated, ok := rewriteJSONValue(val, rewriter, key)
 			if ok {
 				typed[key] = updated
 				changed = true
@@ -106,7 +136,7 @@ func rewriteJSONValue(value any, rewriter *urlRewriter) (any, bool) {
 	case []any:
 		changed := false
 		for idx, val := range typed {
-			updated, ok := rewriteJSONValue(val, rewriter)
+			updated, ok := rewriteJSONValue(val, rewriter, jsonKey)
 			if ok {
 				typed[idx] = updated
 				changed = true
@@ -117,7 +147,7 @@ func rewriteJSONValue(value any, rewriter *urlRewriter) (any, bool) {
 		if rewriter == nil {
 			return typed, false
 		}
-		if rewritten, ok := rewriter.RewriteURLString(typed); ok {
+		if rewritten, ok := rewriter.rewriteURLStringWithHint(typed, jsonKey); ok {
 			return rewritten, true
 		}
 		return typed, false
