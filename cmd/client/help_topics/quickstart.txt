@@ -107,3 +107,4 @@ Useful follow-ups:
   tunnel-client help samples
   tunnel-client help oauth
   tunnel-client help plugin
+  tunnel-client help troubleshooting
