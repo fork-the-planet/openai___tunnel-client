@@ -9,11 +9,12 @@ ARG PROJECT_ROOT=.
 FROM ${BASE_UI_BUILDER_IMAGE} AS ui-builder
 ARG PROJECT_ROOT=.
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
+RUN corepack enable && corepack prepare pnpm@11.0.3 --activate
 COPY ${PROJECT_ROOT}/adminui/package.json ./adminui/
 COPY ${PROJECT_ROOT}/adminui/pnpm-lock.yaml ./adminui/
+COPY ${PROJECT_ROOT}/adminui/pnpm-workspace.yaml ./adminui/
 COPY ${PROJECT_ROOT}/adminui/ ./adminui/
-RUN CI=true pnpm --dir adminui install --frozen-lockfile --ignore-workspace --config.shared-workspace-lockfile=false \
+RUN CI=true pnpm --dir adminui install --frozen-lockfile --config.shared-workspace-lockfile=false --config.confirmModulesPurge=false \
     && pnpm --dir adminui build
 
 FROM ${BASE_BUILDER_IMAGE} AS builder
