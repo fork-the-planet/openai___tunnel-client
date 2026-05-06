@@ -378,7 +378,7 @@ func TestHarpoonToolSchemas(t *testing.T) {
 			},
 				"headers": {
 					"type": "object",
-					"description": "HTTP headers to include in the request (allowlisted: Accept Authorization Content-Type)",
+					"description": "HTTP headers to include in the request; transport proxy forwarding and client-managed headers are blocked",
 					"default": {},
 					"propertyNames": {
 					"type": "string",

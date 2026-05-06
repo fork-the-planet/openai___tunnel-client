@@ -39,10 +39,19 @@ var (
 		http.MethodPost: {},
 		http.MethodPut:  {},
 	}
-	allowedOutboundHeaders = map[string]struct{}{
-		http.CanonicalHeaderKey("Accept"):        {},
-		http.CanonicalHeaderKey("Authorization"): {},
-		http.CanonicalHeaderKey("Content-Type"):  {},
+	// Tunnel-service is the policy layer for Harpoon-supplied headers; keep
+	// the client-side blocklist to generic HTTP relay safety headers only.
+	blockedOutboundHeaders = map[string]struct{}{
+		"connection":          {},
+		"content-length":      {},
+		"host":                {},
+		"keep-alive":          {},
+		"proxy-authenticate":  {},
+		"proxy-authorization": {},
+		"te":                  {},
+		"trailer":             {},
+		"transfer-encoding":   {},
+		"upgrade":             {},
 	}
 	listTargetsSchema       = buildListTargetsInputSchema()
 	listTargetsOutputSchema = buildListTargetsOutputSchema()
@@ -61,7 +70,7 @@ type Server struct {
 type callTargetRequest struct {
 	Label            string            `json:"label" jsonschema:"minLength=1,maxLength=64,pattern=^[a-z0-9][a-z0-9_-]{0\\,63}$,description=Allowlisted target label"`
 	Method           string            `json:"method" jsonschema:"enum=GET,enum=POST,enum=PUT,description=HTTP method for the outbound request"`
-	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request (allowlisted: Accept Authorization Content-Type)"`
+	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request; transport proxy forwarding and client-managed headers are blocked"`
 	Body             string            `json:"body,omitempty" jsonschema:"description=Request body as a raw string"`
 	TimeoutMS        *int              `json:"timeout_ms,omitempty" jsonschema:"description=Request timeout in milliseconds"`
 	MaxResponseBytes *int              `json:"max_response_bytes,omitempty" jsonschema:"description=Maximum response bytes to read"`
@@ -369,7 +378,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
 	if droppedHeaderCount > 0 {
-		logger.InfoContext(ctx, "harpoon request dropped non-allowlisted headers",
+		logger.InfoContext(ctx, "harpoon request dropped non-forwardable headers",
 			slog.String("label", label),
 			slog.String("target_label", label),
 			slog.Int("dropped_header_count", droppedHeaderCount),
@@ -561,7 +570,7 @@ func filterOutboundHeaders(headers map[string]string) (http.Header, int, []strin
 			continue
 		}
 		canonical := http.CanonicalHeaderKey(trimmedKey)
-		if _, ok := allowedOutboundHeaders[canonical]; !ok {
+		if isBlockedOutboundHeader(canonical) {
 			dropped++
 			classifications[classifyDroppedHeaderName(canonical)] = struct{}{}
 			continue
@@ -569,6 +578,17 @@ func filterOutboundHeaders(headers map[string]string) (http.Header, int, []strin
 		out.Set(canonical, value)
 	}
 	return out, dropped, sortedKeys(classifications)
+}
+
+func isBlockedOutboundHeader(headerName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(headerName))
+	if normalized == "" {
+		return true
+	}
+	if _, ok := blockedOutboundHeaders[normalized]; ok {
+		return true
+	}
+	return false
 }
 
 func classifyDroppedHeaderName(headerName string) string {
@@ -585,7 +605,7 @@ func classifyDroppedHeaderName(headerName string) string {
 	if strings.HasPrefix(normalized, "x-") {
 		return "custom"
 	}
-	return "not-allowlisted"
+	return "not-forwardable"
 }
 
 func isSensitiveHeaderName(headerName string) bool {
