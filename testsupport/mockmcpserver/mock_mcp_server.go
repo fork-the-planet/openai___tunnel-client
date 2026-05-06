@@ -189,7 +189,8 @@ type MockMCPServer struct {
 
 	useTLS bool
 
-	tb atomic.Value // testing.TB
+	closing atomic.Bool
+	tb      atomic.Value // testing.TB
 }
 
 type requiredHeader struct {
@@ -262,6 +263,9 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		if req.Method == http.MethodPost {
 			body, err := io.ReadAll(req.Body)
 			if err != nil {
+				if m.closing.Load() {
+					return
+				}
 				m.failf("mock MCP server read body: %v", err)
 			}
 			_ = req.Body.Close()
@@ -335,6 +339,7 @@ func (m *MockMCPServer) Start(t testing.TB) {
 // Close shuts down the server and asserts all scripted calls were consumed.
 func (m *MockMCPServer) Close() {
 	m.closeOnce.Do(func() {
+		m.closing.Store(true)
 		m.mu.Lock()
 		server := m.httpServer
 		m.httpServer = nil
@@ -349,6 +354,7 @@ func (m *MockMCPServer) Close() {
 		m.calls = nil
 		m.mu.Unlock()
 		if server != nil {
+			server.CloseClientConnections()
 			server.Close()
 		}
 		if cancel != nil {

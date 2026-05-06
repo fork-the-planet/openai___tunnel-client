@@ -136,6 +136,50 @@ func TestMockMCPServerUsage(t *testing.T) {
 	}
 }
 
+func TestMockMCPServerCloseTerminatesActiveStreamableConnection(t *testing.T) {
+	t.Parallel()
+
+	server := NewMockMCPServer()
+	server.Start(t)
+
+	baseURL := server.BaseURL()
+	if baseURL == nil {
+		t.Fatal("mock MCP server did not expose a base URL")
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   baseURL.String(),
+		HTTPClient: httpClientForServer(t, server),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+
+	closed := make(chan struct{})
+	go func() {
+		server.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		_ = session.Close()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("mock MCP server Close blocked with an active streamable connection")
+	}
+}
+
 func TestMockMCPServerInMemory(t *testing.T) {
 	t.Parallel()
 
