@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -340,6 +341,38 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 	require.Equal(t, version.SemanticVersion, got.Client.SemanticVersion)
 	require.Equal(t, version.Version, got.Client.Version)
 	require.Equal(t, version.UserAgent, got.Client.UserAgent)
+}
+
+func TestCollectLogExportRuntimeRedactsSplitHeaderFlagValues(t *testing.T) {
+	t.Parallel()
+
+	got := collectLogExportRuntime(
+		[]string{
+			"tunnel-client",
+			"run",
+			"--control-plane.extra-headers",
+			"X-Control-Auth: literal-control-secret",
+			"--mcp.extra-headers",
+			"X-Internal-Auth: env:MCP_RUNTIME_SECRET",
+			"--mcp.discovery-extra-headers",
+			"X-Discovery-Auth: file:/run/secrets/mcp-discovery-header",
+		},
+		[]string{
+			"MCP_RUNTIME_SECRET=runtime-secret",
+		},
+	)
+
+	require.Contains(t, got.Argv, "--control-plane.extra-headers")
+	require.Contains(t, got.Argv, "X-Control-Auth: [REDACTED]")
+	require.Contains(t, got.Argv, "--mcp.extra-headers")
+	require.Contains(t, got.Argv, "X-Internal-Auth: [REDACTED]")
+	require.Contains(t, got.Argv, "--mcp.discovery-extra-headers")
+	require.Contains(t, got.Argv, "X-Discovery-Auth: [REDACTED]")
+	argv := strings.Join(got.Argv, "\n")
+	require.NotContains(t, argv, "literal-control-secret")
+	require.NotContains(t, argv, "MCP_RUNTIME_SECRET")
+	require.NotContains(t, argv, "/run/secrets/mcp-discovery-header")
+	require.Equal(t, "[REDACTED]", got.Environment["MCP_RUNTIME_SECRET"])
 }
 
 func TestRuntimeSnapshotProviderIncludesRedactedEffectiveConfig(t *testing.T) {

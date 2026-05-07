@@ -425,7 +425,7 @@ func redactArgv(argv []string) []string {
 			continue
 		}
 		out = append(out, arg)
-		if isSensitiveRuntimeKey(name) {
+		if isSensitiveRuntimeKey(name) || isHeaderListKey(name) {
 			redactNextForKey = name
 		}
 	}
