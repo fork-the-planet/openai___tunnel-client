@@ -20,6 +20,7 @@ func TestIsLoopbackRequest(t *testing.T) {
 		{name: "ipv6 loopback", remoteAddr: "[::1]:443", want: true},
 		{name: "non loopback", remoteAddr: "10.1.2.3:443", want: false},
 		{name: "invalid remote addr", remoteAddr: "malformed", want: false},
+		{name: "missing port", remoteAddr: "127.0.0.1", want: false},
 	}
 
 	for _, tc := range testCases {
@@ -65,6 +66,31 @@ func TestLocalOnly(t *testing.T) {
 		}
 		if got := resp.Body.String(); got != defaultLoopbackMessage+"\n" {
 			t.Fatalf("body = %q, want %q", got, defaultLoopbackMessage+"\n")
+		}
+	})
+
+	t.Run("ignores forwarded loopback spoof from remote address", func(t *testing.T) {
+		t.Parallel()
+
+		called := false
+		handler := LocalOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusNoContent)
+		}), "loopback only")
+
+		req := httptest.NewRequest(http.MethodGet, "http://example.test", nil)
+		req.RemoteAddr = "203.0.113.10:5555"
+		req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		req.Header.Set("Forwarded", `for="[::1]"`)
+		resp := httptest.NewRecorder()
+
+		handler.ServeHTTP(resp, req)
+
+		if called {
+			t.Fatalf("next handler should not be called for forwarded-header spoof")
+		}
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", resp.Code, http.StatusForbidden)
 		}
 	})
 

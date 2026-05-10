@@ -90,6 +90,90 @@ func TestChannelTransportFactoryAppliesProxy(t *testing.T) {
 	}
 }
 
+func TestChannelTransportFactoryScopesStaticAuthorizationPerBinding(t *testing.T) {
+	t.Parallel()
+
+	serverAAuth := make(chan string, 2)
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverAAuth <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(serverA.Close)
+
+	serverBAuth := make(chan string, 2)
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverBAuth <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(serverB.Close)
+
+	defaultBinding := config.MCPChannelBinding{
+		Channel:       types.DefaultChannel,
+		TransportKind: config.MCPTransportHTTPStreamable,
+		ServerURL:     mustParseURLFactoryTest(t, serverA.URL+"/mcp"),
+	}
+	connectorBinding := config.MCPChannelBinding{
+		Channel:       types.Channel("connector-b"),
+		TransportKind: config.MCPTransportHTTPStreamable,
+		ServerURL:     mustParseURLFactoryTest(t, serverB.URL+"/mcp"),
+	}
+	cfg := &config.MCPConfig{
+		ChannelBindings: []config.MCPChannelBinding{defaultBinding, connectorBinding},
+		ExtraHeaders:    map[string]string{"Authorization": "Bearer static-mcp-token"},
+	}
+
+	factory, err := newChannelTransportFactory(channelTransportFactoryParams{
+		Config:        cfg,
+		Logging:       &config.LoggingConfig{},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MeterProvider: sdkmetric.NewMeterProvider(),
+	})
+	if err != nil {
+		t.Fatalf("newChannelTransportFactory failed: %v", err)
+	}
+
+	defaultClient, err := factory.HTTPClientForBinding(defaultBinding)
+	if err != nil {
+		t.Fatalf("HTTPClientForBinding(default) failed: %v", err)
+	}
+	resp, err := defaultClient.Get(serverA.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("default client request to default server failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	requireHeaderValue(t, serverAAuth, "Bearer static-mcp-token")
+
+	resp, err = defaultClient.Get(serverB.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("default client request to connector server failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	requireHeaderValue(t, serverBAuth, "")
+
+	connectorClient, err := factory.HTTPClientForBinding(connectorBinding)
+	if err != nil {
+		t.Fatalf("HTTPClientForBinding(connector) failed: %v", err)
+	}
+	resp, err = connectorClient.Get(serverB.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("connector client request to connector server failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	requireHeaderValue(t, serverBAuth, "Bearer static-mcp-token")
+}
+
+func requireHeaderValue(t *testing.T, ch <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		if got != want {
+			t.Fatalf("Authorization header = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for request with Authorization header %q", want)
+	}
+}
+
 func TestChannelTransportFactoryMTLS(t *testing.T) {
 	t.Parallel()
 
