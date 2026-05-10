@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	pluginsbundle "go.openai.org/api/tunnel-client/plugins"
 )
@@ -18,15 +20,46 @@ const (
 	binHintFilename    = ".tunnel-client-bin"
 )
 
+type installedVersionCandidate struct {
+	version string
+	dir     string
+	modTime time.Time
+}
+
 type Detection struct {
-	CodexHome        string
-	ConfigPath       string
-	PluginDir        string
-	Detected         bool
-	PluginName       string
-	PluginInstalled  bool
-	PluginBinaryHint string
-	InstallHint      string
+	CodexHome             string
+	ConfigPath            string
+	PluginDir             string
+	PluginKey             string
+	PluginMarketplace     string
+	PluginVersion         string
+	Detected              bool
+	PluginName            string
+	PluginInstalled       bool
+	PluginBinaryHint      string
+	PluginBinaryHintPath  string
+	PluginBinaryHintFound bool
+	EnabledConfigKeys     []string
+	Installations         []PluginInstallation
+	StaleConfigEntries    []StalePluginConfigEntry
+	InstallHint           string
+}
+
+type PluginInstallation struct {
+	Key            string `json:"key"`
+	Marketplace    string `json:"marketplace"`
+	Version        string `json:"version"`
+	Dir            string `json:"dir"`
+	ManifestPath   string `json:"manifest_path"`
+	Installed      bool   `json:"installed"`
+	BinaryHintPath string `json:"binary_hint_path,omitempty"`
+	BinaryHint     string `json:"binary_hint,omitempty"`
+}
+
+type StalePluginConfigEntry struct {
+	Key         string `json:"key"`
+	Marketplace string `json:"marketplace"`
+	Reason      string `json:"reason"`
 }
 
 type UninstallResult struct {
@@ -42,20 +75,51 @@ func Detect(lookupEnv func(string) (string, bool)) Detection {
 	codexHome := ResolveCodexHome(lookupEnv)
 	manifest, _ := pluginsbundle.TunnelMCPManifest()
 	detection := Detection{
-		CodexHome:       codexHome,
-		ConfigPath:      filepath.Join(codexHome, "config.toml"),
-		PluginDir:       PluginTargetDir(codexHome),
-		PluginName:      manifest.Name,
-		InstallHint:     "tunnel-client codex plugin install",
-		Detected:        codexLooksInstalled(codexHome),
-		PluginInstalled: pluginLooksInstalled(codexHome, manifest.Name),
+		CodexHome:         codexHome,
+		ConfigPath:        filepath.Join(codexHome, "config.toml"),
+		PluginDir:         PluginTargetDir(codexHome),
+		PluginName:        manifest.Name,
+		PluginKey:         fmt.Sprintf("%s@%s", manifest.Name, defaultMarketplace),
+		PluginMarketplace: defaultMarketplace,
+		PluginVersion:     defaultVersion,
+		InstallHint:       "tunnel-client codex plugin install",
+		Detected:          codexLooksInstalled(codexHome),
 	}
 	if !detection.Detected {
 		if _, err := exec.LookPath("codex"); err == nil {
 			detection.Detected = true
 		}
 	}
-	detection.PluginBinaryHint = ReadInstalledBinaryHint(codexHome)
+	detection.EnabledConfigKeys = enabledPluginConfigKeys(detection.ConfigPath, manifest.Name)
+	detection.Installations = findPluginInstallations(codexHome, manifest.Name, detection.EnabledConfigKeys)
+	for _, installation := range detection.Installations {
+		if !installation.Installed {
+			detection.StaleConfigEntries = append(detection.StaleConfigEntries, StalePluginConfigEntry{
+				Key:         installation.Key,
+				Marketplace: installation.Marketplace,
+				Reason:      "enabled in Codex config but no plugin manifest exists in the marketplace cache",
+			})
+			continue
+		}
+		if !detection.PluginInstalled || installation.Marketplace != defaultMarketplace {
+			detection.PluginInstalled = true
+			detection.PluginDir = installation.Dir
+			detection.PluginKey = installation.Key
+			detection.PluginMarketplace = installation.Marketplace
+			detection.PluginVersion = installation.Version
+			detection.PluginBinaryHint = installation.BinaryHint
+			detection.PluginBinaryHintPath = installation.BinaryHintPath
+			detection.PluginBinaryHintFound = installation.BinaryHintPath != "" && fileExists(installation.BinaryHintPath)
+		}
+	}
+	if !detection.PluginInstalled && len(detection.EnabledConfigKeys) == 0 {
+		installation := pluginInstallationFor(codexHome, manifest.Name, defaultMarketplace)
+		detection.PluginInstalled = installation.Installed
+		detection.PluginDir = installation.Dir
+		detection.PluginBinaryHint = installation.BinaryHint
+		detection.PluginBinaryHintPath = installation.BinaryHintPath
+		detection.PluginBinaryHintFound = installation.BinaryHintPath != "" && fileExists(installation.BinaryHintPath)
+	}
 	return detection
 }
 
@@ -80,7 +144,11 @@ func PluginTargetDir(codexHome string) string {
 	if err != nil {
 		return filepath.Join(codexHome, "plugins", "cache", defaultMarketplace, "tunnel-mcp", defaultVersion)
 	}
-	return filepath.Join(codexHome, "plugins", "cache", defaultMarketplace, manifest.Name, defaultVersion)
+	return PluginTargetDirFor(codexHome, defaultMarketplace, manifest.Name, defaultVersion)
+}
+
+func PluginTargetDirFor(codexHome string, marketplace string, pluginName string, version string) string {
+	return filepath.Join(codexHome, "plugins", "cache", marketplace, pluginName, version)
 }
 
 func Install(codexHome string, tunnelClientBinary string) (Detection, error) {
@@ -157,22 +225,259 @@ func codexLooksInstalled(codexHome string) bool {
 	return dirExists(codexHome)
 }
 
-func pluginLooksInstalled(codexHome string, pluginName string) bool {
-	if codexHome == "" || pluginName == "" {
-		return false
-	}
-	pluginDir := filepath.Join(codexHome, "plugins", "cache", defaultMarketplace, pluginName, defaultVersion)
-	manifestPath := filepath.Join(pluginDir, ".codex-plugin", "plugin.json")
-	configPath := filepath.Join(codexHome, "config.toml")
-	if !fileExists(manifestPath) || !fileExists(configPath) {
-		return false
-	}
+func enabledPluginConfigKeys(configPath string, pluginName string) []string {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return false
+		return nil
 	}
-	sectionName := fmt.Sprintf(`[plugins."%s@%s"]`, pluginName, defaultMarketplace)
-	return strings.Contains(string(data), sectionName)
+	prefix := `plugins."` + pluginName + `@`
+	out := []string{}
+	for _, section := range splitSections(string(data)) {
+		if !strings.HasPrefix(section.name, prefix) || !strings.HasSuffix(section.name, `"`) {
+			continue
+		}
+		enabled := false
+		for _, line := range section.lines[1:] {
+			if strings.TrimSpace(line) == "enabled = true" {
+				enabled = true
+				break
+			}
+		}
+		if enabled {
+			key := strings.TrimPrefix(section.name, `plugins."`)
+			key = strings.TrimSuffix(key, `"`)
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func findPluginInstallations(codexHome string, pluginName string, configKeys []string) []PluginInstallation {
+	if len(configKeys) == 0 {
+		return nil
+	}
+	out := make([]PluginInstallation, 0, len(configKeys))
+	for _, key := range configKeys {
+		marketplace := marketplaceFromPluginKey(key, pluginName)
+		if marketplace == "" {
+			continue
+		}
+		out = append(out, pluginInstallationFor(codexHome, pluginName, marketplace))
+	}
+	return out
+}
+
+func pluginInstallationFor(codexHome string, pluginName string, marketplace string) PluginInstallation {
+	version, dir := installedPluginVersionDir(codexHome, pluginName, marketplace)
+	if dir == "" {
+		version = defaultVersion
+		dir = PluginTargetDirFor(codexHome, marketplace, pluginName, version)
+	}
+	manifestPath := filepath.Join(dir, ".codex-plugin", "plugin.json")
+	hintPath := filepath.Join(dir, binHintFilename)
+	hint := readBinaryHintFromPath(hintPath)
+	return PluginInstallation{
+		Key:            fmt.Sprintf("%s@%s", pluginName, marketplace),
+		Marketplace:    marketplace,
+		Version:        version,
+		Dir:            dir,
+		ManifestPath:   manifestPath,
+		Installed:      fileExists(manifestPath),
+		BinaryHintPath: hintPath,
+		BinaryHint:     hint,
+	}
+}
+
+func marketplaceFromPluginKey(key string, pluginName string) string {
+	prefix := pluginName + "@"
+	if !strings.HasPrefix(key, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(key, prefix))
+}
+
+func installedPluginVersionDir(codexHome string, pluginName string, marketplace string) (string, string) {
+	base := filepath.Join(codexHome, "plugins", "cache", marketplace, pluginName)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", ""
+	}
+	versions := []installedVersionCandidate{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		version := entry.Name()
+		dir := filepath.Join(base, version)
+		if fileExists(filepath.Join(dir, ".codex-plugin", "plugin.json")) {
+			modTime := time.Time{}
+			if info, infoErr := entry.Info(); infoErr == nil {
+				modTime = info.ModTime()
+			}
+			versions = append(versions, installedVersionCandidate{
+				version: version,
+				dir:     dir,
+				modTime: modTime,
+			})
+		}
+	}
+	if len(versions) == 0 {
+		return "", ""
+	}
+	best := versions[0]
+	for _, candidate := range versions[1:] {
+		if compareInstalledPluginVersion(best, candidate) < 0 {
+			best = candidate
+		}
+	}
+	return best.version, best.dir
+}
+
+func compareInstalledPluginVersion(left installedVersionCandidate, right installedVersionCandidate) int {
+	if semverCmp, ok := compareSemverLikeVersions(left.version, right.version); ok && semverCmp != 0 {
+		return semverCmp
+	}
+	if !left.modTime.Equal(right.modTime) {
+		if left.modTime.Before(right.modTime) {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(left.version, right.version)
+}
+
+func compareSemverLikeVersions(leftVersion string, rightVersion string) (int, bool) {
+	left, ok := parseSemverLikeVersion(leftVersion)
+	if !ok {
+		return 0, false
+	}
+	right, ok := parseSemverLikeVersion(rightVersion)
+	if !ok {
+		return 0, false
+	}
+	return left.compare(right), true
+}
+
+type semverLikeVersion struct {
+	major      int
+	minor      int
+	patch      int
+	prerelease string
+}
+
+func parseSemverLikeVersion(raw string) (semverLikeVersion, bool) {
+	value := strings.TrimSpace(strings.TrimPrefix(raw, "v"))
+	if value == "" {
+		return semverLikeVersion{}, false
+	}
+	buildless, _, _ := strings.Cut(value, "+")
+	core := buildless
+	prerelease := ""
+	if beforePrerelease, suffix, found := strings.Cut(buildless, "-"); found {
+		core = beforePrerelease
+		prerelease = suffix
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return semverLikeVersion{}, false
+	}
+	major, ok := parseSemverNumericPart(parts[0])
+	if !ok {
+		return semverLikeVersion{}, false
+	}
+	minor, ok := parseSemverNumericPart(parts[1])
+	if !ok {
+		return semverLikeVersion{}, false
+	}
+	patch, ok := parseSemverNumericPart(parts[2])
+	if !ok {
+		return semverLikeVersion{}, false
+	}
+	return semverLikeVersion{
+		major:      major,
+		minor:      minor,
+		patch:      patch,
+		prerelease: prerelease,
+	}, true
+}
+
+func parseSemverNumericPart(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func (version semverLikeVersion) compare(other semverLikeVersion) int {
+	for _, cmp := range []int{
+		compareInts(version.major, other.major),
+		compareInts(version.minor, other.minor),
+		compareInts(version.patch, other.patch),
+	} {
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	switch {
+	case version.prerelease == "" && other.prerelease == "":
+		return 0
+	case version.prerelease == "":
+		return 1
+	case other.prerelease == "":
+		return -1
+	default:
+		return compareSemverPrerelease(version.prerelease, other.prerelease)
+	}
+}
+
+func compareSemverPrerelease(left string, right string) int {
+	leftParts := strings.Split(left, ".")
+	rightParts := strings.Split(right, ".")
+	limit := len(leftParts)
+	if len(rightParts) < limit {
+		limit = len(rightParts)
+	}
+	for i := 0; i < limit; i++ {
+		if cmp := compareSemverPrereleaseIdentifier(leftParts[i], rightParts[i]); cmp != 0 {
+			return cmp
+		}
+	}
+	return compareInts(len(leftParts), len(rightParts))
+}
+
+func compareSemverPrereleaseIdentifier(left string, right string) int {
+	leftNumber, leftIsNumber := parseSemverNumericPart(left)
+	rightNumber, rightIsNumber := parseSemverNumericPart(right)
+	switch {
+	case leftIsNumber && rightIsNumber:
+		return compareInts(leftNumber, rightNumber)
+	case leftIsNumber:
+		return -1
+	case rightIsNumber:
+		return 1
+	default:
+		return strings.Compare(left, right)
+	}
+}
+
+func compareInts(left int, right int) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func updateConfig(configPath string, pluginName string, marketplace string) error {
@@ -285,7 +590,11 @@ func ReadInstalledBinaryHint(codexHome string) string {
 	if strings.TrimSpace(codexHome) == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(PluginTargetDir(codexHome), binHintFilename))
+	return readBinaryHintFromPath(filepath.Join(PluginTargetDir(codexHome), binHintFilename))
+}
+
+func readBinaryHintFromPath(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}

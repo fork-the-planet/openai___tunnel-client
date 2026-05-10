@@ -22,24 +22,36 @@ is_executable_file() {
   [ -f "$1" ] && [ -x "$1" ]
 }
 
+search_binary_root() {
+  search_root=$1
+  for candidate in \
+    "$search_root/tunnel-client" \
+    "$search_root/tunnel-client.exe" \
+    "$search_root/bin/tunnel-client" \
+    "$search_root/bin/tunnel-client.exe" \
+    "$search_root/bazel-bin/cmd/client/client" \
+    "$search_root/bazel-bin/cmd/client/client.exe" \
+    "$search_root/bazel-bin/api/tunnel-client/cmd/client/client" \
+    "$search_root/bazel-bin/api/tunnel-client/cmd/client/client.exe"
+  do
+    if is_executable_file "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_tunnel_client_repo_root() {
+  [ -d "$1/cmd/client" ] || [ -d "$1/api/tunnel-client/cmd/client" ]
+}
+
 find_adjacent_binary() {
+  if search_binary_root "$plugin_root"; then
+    return 0
+  fi
   search_root=$plugin_root
   while [ -n "$search_root" ]; do
-    for candidate in \
-      "$search_root/tunnel-client" \
-      "$search_root/tunnel-client.exe" \
-      "$search_root/bin/tunnel-client" \
-      "$search_root/bin/tunnel-client.exe" \
-      "$search_root/bazel-bin/cmd/client/client" \
-      "$search_root/bazel-bin/cmd/client/client.exe" \
-      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client" \
-      "$search_root/bazel-bin/api/tunnel-client/cmd/client/client.exe"
-    do
-      if is_executable_file "$candidate"; then
-        printf '%s\n' "$candidate"
-        return 0
-      fi
-    done
     case "$search_root" in
       */*) parent=${search_root%/*} ;;
       *) parent=. ;;
@@ -49,6 +61,9 @@ find_adjacent_binary() {
     fi
     if [ "$parent" = "$search_root" ]; then
       break
+    fi
+    if is_tunnel_client_repo_root "$parent" && search_binary_root "$parent"; then
+      return 0
     fi
     search_root=$parent
   done
@@ -106,7 +121,7 @@ if [ -z "$tunnel_client_bin" ]; then
     path_candidate=$(command -v tunnel-client.exe 2>/dev/null || true)
   fi
   if [ -n "$path_candidate" ]; then
-    tunnel_client_bin=$path_candidate
+    append_attempt "PATH: found $path_candidate but ignored because .tunnel-client-bin is missing; set TUNNEL_CLIENT_BIN or pass --tunnel-client-bin to use it explicitly"
   else
     append_attempt "PATH: no tunnel-client executable found"
   fi
@@ -117,8 +132,9 @@ if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 Usage: tunnel_mcp <command> [args]
 
 Routes to native tunnel-client commands:
-  create|connect|list|status|stop|disconnect|rm
+  create|connect|list|status|stop|disconnect|rm|cleanup
   admin-profiles <subcommand>
+  diagnose [alias]
 
 All routed commands default to --json.
 EOF
@@ -130,7 +146,11 @@ case "$1" in
     shift
     set -- admin-profiles "$@"
     ;;
-  create|connect|list|status|stop|disconnect)
+  diagnose)
+    shift
+    set -- codex diagnose --plugin-root "$plugin_root" "$@"
+    ;;
+  create|connect|list|status|stop|disconnect|cleanup)
     command=$1
     shift
     set -- runtimes "$command" "$@"
@@ -140,7 +160,7 @@ case "$1" in
     set -- runtimes rm "$@"
     ;;
   *)
-    echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, or admin-profiles" >&2
+    echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, cleanup, diagnose, or admin-profiles" >&2
     exit 2
     ;;
 esac

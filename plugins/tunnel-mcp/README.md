@@ -20,6 +20,8 @@ surface so the plugin bundle always matches the binary version:
 
 ```bash
 tunnel-client codex plugin install
+tunnel-client codex status
+tunnel-client codex diagnose --json
 tunnel-client codex plugin uninstall
 ```
 
@@ -123,6 +125,8 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 test -f "$CODEX_HOME_DIR/plugins/cache/debug/tunnel-mcp/local/.codex-plugin/plugin.json"
 grep -A2 '^\[plugins\."tunnel-mcp@debug"\]' "$CODEX_HOME_DIR/config.toml"
 "$CODEX_HOME_DIR/plugins/cache/debug/tunnel-mcp/local/scripts/tunnel_mcp" --help
+tunnel-client codex status --json
+tunnel-client codex diagnose --json
 ```
 
 If the plugin is installed on disk but does not appear in the current Codex
@@ -144,7 +148,9 @@ Runtime prerequisites:
 
 - a `tunnel-client` binary discoverable in this order:
   `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, an installed bundle hint,
-  adjacent source/build outputs, then `PATH`
+  then adjacent source/build outputs. `PATH` candidates are reported in
+  diagnostics but are not executed unless explicitly selected with
+  `TUNNEL_CLIENT_BIN` or `--tunnel-client-bin`.
 - once the plugin is installed, prefer the installed router and persisted
   `.tunnel-client-bin` hint over an ambient `tunnel-client` on `PATH`
 - executable naming:
@@ -253,6 +259,8 @@ tunnel-client runtimes list
 tunnel-client runtimes status <alias>
 tunnel-client runtimes stop <alias>
 tunnel-client runtimes rm <alias>
+tunnel-client runtimes cleanup
+tunnel-client codex diagnose [alias]
 tunnel-client admin-profiles list
 tunnel-client admin-profiles set <name> --admin-key env:OPENAI_ADMIN_KEY
 ```
@@ -329,7 +337,8 @@ tunnel-client runtimes list --organization-id org_123
 
 `status` always reports local runtime state first. When admin auth is missing or
 the remote tunnel no longer exists, the output still includes local profile,
-health, explicit `ui_url`, tmux/process, and log diagnostics. `connect` also reuses a locally known
+health, explicit `ui_url`, tmux/process, Codex bridge, repair actions, and log
+diagnostics. `connect` also reuses a locally known
 tunnel id when remote admin lookup fails. `connect` success now means a usable
 local runtime exists: the managed process or tmux session is still alive, the
 health URL file is populated, and `/healthz` is reachable. The payload exposes
@@ -337,6 +346,18 @@ health URL file is populated, and `/healthz` is reachable. The payload exposes
 command issued" from "healthy tunnel runtime exists". If the runtime dies
 immediately or never becomes healthy, `connect` returns a non-zero JSON payload
 instead of claiming `started=true`.
+
+`status` reconciles stale alias state with live local admin UIs. If the saved
+health URL points at a dead port but another local admin UI reports the same
+control-plane tunnel id, status reports both the stale recorded URL and the live
+admin URL. It also surfaces `control_plane_poll_health` separately from local
+`/healthz` and `/readyz`, because local readiness can be green while
+control-plane polling fails through a dead proxy.
+
+Use `tunnel-client runtimes cleanup` to inventory local aliases as
+`live_runtime`, `valid_profile`, `missing_profile`, or `stale_alias`.
+`tunnel-client runtimes cleanup --apply` only removes entries classified as
+`stale_alias`; missing profiles are left for reconnect or manual review.
 
 `stop` and `disconnect` are local runtime controls only. They stop the managed
 tmux runtime or detached process, clear the local health URL file, and leave the

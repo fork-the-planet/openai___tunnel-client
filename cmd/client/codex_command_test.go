@@ -121,6 +121,70 @@ func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
 	require.Contains(t, stdout, `"email": "worker@example.com"`)
 }
 
+func TestCodexStatusJSONReportsMarketplaceInstallAndStaleConfig(t *testing.T) {
+	codexHome := t.TempDir()
+	pluginDir := writeMarketplacePluginFixture(t, codexHome, "example-marketplace", false)
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+
+[plugins."tunnel-mcp@debug"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "status", "--json")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, `"plugin_installed": true`)
+	require.Contains(t, stdout, `"plugin_key": "tunnel-mcp@example-marketplace"`)
+	require.Contains(t, stdout, `"plugin_marketplace": "example-marketplace"`)
+	require.Contains(t, stdout, `"plugin_dir": "`+pluginDir+`"`)
+	require.Contains(t, stdout, `"plugin_binary_hint_found": false`)
+	require.Contains(t, stdout, `"enabled_plugin_config_keys": [`)
+	require.Contains(t, stdout, `"tunnel-mcp@debug"`)
+	require.Contains(t, stdout, `"stale_plugin_config_entries": [`)
+	require.Contains(t, stdout, `no plugin manifest exists in the marketplace cache`)
+}
+
+func TestCodexDiagnoseJSONReportsPluginStateAndBridgeSeparately(t *testing.T) {
+	codexHome := t.TempDir()
+	pluginDir := writeMarketplacePluginFixture(t, codexHome, "example-marketplace", false)
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	profileDir := filepath.Join(t.TempDir(), "profiles")
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME":                codexHome,
+		"HOME":                      t.TempDir(),
+		"TUNNEL_CLIENT_STATE_DIR":   stateRoot,
+		"TUNNEL_CLIENT_PROFILE_DIR": profileDir,
+	}, "codex", "diagnose", "--plugin-root", pluginDir, "--json")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, `"loaded_plugin_source": "`+pluginDir+`"`)
+	require.Contains(t, stdout, `"enabled_plugin_config_keys": [`)
+	require.Contains(t, stdout, `"cache_path": "`+pluginDir+`"`)
+	require.Contains(t, stdout, `"plugin_binary_hint_path": "`+filepath.Join(pluginDir, ".tunnel-client-bin")+`"`)
+	require.Contains(t, stdout, `"plugin_binary_hint_found": false`)
+	require.Contains(t, stdout, `"state_root": "`+stateRoot+`"`)
+	require.Contains(t, stdout, `"profile_dir": "`+profileDir+`"`)
+	require.Contains(t, stdout, `"codex_bridge": {`)
+	require.Contains(t, stdout, `"app_server_supported": true`)
+	require.Contains(t, stdout, `"bridge_ready": true`)
+}
+
 func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 	codexHome := t.TempDir()
 	fakeTunnelClient := filepath.Join(t.TempDir(), "tunnel-client")
@@ -139,7 +203,8 @@ func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 	}, "codex", "status")
 
 	require.NoError(t, err, stderr)
-	require.Contains(t, stdout, "Tunnel MCP plugin:\n  Status: installed\n  Dir: "+codexplugin.PluginTargetDir(codexHome))
+	require.Contains(t, stdout, "Tunnel MCP plugin:\n  Status: installed")
+	require.Contains(t, stdout, "Dir: "+codexplugin.PluginTargetDir(codexHome))
 	require.Contains(t, stdout, "Binary hint: "+normalizedHint)
 	require.Contains(t, stdout, "Matches current tunnel-client: false")
 	require.Contains(t, stdout, "Reinstall plugin to use this binary: tunnel-client codex plugin install")
@@ -571,6 +636,21 @@ esac
 `, os.Args[0])
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
 	return scriptPath
+}
+
+func writeMarketplacePluginFixture(t *testing.T, codexHome string, marketplace string, withBinaryHint bool) string {
+	t.Helper()
+	pluginDir := codexplugin.PluginTargetDirFor(codexHome, marketplace, "tunnel-mcp", "0.1.0")
+	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, ".codex-plugin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".codex-plugin", "plugin.json"), []byte(`{"name":"tunnel-mcp"}`), 0o644))
+	if withBinaryHint {
+		fakeTunnelClient := filepath.Join(t.TempDir(), "tunnel-client")
+		require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+		normalizedHint, err := codexplugin.NormalizeBinaryPath(fakeTunnelClient)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".tunnel-client-bin"), []byte(normalizedHint+"\n"), 0o644))
+	}
+	return pluginDir
 }
 
 func marshalID(value any) string {

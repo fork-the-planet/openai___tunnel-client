@@ -25,6 +25,15 @@ Inspect, list, or stop managed local runtimes:
 - `tunnel-client runtimes status docs-mcp`
 - `tunnel-client runtimes stop docs-mcp`
 - `tunnel-client runtimes rm docs-mcp`
+- `tunnel-client runtimes cleanup`
+- `tunnel-client runtimes cleanup --apply`
 
 `connect` success means the local runtime is actually launched and health is
 reachable, not merely that a launch command was issued.
+
+`status` reports structured `repair_actions`, live-admin reconciliation when a
+stored health URL is stale, and `control_plane_poll_health` separately from
+local `/healthz` and `/readyz`.
+
+`cleanup --apply` only removes aliases classified as `stale_alias`. It leaves
+`live_runtime`, `valid_profile`, and `missing_profile` entries in place.

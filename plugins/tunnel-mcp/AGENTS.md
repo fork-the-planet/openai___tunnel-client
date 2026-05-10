@@ -1,5 +1,10 @@
 # Tunnel MCP Plugin Agent Instructions
 
+- This `api/tunnel-client/plugins/tunnel-mcp` path is the public-safe plugin
+  copy mirrored into the standalone `openai/tunnel-client` repo and exported by
+  `tunnel-client codex plugin export`.
+- Do not add internal package-manager wording, internal-repo install wording,
+  or internal marketplace/install references in this path.
 - Keep user-facing install and upgrade docs in `README.md` easy to follow from
   this repository root and from a standalone `tunnel-client` checkout.
 - Avoid referring to the larger repository structure in user-facing plugin

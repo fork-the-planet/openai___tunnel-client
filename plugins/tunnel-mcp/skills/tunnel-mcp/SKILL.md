@@ -31,7 +31,9 @@ Binary setup order:
 
 - first try the existing binary discovery path:
   `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, the installed bundle hint,
-  adjacent build outputs, then `PATH`
+  then adjacent build outputs. Ambient `PATH` candidates are diagnostics only
+  unless the user selected one explicitly with `TUNNEL_CLIENT_BIN` or
+  `--tunnel-client-bin`
 - when the plugin is already installed, prefer `scripts/tunnel_mcp ...` and the
   installed `.tunnel-client-bin` hint over `command -v tunnel-client`; ambient
   `PATH` can point at a different binary than the installed plugin bundle
@@ -66,6 +68,8 @@ Missing-binary response contract:
 Preferred install surfaces:
 
 - `tunnel-client codex plugin install` when the binary is available
+- `tunnel-client codex status` and `tunnel-client codex diagnose --json` for
+  marketplace/cache/config/router diagnostics
 - `tunnel-client codex plugin uninstall` when the installed plugin should be reset or removed
 - `./plugins/tunnel-mcp/scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client` from a source checkout
 - `sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client` from an exported plugin bundle root on macOS/Linux
@@ -116,6 +120,12 @@ Preferred install surfaces:
   and continue with scoped remote lookup or creation.
 - Treat stale local aliases as reportable for `status`. Do not silently create a
   replacement tunnel from `status`.
+- Use `tunnel-client runtimes cleanup` to classify inventory. Only
+  `tunnel-client runtimes cleanup --apply` removes entries classified as
+  `stale_alias`; do not remove `missing_profile` entries without user intent.
+- Surface `control_plane_poll_health` separately from `/healthz` and `/readyz`;
+  local readiness can be green while control-plane polling fails through a dead
+  proxy.
 
 ## Examples
 

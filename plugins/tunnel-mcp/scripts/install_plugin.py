@@ -9,7 +9,6 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 DEFAULT_MARKETPLACE = "debug"
 DEFAULT_VERSION = "local"
@@ -59,7 +58,7 @@ def default_source() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def resolve_codex_home(arg_value: Optional[str]) -> Path:
+def resolve_codex_home(arg_value: str | None) -> Path:
     if arg_value:
         return Path(arg_value).expanduser().resolve()
     env_value = os.environ.get("CODEX_HOME")
@@ -72,7 +71,7 @@ def tunnel_client_bin_hint_path(root: Path) -> Path:
     return root / BIN_HINT_FILENAME
 
 
-def read_tunnel_client_bin_hint(root: Path) -> Optional[Path]:
+def read_tunnel_client_bin_hint(root: Path) -> Path | None:
     hint_path = tunnel_client_bin_hint_path(root)
     if not hint_path.is_file():
         return None
@@ -115,7 +114,7 @@ def tunnel_client_bin_candidates(source: Path) -> list[Path]:
     return candidates
 
 
-def discover_tunnel_client_bin(source: Path, explicit: Optional[str]) -> Optional[Path]:
+def discover_tunnel_client_bin(source: Path, explicit: str | None) -> Path | None:
     if explicit and explicit.strip():
         return validate_tunnel_client_bin(explicit.strip(), field="--tunnel-client-bin")
 
@@ -199,9 +198,9 @@ def create_minimal_codex_manifest(source: Path, manifest_path: Path) -> None:
     manifest_path.write_text(json.dumps({"name": plugin_name}, indent=2) + "\n", encoding="utf-8")
 
 
-def split_sections(text: str) -> list[tuple[Optional[str], list[str]]]:
-    sections: list[tuple[Optional[str], list[str]]] = []
-    current_name: Optional[str] = None
+def split_sections(text: str) -> list[tuple[str | None, list[str]]]:
+    sections: list[tuple[str | None, list[str]]] = []
+    current_name: str | None = None
     current_lines: list[str] = []
 
     for line in text.splitlines():
@@ -216,7 +215,7 @@ def split_sections(text: str) -> list[tuple[Optional[str], list[str]]]:
     return sections
 
 
-def render_sections(sections: list[tuple[Optional[str], list[str]]]) -> str:
+def render_sections(sections: list[tuple[str | None, list[str]]]) -> str:
     rendered_chunks = []
     for _, lines in sections:
         chunk = "\n".join(lines).strip("\n")
@@ -243,8 +242,8 @@ def install_plugin(
     codex_home: Path,
     marketplace: str,
     *,
-    tunnel_client_bin: Optional[str] = None,
-) -> tuple[str, Path, Path, Optional[Path]]:
+    tunnel_client_bin: str | None = None,
+) -> tuple[str, Path, Path, Path | None]:
     if not source.is_dir():
         raise ValueError(f"plugin source path is not a directory: {source}")
 

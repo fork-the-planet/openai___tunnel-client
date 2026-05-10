@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/codexplugin/session"
 	pluginstate "go.openai.org/api/tunnel-client/pkg/codexplugin/state"
@@ -82,6 +85,16 @@ type AliasOptions struct {
 	AdminProfileName    string
 	AdminKeyRef         string
 	ControlPlaneBaseURL string
+}
+
+type CleanupOptions struct {
+	Apply bool
+}
+
+type RepairAction struct {
+	ID      string `json:"id"`
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
 }
 
 type effectiveAdminProfile struct {
@@ -513,6 +526,76 @@ func (m *Manager) ListRuntimes(opts ListOptions) (map[string]any, error) {
 	return payload, nil
 }
 
+func (m *Manager) CleanupInventory(opts CleanupOptions) (map[string]any, error) {
+	root := pluginstate.ResolveRoot(m.lookupEnv)
+	if err := pluginstate.EnsureDirs(root); err != nil {
+		return nil, err
+	}
+	aliases, err := pluginstate.LoadAliases(root)
+	if err != nil {
+		return nil, err
+	}
+	processes, err := pluginstate.LoadProcesses(root)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(aliases))
+	for name := range aliases {
+		names = append(names, name)
+	}
+	for name := range processes {
+		if _, ok := aliases[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	seen := map[string]bool{}
+	entries := make([]map[string]any, 0, len(names))
+	removed := []string{}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		record := aliases[name]
+		process := processes[name]
+		local := m.localRuntimeDetails(root, name, record, process)
+		classification := inventoryClassification(local, record, process)
+		entry := map[string]any{
+			"alias":           name,
+			"tunnel_id":       firstNonEmpty(record.TunnelID, process.TunnelID),
+			"classification":  classification,
+			"profile":         local["profile"],
+			"runtime_state":   local["runtime_state"],
+			"live_runtime":    local["live_admin_ui"],
+			"cleanup_safe":    classification == "stale_alias",
+			"cleanup_command": "tunnel-client runtimes cleanup --apply",
+		}
+		entries = append(entries, entry)
+		if opts.Apply && classification == "stale_alias" {
+			delete(aliases, name)
+			delete(processes, name)
+			removed = append(removed, name)
+			_ = pluginstate.AppendHistory(root, "cleanup", name, firstNonEmpty(record.TunnelID, process.TunnelID), "removed stale local alias/process metadata")
+		}
+	}
+	if opts.Apply {
+		if err := pluginstate.SaveAliases(root, aliases); err != nil {
+			return nil, err
+		}
+		if err := pluginstate.SaveProcesses(root, processes); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{
+		"state_root": root.Path,
+		"apply":      opts.Apply,
+		"entries":    entries,
+		"removed":    removed,
+		"next_steps": []string{"Review entries with classification=stale_alias, then run `tunnel-client runtimes cleanup --apply` to remove only stale local alias/process metadata."},
+	}, nil
+}
+
 func (m *Manager) Status(opts AliasOptions) (map[string]any, error) {
 	root := pluginstate.ResolveRoot(m.lookupEnv)
 	alias, err := pluginstate.NormalizeAlias(opts.Alias)
@@ -867,6 +950,7 @@ func (m *Manager) newAdminClient(adminProfile effectiveAdminProfile, keyRef stri
 
 func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adminapi.Tunnel, adminProfile effectiveAdminProfile, record pluginstate.AliasRecord, process pluginstate.ProcessRecord, launch session.LaunchResult, remoteErr string) map[string]any {
 	local := m.localRuntimeDetails(root, alias, record, process)
+	effectiveHealth := local["effective_health"].(map[string]any)
 	payload := map[string]any{
 		"alias":              alias,
 		"tunnel":             tunnelToMap(tunnel),
@@ -881,8 +965,8 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 		"health_url":         local["health"].(map[string]any)["url"],
 		"ui_url":             local["health"].(map[string]any)["ui"],
 		"runtime_state":      local["runtime_state"],
-		"healthy":            launch.Healthy,
-		"ready":              launch.Ready,
+		"healthy":            effectiveHealth["healthz"].(map[string]any)["ok"],
+		"ready":              effectiveHealth["readyz"].(map[string]any)["ok"],
 		"launched":           launch.Launched,
 		"mode":               launch.Mode,
 		"command":            launch.Command,
@@ -896,6 +980,7 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 		"process_running":    local["process_running"],
 		"process":            processToMap(process),
 		"local":              local,
+		"repair_actions":     repairActions(alias, record, process, local, remoteErr),
 		"next_steps":         []string{doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true)},
 	}
 	if launch.PID > 0 {
@@ -909,36 +994,40 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 
 func (m *Manager) statusPayload(root pluginstate.Root, alias string, record pluginstate.AliasRecord, process pluginstate.ProcessRecord, adminProfile effectiveAdminProfile, remote *adminapi.Tunnel, stale bool, errorText string, attempted bool, authKind string, authRef string, skippedReason string) map[string]any {
 	local := m.localRuntimeDetails(root, alias, record, process)
+	effectiveHealth := local["effective_health"].(map[string]any)
+	actions := repairActions(alias, record, process, local, errorText)
 	payload := map[string]any{
-		"alias":                   alias,
-		"tunnel_id":               record.TunnelID,
-		"admin_profile":           adminProfile.Name,
-		"admin_profile_path":      adminProfile.Path,
-		"remote":                  nil,
-		"stale":                   stale,
-		"error":                   errorText,
-		"remote_error":            errorText,
-		"repair_command":          repairCommand(alias, record, process),
-		"config_path":             record.ConfigPath,
-		"profile_name":            record.ProfileName,
-		"profile_dir":             record.ProfileDir,
-		"profile_path":            record.ProfilePath,
-		"profile_exists":          local["profile"].(map[string]any)["exists"],
-		"health_url_file":         record.HealthURLFile,
-		"health_url":              local["health"].(map[string]any)["url"],
-		"ui_url":                  local["health"].(map[string]any)["ui"],
-		"runtime_state":           local["runtime_state"],
-		"healthy":                 local["health"].(map[string]any)["healthz"].(map[string]any)["ok"],
-		"ready":                   local["health"].(map[string]any)["readyz"].(map[string]any)["ok"],
-		"remote_lookup_attempted": attempted,
-		"remote_lookup_auth_kind": authKind,
-		"remote_lookup_auth_ref":  authRef,
-		"remote_skipped_reason":   skippedReason,
-		"tmux":                    local["tmux"],
-		"process_running":         local["process_running"],
-		"process":                 nil,
-		"local":                   local,
-		"next_steps":              []string{doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true), repairCommand(alias, record, process), "tunnel-client runtimes status " + alias},
+		"alias":                     alias,
+		"tunnel_id":                 record.TunnelID,
+		"admin_profile":             adminProfile.Name,
+		"admin_profile_path":        adminProfile.Path,
+		"remote":                    nil,
+		"stale":                     stale,
+		"error":                     errorText,
+		"remote_error":              errorText,
+		"repair_command":            repairCommand(alias, record, process),
+		"repair_actions":            actions,
+		"config_path":               record.ConfigPath,
+		"profile_name":              record.ProfileName,
+		"profile_dir":               record.ProfileDir,
+		"profile_path":              record.ProfilePath,
+		"profile_exists":            local["profile"].(map[string]any)["exists"],
+		"health_url_file":           record.HealthURLFile,
+		"health_url":                local["health"].(map[string]any)["url"],
+		"ui_url":                    local["health"].(map[string]any)["ui"],
+		"runtime_state":             local["runtime_state"],
+		"healthy":                   effectiveHealth["healthz"].(map[string]any)["ok"],
+		"ready":                     effectiveHealth["readyz"].(map[string]any)["ok"],
+		"control_plane_poll_health": local["control_plane_poll_health"],
+		"remote_lookup_attempted":   attempted,
+		"remote_lookup_auth_kind":   authKind,
+		"remote_lookup_auth_ref":    authRef,
+		"remote_skipped_reason":     skippedReason,
+		"tmux":                      local["tmux"],
+		"process_running":           local["process_running"],
+		"process":                   nil,
+		"local":                     local,
+		"next_steps":                nextStepCommands(actions, doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true), "tunnel-client runtimes status "+alias),
 	}
 	if remote != nil {
 		payload["remote"] = tunnelToMap(*remote)
@@ -960,6 +1049,13 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 	health := pathDetails(healthURLFile)
 	rawHealthURL := session.ReadHealthURL(healthURLFile)
 	probe := session.ProbeHealthEndpoints(rawHealthURL)
+	liveAdmin := m.findLiveAdminUI(root, firstNonEmpty(record.TunnelID, process.TunnelID), session.NormalizeHealthBaseURL(rawHealthURL))
+	effectiveProbe := probe
+	if !probe.Healthz.OK {
+		if liveURL := stringValue(liveAdmin["base_url"]); liveURL != "" {
+			effectiveProbe = session.ProbeHealthEndpoints(liveURL)
+		}
+	}
 	health["raw_url"] = rawHealthURL
 	health["base_url"] = probe.BaseURL
 	health["url"] = probe.Healthz.URL
@@ -970,6 +1066,13 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 	}
 	health["healthz"] = endpointToMap(probe.Healthz)
 	health["readyz"] = endpointToMap(probe.Readyz)
+	effectiveHealth := map[string]any{
+		"base_url": effectiveProbe.BaseURL,
+		"url":      effectiveProbe.Healthz.URL,
+		"ui":       uiURLFromBase(effectiveProbe.BaseURL),
+		"healthz":  endpointToMap(effectiveProbe.Healthz),
+		"readyz":   endpointToMap(effectiveProbe.Readyz),
+	}
 
 	profile := pathDetails(profilePath)
 	profile["name"] = profileName
@@ -987,8 +1090,9 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 	if process.Mode == "tmux" && tmuxRunning {
 		reportedProcessRunning = true
 	}
+	controlPlanePollHealth := controlPlanePollHealthFromLiveAdmin(liveAdmin)
 	return map[string]any{
-		"runtime_state": runtimeState(runtimeRunning, probe),
+		"runtime_state": runtimeState(runtimeRunning || boolValue(liveAdmin["found"]), effectiveProbe),
 		"issues": localIssues(
 			process,
 			tmuxRunning,
@@ -996,10 +1100,15 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 			profile["exists"].(bool),
 			health,
 			log["exists"].(bool),
+			liveAdmin,
+			controlPlanePollHealth,
 		),
-		"profile": profile,
-		"health":  health,
-		"log":     log,
+		"profile":                   profile,
+		"health":                    health,
+		"effective_health":          effectiveHealth,
+		"live_admin_ui":             liveAdmin,
+		"control_plane_poll_health": controlPlanePollHealth,
+		"log":                       log,
 		"tmux": map[string]any{
 			"session_name": tmuxSession,
 			"running":      tmuxRunning,
@@ -1341,7 +1450,105 @@ func runtimeState(runtimeRunning bool, probe session.HealthProbe) string {
 	return "starting"
 }
 
-func localIssues(process pluginstate.ProcessRecord, tmuxRunning bool, processRunning bool, profileExists bool, health map[string]any, logExists bool) []string {
+func (m *Manager) findLiveAdminUI(root pluginstate.Root, tunnelID string, staleBaseURL string) map[string]any {
+	result := map[string]any{"found": false}
+	healthDir := filepath.Join(root.Path, "health")
+	entries, err := os.ReadDir(healthDir)
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".url") {
+			continue
+		}
+		path := filepath.Join(healthDir, entry.Name())
+		rawURL := session.ReadHealthURL(path)
+		baseURL := session.NormalizeHealthBaseURL(rawURL)
+		if baseURL == "" || baseURL == staleBaseURL {
+			continue
+		}
+		status, statusErr := fetchAdminJSON(baseURL, "/api/status")
+		if statusErr != nil {
+			continue
+		}
+		statusTunnelID := stringValue(status["control_plane_tunnel_id"])
+		if tunnelID != "" && statusTunnelID != tunnelID {
+			continue
+		}
+		system, _ := fetchAdminJSON(baseURL, "/api/system")
+		result = map[string]any{
+			"found":                  true,
+			"base_url":               baseURL,
+			"ui_url":                 uiURLFromBase(baseURL),
+			"source_health_url_file": path,
+			"match_reason":           "control_plane_tunnel_id",
+			"status":                 status,
+			"system":                 system,
+		}
+		return result
+	}
+	return result
+}
+
+func fetchAdminJSON(baseURL string, path string) (map[string]any, error) {
+	url := strings.TrimRight(baseURL, "/") + path
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func controlPlanePollHealthFromLiveAdmin(liveAdmin map[string]any) map[string]any {
+	system, _ := liveAdmin["system"].(map[string]any)
+	if system == nil {
+		return map[string]any{"state": "unknown", "reason": "no live admin UI system snapshot"}
+	}
+	raw, _ := system["proxy_health"].([]any)
+	for _, item := range raw {
+		summary, _ := item.(map[string]any)
+		route, _ := summary["route"].(map[string]any)
+		if stringValue(route["kind"]) != "control_plane" {
+			continue
+		}
+		return map[string]any{
+			"state":        firstNonEmpty(stringValue(summary["health_state"]), "unknown"),
+			"route":        route,
+			"last_check":   summary["last_check"],
+			"last_success": summary["last_success"],
+			"history":      summary["history"],
+		}
+	}
+	status, _ := liveAdmin["status"].(map[string]any)
+	if status != nil && status["control_plane_route"] != nil {
+		return map[string]any{
+			"state":  "unknown",
+			"route":  status["control_plane_route"],
+			"reason": "route is present but proxy health snapshot did not report reachability",
+		}
+	}
+	return map[string]any{"state": "unknown", "reason": "control-plane route health is not available"}
+}
+
+func uiURLFromBase(baseURL string) string {
+	if strings.TrimSpace(baseURL) == "" {
+		return ""
+	}
+	return strings.TrimRight(baseURL, "/") + "/ui"
+}
+
+func localIssues(process pluginstate.ProcessRecord, tmuxRunning bool, processRunning bool, profileExists bool, health map[string]any, logExists bool, liveAdmin map[string]any, controlPlanePollHealth map[string]any) []string {
 	issues := []string{}
 	if process.Mode == "tmux" && process.SessionName != "" && !tmuxRunning {
 		issues = append(issues, "recorded tmux session is not running")
@@ -1380,7 +1587,101 @@ func localIssues(process pluginstate.ProcessRecord, tmuxRunning bool, processRun
 	if process.LogPath != "" && (!tmuxRunning && !processRunning) && logExists {
 		issues = append(issues, "runtime log exists but no active runtime is running")
 	}
+	if boolValue(liveAdmin["found"]) && !boolValue(healthz["ok"]) {
+		issues = append(issues, "recorded health URL looks stale; live admin UI was found at "+stringValue(liveAdmin["base_url"]))
+	}
+	if state := stringValue(controlPlanePollHealth["state"]); state != "" && state != "unknown" && state != "healthy" && state != "direct" {
+		issues = append(issues, "control-plane poll route health is "+state)
+	}
 	return issues
+}
+
+func repairActions(alias string, record pluginstate.AliasRecord, process pluginstate.ProcessRecord, local map[string]any, remoteErr string) []RepairAction {
+	actions := []RepairAction{}
+	profile, _ := local["profile"].(map[string]any)
+	health, _ := local["health"].(map[string]any)
+	liveAdmin, _ := local["live_admin_ui"].(map[string]any)
+	pollHealth, _ := local["control_plane_poll_health"].(map[string]any)
+	if profile != nil && !boolValue(profile["exists"]) {
+		actions = append(actions, RepairAction{
+			ID:      "reconnect_missing_profile",
+			Command: repairCommand(alias, record, process),
+			Reason:  "the recorded runtime profile is missing, so reconnecting rewrites the profile and relaunches the managed runtime",
+		})
+	}
+	if process.Alias == "" || stringValue(local["runtime_state"]) == "stopped" {
+		actions = append(actions, RepairAction{
+			ID:      "start_runtime",
+			Command: repairCommand(alias, record, process),
+			Reason:  "no managed runtime is currently running for this alias",
+		})
+	}
+	if boolValue(liveAdmin["found"]) {
+		if healthz, _ := health["healthz"].(map[string]any); healthz != nil && !boolValue(healthz["ok"]) {
+			actions = append(actions, RepairAction{
+				ID:      "refresh_stale_health_url",
+				Command: "tunnel-client runtimes connect --alias " + alias,
+				Reason:  "the recorded health URL is stale but a live admin UI for the same tunnel was found",
+			})
+		}
+	}
+	if state := stringValue(pollHealth["state"]); state != "" && state != "unknown" && state != "healthy" && state != "direct" {
+		actions = append(actions, RepairAction{
+			ID:      "repair_control_plane_proxy",
+			Command: doctorCommand(firstNonEmpty(process.ProfileName, record.ProfileName), firstNonEmpty(process.ProfileDir, record.ProfileDir), firstNonEmpty(process.ConfigPath, record.ConfigPath), true),
+			Reason:  "local /healthz and /readyz can be green while the control-plane poll route is unhealthy through the configured proxy",
+		})
+	}
+	if strings.TrimSpace(remoteErr) != "" {
+		actions = append(actions, RepairAction{
+			ID:      "check_remote_tunnel",
+			Command: "tunnel-client runtimes status " + alias + " --json",
+			Reason:  "the remote tunnel lookup returned an error and should be rechecked with the current runtime/admin credentials",
+		})
+	}
+	if len(actions) == 0 {
+		actions = append(actions, RepairAction{
+			ID:      "inspect",
+			Command: "tunnel-client runtimes status " + alias + " --json",
+			Reason:  "no immediate local repair was detected; rerun status for the freshest structured state",
+		})
+	}
+	return actions
+}
+
+func nextStepCommands(actions []RepairAction, extras ...string) []string {
+	out := make([]string, 0, len(actions)+len(extras))
+	seen := map[string]bool{}
+	for _, action := range actions {
+		if action.Command != "" && !seen[action.Command] {
+			out = append(out, action.Command)
+			seen[action.Command] = true
+		}
+	}
+	for _, extra := range extras {
+		if strings.TrimSpace(extra) != "" && !seen[extra] {
+			out = append(out, extra)
+			seen[extra] = true
+		}
+	}
+	return out
+}
+
+func inventoryClassification(local map[string]any, record pluginstate.AliasRecord, process pluginstate.ProcessRecord) string {
+	if live, _ := local["live_admin_ui"].(map[string]any); boolValue(live["found"]) || boolValue(local["process_running"]) {
+		return "live_runtime"
+	}
+	profile, _ := local["profile"].(map[string]any)
+	if profile != nil && boolValue(profile["exists"]) {
+		return "valid_profile"
+	}
+	if profile != nil && (stringValue(profile["path"]) != "" || stringValue(profile["name"]) != "") {
+		return "missing_profile"
+	}
+	if record.Alias != "" || process.Alias != "" {
+		return "stale_alias"
+	}
+	return "stale_alias"
 }
 
 func hasRemoteScope(organizationIDs, workspaceIDs []string, tenantID string) bool {

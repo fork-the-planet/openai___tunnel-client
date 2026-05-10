@@ -24,6 +24,14 @@ def _write_fake_tunnel_client(path: pathlib.Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _write_sleeping_tunnel_client(path: pathlib.Path) -> None:
+    path.write_text(
+        "#!/bin/sh\nsleep 30\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def _make_isolated_plugin_root(tmp_path: pathlib.Path) -> pathlib.Path:
     plugin_root = tmp_path / "plugin"
     scripts_dir = plugin_root / "scripts"
@@ -145,6 +153,8 @@ class TunnelMCPRouterTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("admin-profiles", result.stdout)
         self.assertIn("rm", result.stdout)
+        self.assertIn("diagnose", result.stdout)
+        self.assertIn("cleanup", result.stdout)
 
     def test_router_uses_tunnel_client_bin_env_var(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +205,110 @@ class TunnelMCPRouterTest(unittest.TestCase):
             self.assertIn("go build -o bin/tunnel-client.exe ./cmd/client", result.stderr)
             self.assertIn("tunnel-client.exe", result.stderr)
             self.assertIn("does not auto-download, auto-clone, or auto-run", result.stderr)
+
+    def test_missing_hint_does_not_execute_ambient_path_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            bin_dir = tmp_path / "pathdir"
+            bin_dir.mkdir()
+            shim = bin_dir / "tunnel-client"
+            _write_sleeping_tunnel_client(shim)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["list"],
+                {"PATH": str(bin_dir)},
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("PATH: found", result.stderr)
+            self.assertIn("ignored because .tunnel-client-bin is missing", result.stderr)
+
+    def test_missing_hint_ignores_ancestor_bin_without_repo_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = tmp_path / "root" / "nested" / "plugin"
+            scripts_dir = plugin_root / "scripts"
+            scripts_dir.mkdir(parents=True)
+            shutil.copy2(ENTRYPOINT, scripts_dir / "tunnel_mcp")
+            (scripts_dir / "tunnel_mcp").chmod(
+                (scripts_dir / "tunnel_mcp").stat().st_mode | stat.S_IXUSR
+            )
+
+            ancestor_bin_dir = tmp_path / "root" / "bin"
+            ancestor_bin_dir.mkdir(parents=True)
+            ancestor_bin = ancestor_bin_dir / "tunnel-client"
+            _write_sleeping_tunnel_client(ancestor_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["list"],
+                {"PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("adjacent build outputs:", result.stderr)
+            self.assertIn("PATH: no tunnel-client executable found", result.stderr)
+
+    def test_missing_hint_accepts_repo_root_adjacent_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            repo_root = tmp_path / "repo"
+            plugin_root = repo_root / "plugins" / "tunnel-mcp"
+            scripts_dir = plugin_root / "scripts"
+            scripts_dir.mkdir(parents=True)
+            shutil.copy2(ENTRYPOINT, scripts_dir / "tunnel_mcp")
+            (scripts_dir / "tunnel_mcp").chmod(
+                (scripts_dir / "tunnel_mcp").stat().st_mode | stat.S_IXUSR
+            )
+            (repo_root / "api" / "tunnel-client" / "cmd" / "client").mkdir(parents=True)
+
+            output_path = tmp_path / "args.json"
+            fake_bin = repo_root / "bin" / "tunnel-client"
+            fake_bin.parent.mkdir(parents=True)
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["status", "docs-mcp"],
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path), "PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_output_args(output_path, ["runtimes", "status", "docs-mcp", "--json"])
+
+    def test_router_forwards_diagnose_to_codex_command_with_plugin_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            output_path = tmp_path / "args.json"
+            fake_bin = tmp_path / "tunnel-client"
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                [
+                    "--tunnel-client-bin",
+                    str(fake_bin),
+                    "diagnose",
+                    "docs-mcp",
+                ],
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_output_args(
+                output_path,
+                [
+                    "codex",
+                    "diagnose",
+                    "--plugin-root",
+                    str(plugin_root),
+                    "docs-mcp",
+                    "--json",
+                ],
+            )
 
     def test_adjacent_windows_style_exe_name_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -183,6 +183,37 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 	listCmd.Flags().StringVar(&listTenantID, "tenant-id", "", "Tenant scope for remote listing")
 	cmd.AddCommand(listCmd)
 
+	var cleanupApply bool
+	cleanupCmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Inspect and optionally remove stale local runtime alias metadata",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			payload, err := manager.CleanupInventory(codexplugin.CleanupOptions{Apply: cleanupApply})
+			if err != nil {
+				return err
+			}
+			if common.jsonOutput {
+				return writeJSON(cmd.OutOrStdout(), payload)
+			}
+			entries, _ := payload["entries"].([]map[string]any)
+			if len(entries) == 0 {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "No runtime aliases found in %s\n", payload["state_root"])
+				return err
+			}
+			for _, entry := range entries {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", entry["alias"], entry["classification"], entry["tunnel_id"]); err != nil {
+					return err
+				}
+			}
+			if !cleanupApply {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "Dry run only. Re-run with --apply to remove entries classified as stale_alias.")
+			}
+			return err
+		},
+	}
+	cleanupCmd.Flags().BoolVar(&cleanupApply, "apply", false, "Remove only entries classified as stale_alias")
+	cmd.AddCommand(cleanupCmd)
+
 	statusCmd := &cobra.Command{
 		Use:   "status <alias>",
 		Short: "Inspect a local alias and its runtime state",

@@ -90,6 +90,116 @@ func TestDetectReportsInstalledBinaryHint(t *testing.T) {
 	require.Equal(t, normalized, detection.PluginBinaryHint)
 }
 
+func TestDetectReportsMarketplaceInstalledBundle(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+	pluginDir := PluginTargetDirFor(codexHome, "example-marketplace", "tunnel-mcp", "0.1.0")
+	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, ".codex-plugin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".codex-plugin", "plugin.json"), []byte(`{"name":"tunnel-mcp"}`), 0o644))
+	tunnelClientBin := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(tunnelClientBin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	normalized, err := NormalizeBinaryPath(tunnelClientBin)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".tunnel-client-bin"), []byte(normalized+"\n"), 0o644))
+
+	detection := Detect(func(key string) (string, bool) {
+		if key == "CODEX_HOME" {
+			return codexHome, true
+		}
+		return "", false
+	})
+
+	require.True(t, detection.PluginInstalled)
+	require.Equal(t, "tunnel-mcp@example-marketplace", detection.PluginKey)
+	require.Equal(t, "example-marketplace", detection.PluginMarketplace)
+	require.Equal(t, "0.1.0", detection.PluginVersion)
+	require.Equal(t, pluginDir, detection.PluginDir)
+	require.Equal(t, normalized, detection.PluginBinaryHint)
+	require.True(t, detection.PluginBinaryHintFound)
+	require.Equal(t, []string{"tunnel-mcp@example-marketplace"}, detection.EnabledConfigKeys)
+	require.Empty(t, detection.StaleConfigEntries)
+}
+
+func TestDetectPrefersHighestSemverMarketplaceBundle(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+
+	for _, version := range []string{"0.9.0", "0.10.0"} {
+		pluginDir := PluginTargetDirFor(codexHome, "example-marketplace", "tunnel-mcp", version)
+		require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, ".codex-plugin"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".codex-plugin", "plugin.json"), []byte(`{"name":"tunnel-mcp"}`), 0o644))
+	}
+
+	detection := Detect(func(key string) (string, bool) {
+		if key == "CODEX_HOME" {
+			return codexHome, true
+		}
+		return "", false
+	})
+
+	require.True(t, detection.PluginInstalled)
+	require.Equal(t, "0.10.0", detection.PluginVersion)
+	require.Equal(t, PluginTargetDirFor(codexHome, "example-marketplace", "tunnel-mcp", "0.10.0"), detection.PluginDir)
+}
+
+func TestDetectFlagsStalePluginConfigEntry(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+
+	detection := Detect(func(key string) (string, bool) {
+		if key == "CODEX_HOME" {
+			return codexHome, true
+		}
+		return "", false
+	})
+
+	require.False(t, detection.PluginInstalled)
+	require.Len(t, detection.StaleConfigEntries, 1)
+	require.Equal(t, "tunnel-mcp@example-marketplace", detection.StaleConfigEntries[0].Key)
+	require.Contains(t, detection.StaleConfigEntries[0].Reason, "no plugin manifest")
+}
+
+func TestDetectInstalledBundleMissingBinaryHint(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	config := `[plugins."tunnel-mcp@example-marketplace"]
+enabled = true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644))
+	pluginDir := PluginTargetDirFor(codexHome, "example-marketplace", "tunnel-mcp", "0.1.0")
+	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, ".codex-plugin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, ".codex-plugin", "plugin.json"), []byte(`{"name":"tunnel-mcp"}`), 0o644))
+
+	detection := Detect(func(key string) (string, bool) {
+		if key == "CODEX_HOME" {
+			return codexHome, true
+		}
+		return "", false
+	})
+
+	require.True(t, detection.PluginInstalled)
+	require.Equal(t, pluginDir, detection.PluginDir)
+	require.Empty(t, detection.PluginBinaryHint)
+	require.False(t, detection.PluginBinaryHintFound)
+	require.Equal(t, filepath.Join(pluginDir, ".tunnel-client-bin"), detection.PluginBinaryHintPath)
+}
+
 func TestInstallNormalizesSymlinkedBinaryHint(t *testing.T) {
 	t.Parallel()
 

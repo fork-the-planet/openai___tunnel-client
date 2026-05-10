@@ -93,7 +93,7 @@ func TestBuildTunnelMCPPromptContextSelectsRuntimeGuidanceForInstalledPlugin(t *
 	)
 	requirePluginOmitsAll(t, text,
 		"tunnel-client sessions",
-		"oaipkg",
+		"oai"+"pkg",
 		"Bazel",
 	)
 }

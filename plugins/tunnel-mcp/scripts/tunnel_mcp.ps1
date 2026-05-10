@@ -44,6 +44,14 @@ function Find-AdjacentBinary {
     return $null
 }
 
+function Rest-Args {
+    param([object[]]$Values)
+    if (-not $Values -or $Values.Count -le 1) {
+        return @()
+    }
+    return @($Values[1..($Values.Count - 1)])
+}
+
 if ($args.Count -ge 1 -and $args[0] -eq "--tunnel-client-bin") {
     if ($args.Count -lt 2) {
         [Console]::Error.WriteLine("error: --tunnel-client-bin requires a value")
@@ -100,7 +108,7 @@ if (-not $TunnelClientBin) {
         }
     }
     if ($PathCandidate) {
-        $TunnelClientBin = $PathCandidate
+        Add-Attempt "PATH: found $PathCandidate but ignored because .tunnel-client-bin is missing; set TUNNEL_CLIENT_BIN or pass --tunnel-client-bin to use it explicitly"
     } else {
         Add-Attempt "PATH: no tunnel-client executable found"
     }
@@ -111,8 +119,9 @@ if ($args.Count -eq 0 -or $args[0] -in @("-h", "--help")) {
 Usage: tunnel_mcp <command> [args]
 
 Routes to native tunnel-client commands:
-  create|connect|list|status|stop|disconnect|rm
+  create|connect|list|status|stop|disconnect|rm|cleanup
   admin-profiles <subcommand>
+  diagnose [alias]
 
 All routed commands default to --json.
 "@ | Write-Output
@@ -122,18 +131,20 @@ All routed commands default to --json.
 $RoutedArgs = @()
 switch ($args[0]) {
     "admin-profiles" {
-        $RoutedArgs = @("admin-profiles") + $args[1..($args.Count - 1)]
+        $RoutedArgs = @("admin-profiles") + (Rest-Args $args)
     }
-    "create" { $RoutedArgs = @("runtimes", "create") + $args[1..($args.Count - 1)] }
-    "connect" { $RoutedArgs = @("runtimes", "connect") + $args[1..($args.Count - 1)] }
-    "list" { $RoutedArgs = @("runtimes", "list") + $args[1..($args.Count - 1)] }
-    "status" { $RoutedArgs = @("runtimes", "status") + $args[1..($args.Count - 1)] }
-    "stop" { $RoutedArgs = @("runtimes", "stop") + $args[1..($args.Count - 1)] }
-    "disconnect" { $RoutedArgs = @("runtimes", "disconnect") + $args[1..($args.Count - 1)] }
-    "rm" { $RoutedArgs = @("runtimes", "rm") + $args[1..($args.Count - 1)] }
-    "remove" { $RoutedArgs = @("runtimes", "rm") + $args[1..($args.Count - 1)] }
+    "diagnose" { $RoutedArgs = @("codex", "diagnose", "--plugin-root", $PluginRoot) + (Rest-Args $args) }
+    "create" { $RoutedArgs = @("runtimes", "create") + (Rest-Args $args) }
+    "connect" { $RoutedArgs = @("runtimes", "connect") + (Rest-Args $args) }
+    "list" { $RoutedArgs = @("runtimes", "list") + (Rest-Args $args) }
+    "status" { $RoutedArgs = @("runtimes", "status") + (Rest-Args $args) }
+    "stop" { $RoutedArgs = @("runtimes", "stop") + (Rest-Args $args) }
+    "disconnect" { $RoutedArgs = @("runtimes", "disconnect") + (Rest-Args $args) }
+    "cleanup" { $RoutedArgs = @("runtimes", "cleanup") + (Rest-Args $args) }
+    "rm" { $RoutedArgs = @("runtimes", "rm") + (Rest-Args $args) }
+    "remove" { $RoutedArgs = @("runtimes", "rm") + (Rest-Args $args) }
     default {
-        [Console]::Error.WriteLine("unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, or admin-profiles")
+        [Console]::Error.WriteLine("unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, cleanup, diagnose, or admin-profiles")
         exit 2
     }
 }
