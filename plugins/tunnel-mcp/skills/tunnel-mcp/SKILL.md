@@ -10,6 +10,19 @@ tunnels through `tunnel-client`. The plugin entrypoint is a thin router onto
 the public native `tunnel-client runtimes ...` and
 `tunnel-client admin-profiles ...` command trees.
 
+When the `tunnel-mcp` MCP app tools are available, use them first instead of
+manual shell routing:
+
+- `install_or_select_tunnel_client`
+- `create_tunnel_runtime`
+- `connect_stdio_mcp`
+- `runtime_status`
+- `stop_runtime`
+
+The app tools are an operator surface over native `tunnel-client`; they
+orchestrate `tunnel-client runtimes ...`, normalize structured output, and keep
+tunnel protocol/runtime behavior in the Go binary.
+
 Before acting, consult only the smallest relevant reference under `references/`:
 
 - `references/binary.md`: how to find or obtain a public-safe `tunnel-client` binary

@@ -17,6 +17,7 @@
     "tunnel-service"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Tunnel MCP",
     "shortDescription": "Manage tunnel-client MCP tunnels from a source checkout or installed bundle.",

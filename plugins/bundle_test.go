@@ -226,12 +226,14 @@ func TestTunnelMCPExportToDirIncludesSkillReferences(t *testing.T) {
 	}
 
 	for _, rel := range []string{
+		".mcp.json",
 		"skills/tunnel-mcp/references/binary.md",
 		"skills/tunnel-mcp/references/setup-and-install.md",
 		"skills/tunnel-mcp/references/profiles-state-and-keys.md",
 		"skills/tunnel-mcp/references/runtime-flows.md",
 		"skills/tunnel-mcp/references/troubleshooting.md",
 		"assets/tunnel-mcp-logo.png",
+		"mcp/server.cjs",
 		"scripts/Install-Plugin.ps1",
 		"scripts/install_plugin.sh",
 		"scripts/tunnel_mcp.cmd",
@@ -260,6 +262,7 @@ func TestBundledCodexPluginManifestPointsAtBundledSkillDir(t *testing.T) {
 		Keywords    []string          `json:"keywords"`
 		Interface   interfaceManifest `json:"interface"`
 		Description string            `json:"description"`
+		MCPServers  string            `json:"mcpServers"`
 	}
 
 	data, err := embeddedPluginFiles.ReadFile("tunnel-mcp/.codex-plugin/plugin.json")
@@ -283,6 +286,9 @@ func TestBundledCodexPluginManifestPointsAtBundledSkillDir(t *testing.T) {
 	}
 	if parsed.Skills != "./skills/" {
 		t.Fatalf("unexpected skills path %q", parsed.Skills)
+	}
+	if parsed.MCPServers != "./.mcp.json" {
+		t.Fatalf("unexpected mcpServers path %q", parsed.MCPServers)
 	}
 	if parsed.Interface.DisplayName != "Tunnel MCP" {
 		t.Fatalf("unexpected display name %q", parsed.Interface.DisplayName)

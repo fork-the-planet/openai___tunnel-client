@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 
-PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[1]
+PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[2] / "tunnel-mcp"
 ENTRYPOINT = PLUGIN_ROOT / "scripts" / "tunnel_mcp"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 

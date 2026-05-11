@@ -7,6 +7,22 @@ skill guidance, then the router delegates tunnel work to the native
 trees. The Go binary owns tunnel protocol logic, alias state, admin profiles,
 runtime config generation, process management, and control-plane polling.
 
+When Codex has loaded the plugin's MCP app server, prefer the first-class tools
+over manual shell routing:
+
+- `install_or_select_tunnel_client`
+- `create_tunnel_runtime`
+- `connect_stdio_mcp`
+- `runtime_status`
+- `stop_runtime`
+
+Those tools are an operator surface over native `tunnel-client`. They run the
+same `tunnel-client runtimes ...` lifecycle commands and normalize structured
+fields such as `tunnel_id`, `alias`, `profile_path`, `/healthz`, `/readyz`,
+`control_plane_poll_health`, `session_name`, and `repair_actions`. They are not
+a replacement control-plane client and do not reimplement tunnel protocol,
+runtime profile, or process-management behavior.
+
 Use this README for install and operating quick start. For detailed agent
 guidance, open only the relevant curated file under
 `skills/tunnel-mcp/references/`:

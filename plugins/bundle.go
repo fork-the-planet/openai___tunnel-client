@@ -12,14 +12,16 @@ import (
 	"strings"
 )
 
-//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/assets/tunnel-mcp-logo.png tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/install_plugin.sh tunnel-mcp/scripts/Install-Plugin.ps1 tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/scripts/tunnel_mcp.cmd tunnel-mcp/scripts/tunnel_mcp.ps1 tunnel-mcp/scripts/tunnel_mcp_installer/*.py tunnel-mcp/skills/tunnel-mcp/SKILL.md tunnel-mcp/skills/tunnel-mcp/references/*.md
+//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/.mcp.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/assets/tunnel-mcp-logo.png tunnel-mcp/mcp/server.cjs tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/install_plugin.sh tunnel-mcp/scripts/Install-Plugin.ps1 tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/scripts/tunnel_mcp.cmd tunnel-mcp/scripts/tunnel_mcp.ps1 tunnel-mcp/scripts/tunnel_mcp_installer/*.py tunnel-mcp/skills/tunnel-mcp/SKILL.md tunnel-mcp/skills/tunnel-mcp/references/*.md
 var embeddedPluginFiles embed.FS
 
 var tunnelMCPPluginFiles = []string{
 	"tunnel-mcp/.codex-plugin/plugin.json",
+	"tunnel-mcp/.mcp.json",
 	"tunnel-mcp/README.md",
 	"tunnel-mcp/AGENTS.md",
 	"tunnel-mcp/assets/tunnel-mcp-logo.png",
+	"tunnel-mcp/mcp/server.cjs",
 	"tunnel-mcp/scripts/install_plugin.py",
 	"tunnel-mcp/scripts/install_plugin.sh",
 	"tunnel-mcp/scripts/Install-Plugin.ps1",
