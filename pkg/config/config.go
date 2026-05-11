@@ -52,7 +52,7 @@ const (
 	defaultProxyCheckInterval                 = 60 * time.Second
 	defaultLogLevel                           = "info"
 	defaultLogFormat                LogFormat = LogFormatUnset
-	defaultHealthListenAddr                   = ":8080"
+	defaultHealthListenAddr                   = "127.0.0.1:8080"
 	defaultAdminUILogBufferEvents             = 2000
 	maxAdminUILogBufferEvents                 = 100000
 	defaultMCPConnectionMaxTTL                = 10 * time.Minute
@@ -352,7 +352,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("log.format", defaultLogFormat.String(), "Log format (struct-text, json) (env.LOG_FORMAT)")
 	fs.String("log.file", "", "Log file path; defaults to stdout when empty (env.LOG_FILE)")
 	fs.Bool("log.http-raw-unsafe", false, "Log full raw HTTP requests and responses (including bodies/headers). WARNING: May include PII or sensitive data. Use only for debugging. (env.LOG_HTTP_RAW_UNSAFE)")
-	fs.String("health.listen-addr", defaultHealthListenAddr, "Address the health HTTP server listens on (ip:port). Use :0 to request an ephemeral port from the OS. (env.HEALTH_LISTEN_ADDR)")
+	fs.String("health.listen-addr", defaultHealthListenAddr, "Address the health HTTP server listens on (ip:port). Use :8080 to listen on all interfaces, or 127.0.0.1:0 to request a loopback ephemeral port from the OS. (env.HEALTH_LISTEN_ADDR)")
 	fs.String("health.url-file", "", "File to write the health base URL to after startup (env.HEALTH_URL_FILE)")
 	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")

@@ -86,6 +86,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	if cfg.Health.URLFile != "/tmp/health-url" {
 		t.Fatalf("unexpected health URL file: %s", cfg.Health.URLFile)
 	}
+	if cfg.Health.ListenAddr != "127.0.0.1:8080" {
+		t.Fatalf("expected default health listen addr 127.0.0.1:8080, got %s", cfg.Health.ListenAddr)
+	}
 	if cfg.AdminUI.LogBufferEvents != 1234 {
 		t.Fatalf("unexpected admin UI log buffer events: %d", cfg.AdminUI.LogBufferEvents)
 	}

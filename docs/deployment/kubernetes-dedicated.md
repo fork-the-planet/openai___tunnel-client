@@ -25,6 +25,8 @@ spec:
               value: tunnel_0123456789abcdef0123456789abcdef
             - name: MCP_SERVER_URL
               value: http://mcp-server.default.svc.cluster.local:3000/mcp
+            - name: HEALTH_LISTEN_ADDR
+              value: ":8080"
             - name: CONTROL_PLANE_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -40,3 +42,7 @@ spec:
             httpGet: { path: /readyz, port: health }
             initialDelaySeconds: 5
 ```
+
+The default health listener is `127.0.0.1:8080`. This example sets
+`HEALTH_LISTEN_ADDR=:8080` so kubelet probes can reach `/healthz` and `/readyz`
+on the Pod IP; keep the health port inside trusted cluster networking.

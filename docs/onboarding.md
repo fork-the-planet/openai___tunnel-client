@@ -223,8 +223,9 @@ The process will:
 
 - Start polling the OpenAI tunnel service for work.
 - Forward JSON-RPC requests to your MCP server.
-- Expose health endpoints on `HEALTH_LISTEN_ADDR` (default `:8080`).
-  Set it to `:0` only when you explicitly want an ephemeral port chosen at startup.
+- Expose health endpoints on `HEALTH_LISTEN_ADDR` (default `127.0.0.1:8080`).
+  Set it to `:8080` only when a trusted remote probe needs access, or `127.0.0.1:0`
+  when you explicitly want an ephemeral loopback port chosen at startup.
 
 ## 6) Verify
 

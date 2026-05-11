@@ -515,7 +515,9 @@ registered. If there are no targets, `harpoon` commands return
 - **Listen address**
   - Flag: `--health.listen-addr`
   - Env: `HEALTH_LISTEN_ADDR`
-  - Default: `:8080`
+  - Default: `127.0.0.1:8080`
+  - The default keeps `/healthz`, `/readyz`, `/metrics`, and the embedded UI on loopback.
+  - Set `HEALTH_LISTEN_ADDR=:8080` only when a container orchestrator, sidecar, or trusted operator network must reach the health endpoints remotely.
   - Set the port to `0` only when you explicitly want the OS to assign an ephemeral port at startup.
 - **URL file (optional)**
   - Flag: `--health.url-file`

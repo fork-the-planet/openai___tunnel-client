@@ -28,6 +28,8 @@ spec:
           value: info
         - name: LOG_FORMAT
           value: json
+        - name: HEALTH_LISTEN_ADDR
+          value: ":8080"
         - name: CONTROL_PLANE_API_KEY
           valueFrom:
             secretKeyRef:
@@ -53,3 +55,6 @@ spec:
 ## Considerations
 
 - Lock down egress with NetworkPolicy: allow `api.openai.com:443` plus access to the MCP port.
+- The default health listener is `127.0.0.1:8080`. This example sets
+  `HEALTH_LISTEN_ADDR=:8080` so kubelet probes can reach `/healthz` and `/readyz`
+  on the Pod IP; keep the health port inside trusted cluster networking.

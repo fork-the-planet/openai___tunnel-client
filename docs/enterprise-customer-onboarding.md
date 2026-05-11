@@ -291,7 +291,7 @@ Optional mTLS configuration for MCP server authentication:
 
 Operational helpers (optional):
 
-- `HEALTH_LISTEN_ADDR` (default `:8080`; set to `:0` only when you explicitly want an ephemeral port)
+- `HEALTH_LISTEN_ADDR` (default `127.0.0.1:8080`; set to `:8080` only when a trusted remote probe needs access, or `127.0.0.1:0` only when you explicitly want an ephemeral loopback port)
 - `HEALTH_URL_FILE` (write resolved health URL; recommended with `HEALTH_LISTEN_ADDR=:0`)
 - `PID_FILE` (write pid on start, remove on stop)
 
@@ -366,6 +366,10 @@ The tunnel client exposes:
 - `GET /healthz`
 - `GET /readyz`
 - `GET /metrics` (Prometheus)
+
+By default these endpoints bind to loopback. If you set `HEALTH_LISTEN_ADDR=:8080`
+for Docker or Kubernetes probes, keep that port on a trusted container, Pod, or
+operator network.
 
 ---
 
