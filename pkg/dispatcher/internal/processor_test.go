@@ -263,6 +263,70 @@ func TestProcessorForwardsCustomMCPHeaders(t *testing.T) {
 	require.Equal(t, []string{defaultAcceptHeaderValue}, conn.writeHeaders["Accept"])
 }
 
+func TestProcessorClonesForwardedHeadersBeforeTransportWrite(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	responder := newRecordingResponder()
+	processorLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	conn := &stubForwardingConnection{
+		statusCode: http.StatusOK,
+		responseHeaders: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		mutateWriteHeaders: func(headers http.Header) {
+			headers.Set("Authorization", "Bearer mutated-by-transport")
+			headers.Set("Accept", "text/plain")
+			headers.Set("X-Transport-Only", "set-by-transport")
+		},
+	}
+	id, err := jsonrpc.MakeID("clone-header-req")
+	require.NoError(t, err)
+	conn.response = &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+	transport := &stubForwardingTransport{conn: conn}
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          processorLogger,
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	originalHeaders := http.Header{
+		"Accept":        []string{"application/json"},
+		"Authorization": []string{"Bearer connector-token"},
+		"X-Custom-Mcp":  []string{"custom-value"},
+	}
+	command := &fakePolledCommand{
+		id:         types.RequestID("request-id"),
+		message:    &jsonrpc.Request{ID: id, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers:    originalHeaders,
+		shardToken: "shard-request-id",
+	}
+
+	err = processor.Process(ctx, command)
+	require.NoError(t, err)
+
+	_ = responder.waitForResponse(t)
+	require.NotNil(t, conn.writeHeaders)
+	require.Equal(t, []string{"Bearer connector-token"}, conn.writeHeaders["Authorization"])
+	require.Equal(t, []string{"application/json"}, conn.writeHeaders["Accept"])
+	require.Equal(t, []string{"Bearer connector-token"}, originalHeaders["Authorization"])
+	require.Equal(t, []string{"application/json"}, originalHeaders["Accept"])
+	require.Empty(t, originalHeaders.Values("X-Transport-Only"))
+}
+
 func TestProcessorRejectsUnsupportedChannel(t *testing.T) {
 	t.Parallel()
 
@@ -2826,11 +2890,12 @@ func (t *countingMCPTransport) Connect(context.Context) (mcp.Connection, error) 
 }
 
 type stubForwardingConnection struct {
-	responseHeaders http.Header
-	response        jsonrpc.Message
-	statusCode      int
-	writeErr        error
-	writeHeaders    http.Header
+	responseHeaders    http.Header
+	response           jsonrpc.Message
+	statusCode         int
+	writeErr           error
+	writeHeaders       http.Header
+	mutateWriteHeaders func(http.Header)
 }
 
 func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header, _ jsonrpc.Message) (int, http.Header, error) {
@@ -2838,6 +2903,9 @@ func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header,
 		c.writeHeaders = nil
 	} else {
 		c.writeHeaders = headers.Clone()
+		if c.mutateWriteHeaders != nil {
+			c.mutateWriteHeaders(headers)
+		}
 	}
 	return c.statusCode, c.responseHeaders, c.writeErr
 }

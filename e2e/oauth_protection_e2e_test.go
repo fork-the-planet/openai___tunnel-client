@@ -219,6 +219,11 @@ func TestSecureMCPServerOAuthProtection(t *testing.T) {
 		t.Fatalf("expected four delivered commands; got %d", len(delivered))
 	}
 
+	mcpHTTPRequests := h.MCP.ReceivedHTTPRequests()
+	assertRecordedMCPAuthorization(t, mcpHTTPRequests, initUnauthID, "")
+	assertRecordedMCPAuthorization(t, mcpHTTPRequests, initAuthID, "Bearer "+apiKey)
+	assertRecordedMCPAuthorization(t, mcpHTTPRequests, toolCallID, "Bearer "+apiKey)
+
 	recorded := h.MCP.ReceivedRequests()
 	if len(recorded) != 1 {
 		t.Fatalf("expected single tool invocation on MCP server, got %d", len(recorded))
@@ -229,4 +234,21 @@ func TestSecureMCPServerOAuthProtection(t *testing.T) {
 	if !strings.Contains(string(recorded[0].Arguments), userName) {
 		t.Fatalf("unexpected tool arguments: %s", string(recorded[0].Arguments))
 	}
+	if got := recorded[0].Headers.Get("Authorization"); got != "Bearer "+apiKey {
+		t.Fatalf("tool handler Authorization header = %q, want bearer token forwarded from connector command", got)
+	}
+}
+
+func assertRecordedMCPAuthorization(t *testing.T, requests []mockmcpserver.IncomingHTTPRequest, bodyNeedle, want string) {
+	t.Helper()
+	for _, req := range requests {
+		if req.Method != http.MethodPost || !strings.Contains(string(req.Body), bodyNeedle) {
+			continue
+		}
+		if got := req.Headers.Get("Authorization"); got != want {
+			t.Fatalf("Authorization header for MCP request containing %q = %q, want %q", bodyNeedle, got, want)
+		}
+		return
+	}
+	t.Fatalf("missing recorded MCP POST request containing %q; saw %d requests", bodyNeedle, len(requests))
 }

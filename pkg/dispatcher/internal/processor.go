@@ -927,14 +927,13 @@ func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error
 }
 
 func ensureDefaultAcceptHeader(headers http.Header) http.Header {
-	if headers == nil {
-		headers = http.Header{}
+	clone := http.Header{}
+	if headers != nil {
+		clone = headers.Clone()
 	}
-	if headers.Get("Accept") != "" {
-		return headers
+	if clone.Get("Accept") == "" {
+		clone.Set("Accept", defaultAcceptHeaderValue)
 	}
-	clone := headers.Clone()
-	clone.Set("Accept", defaultAcceptHeaderValue)
 	return clone
 }
 
