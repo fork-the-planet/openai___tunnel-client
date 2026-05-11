@@ -5,11 +5,15 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[1]
 ENTRYPOINT = PLUGIN_ROOT / "scripts" / "tunnel_mcp"
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+
+from tunnel_mcp_installer.binary import discover_tunnel_client_bin  # noqa: E402
 
 
 def _write_fake_tunnel_client(path: pathlib.Path) -> None:
@@ -277,6 +281,66 @@ class TunnelMCPRouterTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assert_output_args(output_path, ["runtimes", "status", "docs-mcp", "--json"])
+
+    def test_missing_hint_finds_nested_bazel_client_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            repo_root = tmp_path / "repo"
+            plugin_root = repo_root / "plugins" / "tunnel-mcp"
+            scripts_dir = plugin_root / "scripts"
+            scripts_dir.mkdir(parents=True)
+            shutil.copy2(ENTRYPOINT, scripts_dir / "tunnel_mcp")
+            (scripts_dir / "tunnel_mcp").chmod(
+                (scripts_dir / "tunnel_mcp").stat().st_mode | stat.S_IXUSR
+            )
+            (repo_root / "api" / "tunnel-client" / "cmd" / "client").mkdir(parents=True)
+
+            output_path = tmp_path / "args.json"
+            fake_bin = (
+                repo_root
+                / "bazel-bin"
+                / "api"
+                / "tunnel-client"
+                / "cmd"
+                / "client"
+                / "client_"
+                / "client"
+            )
+            fake_bin.parent.mkdir(parents=True)
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                ["status", "docs-mcp"],
+                {**os.environ, "ROUTER_TEST_OUTPUT": str(output_path), "PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_output_args(output_path, ["runtimes", "status", "docs-mcp", "--json"])
+
+    def test_python_installer_finds_nested_bazel_client_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            repo_root = tmp_path / "repo"
+            plugin_root = repo_root / "plugins" / "tunnel-mcp"
+            plugin_root.mkdir(parents=True)
+            (repo_root / "api" / "tunnel-client" / "cmd" / "client").mkdir(parents=True)
+            fake_bin = (
+                repo_root
+                / "bazel-bin"
+                / "api"
+                / "tunnel-client"
+                / "cmd"
+                / "client"
+                / "client_"
+                / "client"
+            )
+            fake_bin.parent.mkdir(parents=True)
+            _write_fake_tunnel_client(fake_bin)
+
+            discovered = discover_tunnel_client_bin(plugin_root, None)
+
+            self.assertEqual(discovered, fake_bin.resolve())
 
     def test_router_forwards_diagnose_to_codex_command_with_plugin_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

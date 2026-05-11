@@ -22,6 +22,26 @@ is_executable_file() {
   [ -f "$1" ] && [ -x "$1" ]
 }
 
+find_bazel_client_binary() {
+  search_root=$1
+  [ -d "$search_root/bazel-bin" ] || return 1
+  find_bin=find
+  if [ -x /usr/bin/find ]; then
+    find_bin=/usr/bin/find
+  fi
+  found=$(
+    "$find_bin" "$search_root/bazel-bin" -type f \( -name client -o -name client.exe \) -print 2>/dev/null |
+      while IFS= read -r candidate; do
+        if [ "${candidate#*/cmd/client/}" != "$candidate" ] && is_executable_file "$candidate"; then
+          printf '%s\n' "$candidate"
+          break
+        fi
+      done
+  )
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
 search_binary_root() {
   search_root=$1
   for candidate in \
@@ -39,17 +59,10 @@ search_binary_root() {
       return 0
     fi
   done
-  return 1
+  find_bazel_client_binary "$search_root"
 }
 
-is_tunnel_client_repo_root() {
-  [ -d "$1/cmd/client" ] || [ -d "$1/api/tunnel-client/cmd/client" ]
-}
-
-find_adjacent_binary() {
-  if search_binary_root "$plugin_root"; then
-    return 0
-  fi
+find_repo_root_binary() {
   search_root=$plugin_root
   while [ -n "$search_root" ]; do
     case "$search_root" in
@@ -70,7 +83,22 @@ find_adjacent_binary() {
   return 1
 }
 
-if [ "${1:-}" = "--tunnel-client-bin" ]; then
+is_tunnel_client_repo_root() {
+  [ -d "$1/cmd/client" ] || [ -d "$1/api/tunnel-client/cmd/client" ]
+}
+
+find_adjacent_binary() {
+  if search_binary_root "$plugin_root"; then
+    return 0
+  fi
+  find_repo_root_binary
+}
+
+resolve_explicit_binary() {
+  if [ "${1:-}" != "--tunnel-client-bin" ]; then
+    append_attempt "--tunnel-client-bin: not provided"
+    return 0
+  fi
   if [ $# -lt 2 ]; then
     echo "error: --tunnel-client-bin requires a value" >&2
     exit 2
@@ -81,41 +109,56 @@ if [ "${1:-}" = "--tunnel-client-bin" ]; then
     append_attempt "--tunnel-client-bin: $2 was not an executable file"
   fi
   shift 2
-else
-  append_attempt "--tunnel-client-bin: not provided"
-fi
+  set -- "$@"
+}
 
-if [ -z "$tunnel_client_bin" ] && [ -n "${TUNNEL_CLIENT_BIN:-}" ]; then
-  if is_executable_file "$TUNNEL_CLIENT_BIN"; then
-    tunnel_client_bin=$TUNNEL_CLIENT_BIN
-  else
-    append_attempt "TUNNEL_CLIENT_BIN: $TUNNEL_CLIENT_BIN was not an executable file"
+resolve_env_binary() {
+  if [ -n "$tunnel_client_bin" ]; then
+    return 0
   fi
-elif [ -z "$tunnel_client_bin" ]; then
+  if [ -n "${TUNNEL_CLIENT_BIN:-}" ]; then
+    if is_executable_file "$TUNNEL_CLIENT_BIN"; then
+      tunnel_client_bin=$TUNNEL_CLIENT_BIN
+    else
+      append_attempt "TUNNEL_CLIENT_BIN: $TUNNEL_CLIENT_BIN was not an executable file"
+    fi
+    return 0
+  fi
   append_attempt "TUNNEL_CLIENT_BIN: not set"
-fi
+}
 
-if [ -z "$tunnel_client_bin" ] && [ -f "$plugin_root/.tunnel-client-bin" ]; then
-  IFS= read -r hinted_bin < "$plugin_root/.tunnel-client-bin" || true
-  if [ -n "${hinted_bin:-}" ] && is_executable_file "$hinted_bin"; then
-    tunnel_client_bin=$hinted_bin
-  else
-    append_attempt "installed .tunnel-client-bin hint: ${hinted_bin:-empty} was not an executable file"
+resolve_hint_binary() {
+  if [ -n "$tunnel_client_bin" ]; then
+    return 0
   fi
-elif [ -z "$tunnel_client_bin" ]; then
+  if [ -f "$plugin_root/.tunnel-client-bin" ]; then
+    IFS= read -r hinted_bin < "$plugin_root/.tunnel-client-bin" || true
+    if [ -n "${hinted_bin:-}" ] && is_executable_file "$hinted_bin"; then
+      tunnel_client_bin=$hinted_bin
+    else
+      append_attempt "installed .tunnel-client-bin hint: ${hinted_bin:-empty} was not an executable file"
+    fi
+    return 0
+  fi
   append_attempt "installed .tunnel-client-bin hint: not present"
-fi
+}
 
-if [ -z "$tunnel_client_bin" ]; then
+resolve_adjacent_binary() {
+  if [ -n "$tunnel_client_bin" ]; then
+    return 0
+  fi
   adjacent_bin=$(find_adjacent_binary || true)
   if [ -n "$adjacent_bin" ]; then
     tunnel_client_bin=$adjacent_bin
   else
     append_attempt "adjacent build outputs: no executable tunnel-client binary found next to the plugin"
   fi
-fi
+}
 
-if [ -z "$tunnel_client_bin" ]; then
+record_path_probe() {
+  if [ -n "$tunnel_client_bin" ]; then
+    return 0
+  fi
   path_candidate=$(command -v tunnel-client 2>/dev/null || true)
   if [ -z "$path_candidate" ]; then
     path_candidate=$(command -v tunnel-client.exe 2>/dev/null || true)
@@ -125,9 +168,17 @@ if [ -z "$tunnel_client_bin" ]; then
   else
     append_attempt "PATH: no tunnel-client executable found"
   fi
-fi
+}
 
-if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+resolve_tunnel_client_bin() {
+  resolve_explicit_binary "$@"
+  resolve_env_binary
+  resolve_hint_binary
+  resolve_adjacent_binary
+  record_path_probe
+}
+
+print_help() {
   cat <<'EOF'
 Usage: tunnel_mcp <command> [args]
 
@@ -138,46 +189,52 @@ Routes to native tunnel-client commands:
 
 All routed commands default to --json.
 EOF
-  exit 0
-fi
+}
 
-case "$1" in
-  admin-profiles)
-    shift
-    set -- admin-profiles "$@"
-    ;;
-  diagnose)
-    shift
-    set -- codex diagnose --plugin-root "$plugin_root" "$@"
-    ;;
-  create|connect|list|status|stop|disconnect|cleanup)
-    command=$1
-    shift
-    set -- runtimes "$command" "$@"
-    ;;
-  rm|remove)
-    shift
-    set -- runtimes rm "$@"
-    ;;
-  *)
-    echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, cleanup, diagnose, or admin-profiles" >&2
-    exit 2
-    ;;
-esac
+route_command() {
+  case "$1" in
+    admin-profiles)
+      shift
+      set -- admin-profiles "$@"
+      ;;
+    diagnose)
+      shift
+      set -- codex diagnose --plugin-root "$plugin_root" "$@"
+      ;;
+    create|connect|list|status|stop|disconnect|cleanup)
+      command=$1
+      shift
+      set -- runtimes "$command" "$@"
+      ;;
+    rm|remove)
+      shift
+      set -- runtimes rm "$@"
+      ;;
+    *)
+      echo "unsupported tunnel_mcp command; use create, connect, list, status, stop, disconnect, rm, cleanup, diagnose, or admin-profiles" >&2
+      exit 2
+      ;;
+  esac
+  append_default_json "$@"
+}
 
-has_json=0
-for arg in "$@"; do
-  if [ "$arg" = "--json" ]; then
-    has_json=1
-    break
+append_default_json() {
+  has_json=0
+  for arg in "$@"; do
+    if [ "$arg" = "--json" ]; then
+      has_json=1
+      break
+    fi
+  done
+
+  if [ "$has_json" -eq 0 ]; then
+    set -- "$@" --json
   fi
-done
 
-if [ "$has_json" -eq 0 ]; then
-  set -- "$@" --json
-fi
+  run_tunnel_client "$@"
+}
 
-if [ -z "$tunnel_client_bin" ]; then
+print_missing_binary_error() {
   printf 'error: tunnel-client was not found.\n\n' >&2
   printf 'Discovery methods tried:\n%s\n\n' "$attempts" >&2
   printf '%s\n' \
@@ -199,7 +256,25 @@ if [ -z "$tunnel_client_bin" ]; then
     '' \
     'This plugin does not auto-download, auto-clone, or auto-run remote tunnel-client binaries.' \
     'If the user explicitly asks Codex to set up tunnel-client, Codex may clone and build it from the public repo commands above.' >&2
-  exit 2
+}
+
+run_tunnel_client() {
+  if [ -z "$tunnel_client_bin" ]; then
+    print_missing_binary_error
+    exit 2
+  fi
+  exec "$tunnel_client_bin" "$@"
+}
+
+resolve_tunnel_client_bin "$@"
+
+if [ "${1:-}" = "--tunnel-client-bin" ]; then
+  shift 2
 fi
 
-exec "$tunnel_client_bin" "$@"
+if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_help
+  exit 0
+fi
+
+route_command "$@"

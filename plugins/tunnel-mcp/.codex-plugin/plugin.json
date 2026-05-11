@@ -30,6 +30,8 @@
       "Shell"
     ],
     "websiteURL": "https://github.com/openai/tunnel-client",
+    "privacyPolicyURL": "https://openai.com/policies/privacy-policy/",
+    "termsOfServiceURL": "https://openai.com/policies/terms-of-use/",
     "defaultPrompt": [
       "Summarize what tunnel-client is doing in this checkout.",
       "Show me how to install the Tunnel MCP plugin from this repo.",

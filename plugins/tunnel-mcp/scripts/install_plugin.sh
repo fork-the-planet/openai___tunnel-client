@@ -23,6 +23,26 @@ is_executable_file() {
   [ -f "$1" ] && [ -x "$1" ]
 }
 
+find_bazel_client_binary() {
+  search_root=$1
+  [ -d "$search_root/bazel-bin" ] || return 1
+  find_bin=find
+  if [ -x /usr/bin/find ]; then
+    find_bin=/usr/bin/find
+  fi
+  found=$(
+    "$find_bin" "$search_root/bazel-bin" -type f \( -name client -o -name client.exe \) -print 2>/dev/null |
+      while IFS= read -r candidate; do
+        if [ "${candidate#*/cmd/client/}" != "$candidate" ] && is_executable_file "$candidate"; then
+          printf '%s\n' "$candidate"
+          break
+        fi
+      done
+  )
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
 find_adjacent_binary() {
   search_root=$plugin_root
   while [ -n "$search_root" ]; do
@@ -41,6 +61,9 @@ find_adjacent_binary() {
         return 0
       fi
     done
+    if find_bazel_client_binary "$search_root"; then
+      return 0
+    fi
     case "$search_root" in
       */*) parent=${search_root%/*} ;;
       *) parent=. ;;
