@@ -13,13 +13,15 @@ over manual shell routing:
 - `install_or_select_tunnel_client`
 - `create_tunnel_runtime`
 - `connect_stdio_mcp`
+- `list_runtime_aliases`
 - `runtime_status`
 - `stop_runtime`
 
 Those tools are an operator surface over native `tunnel-client`. They run the
 same `tunnel-client runtimes ...` lifecycle commands and normalize structured
 fields such as `tunnel_id`, `alias`, `profile_path`, `/healthz`, `/readyz`,
-`control_plane_poll_health`, `session_name`, and `repair_actions`. They are not
+`control_plane_poll_health`, `session_name`, `repair_actions`, selected binary,
+live process command, live process binary, and launch diagnostics. They are not
 a replacement control-plane client and do not reimplement tunnel protocol,
 runtime profile, or process-management behavior.
 

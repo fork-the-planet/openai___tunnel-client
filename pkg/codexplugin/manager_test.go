@@ -12,6 +12,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/codexplugin/session"
 	pluginstate "go.openai.org/api/tunnel-client/pkg/codexplugin/state"
+	adminapi "go.openai.org/api/tunnel-client/pkg/controlplane/admin"
 )
 
 func TestStatusReconcilesStaleAliasHealthURLWithLiveRuntimeAndPollHealth(t *testing.T) {
@@ -150,6 +151,56 @@ func TestConnectRejectsLiteralRuntimeSecretBeforePersistence(t *testing.T) {
 	require.Contains(t, err.Error(), "runtime api_key must be an env:NAME or file:/path reference")
 	requireNoFileContains(t, root.Path, secret)
 	requireNoFileContains(t, profileDir, secret)
+}
+
+func TestRepairCommandQuotesMCPCommandWithArguments(t *testing.T) {
+	t.Parallel()
+
+	command := repairCommand(
+		"docs-mcp",
+		pluginstate.AliasRecord{
+			AdminProfile:    "default",
+			ProfileName:     "docs-mcp",
+			ProfileDir:      "/tmp/profile dir",
+			OrganizationIDs: []string{"org_123"},
+		},
+		pluginstate.ProcessRecord{
+			TargetKind:  "command",
+			TargetValue: "/bin/bash /tmp/free space mcp.sh",
+		},
+	)
+
+	require.Contains(t, command, "--profile-dir '/tmp/profile dir'")
+	require.Contains(t, command, "--mcp-command '/bin/bash /tmp/free space mcp.sh'")
+}
+
+func TestConnectPayloadIncludesLaunchDiagnosticsLogTail(t *testing.T) {
+	t.Parallel()
+
+	root := pluginstate.Root{Path: t.TempDir()}
+	require.NoError(t, pluginstate.EnsureDirs(root))
+	logPath := filepath.Join(root.Path, "logs", "docs-mcp.log")
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	require.NoError(t, os.WriteFile(logPath, []byte("line one\nlaunch failed\n"), 0o600))
+
+	manager := NewManager(testLookupEnv(map[string]string{
+		"TUNNEL_CLIENT_STATE_DIR": root.Path,
+		"HOME":                    t.TempDir(),
+	}), session.Runtime{})
+	payload := manager.connectPayload(
+		root,
+		"docs-mcp",
+		adminapi.Tunnel{ID: "tunnel_123"},
+		effectiveAdminProfile{Name: "default"},
+		pluginstate.AliasRecord{Alias: "docs-mcp", TunnelID: "tunnel_123"},
+		pluginstate.ProcessRecord{Alias: "docs-mcp", LogPath: logPath},
+		session.LaunchResult{Launched: true, LogPath: logPath, LogTail: "launch failed"},
+		"",
+	)
+
+	diagnostics := payload["launch_diagnostics"].(map[string]any)
+	require.Equal(t, logPath, diagnostics["log_path"])
+	require.Equal(t, "launch failed", diagnostics["log_tail"])
 }
 
 func testLookupEnv(values map[string]string) func(string) (string, bool) {

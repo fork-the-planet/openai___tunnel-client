@@ -51,6 +51,7 @@ type LaunchResult struct {
 	PID            int    `json:"pid,omitempty"`
 	LogPath        string `json:"log_path,omitempty"`
 	ExitCode       *int   `json:"exit_code,omitempty"`
+	LogTail        string `json:"log_tail,omitempty"`
 }
 
 type EndpointProbe struct {
@@ -256,6 +257,7 @@ func StartOrReuse(
 ) (LaunchResult, error) {
 	sessionName := TmuxSessionName(alias, root)
 	command := TunnelClientCommand(tunnelClientBin, profileName, profileDir)
+	logPath := LogPath(alias, root)
 
 	if available, _ := TmuxAvailable(rt); available {
 		hasSession, _ := TmuxHasSessionName(rt, sessionName)
@@ -279,11 +281,13 @@ func StartOrReuse(
 					AlreadyRunning: true,
 					HealthURL:      observation.HealthURL,
 					SessionName:    sessionName,
+					LogPath:        logPath,
+					LogTail:        LogTail(logPath, 20),
 				}, nil
 			}
 		}
 		ClearHealthURLFile(alias, root)
-		if result, err := StartTmux(rt, sessionName, tunnelClientBin, profileName, profileDir, envOverrides); err != nil {
+		if result, err := StartTmux(rt, sessionName, tunnelClientBin, profileName, profileDir, envOverrides, logPath); err != nil {
 			return LaunchResult{}, err
 		} else if result.ReturnCode != 0 {
 			return LaunchResult{}, fmt.Errorf("tmux launch failed: %s", strings.TrimSpace(firstNonEmpty(result.Stderr, result.Stdout)))
@@ -300,6 +304,8 @@ func StartOrReuse(
 			AlreadyRunning: false,
 			HealthURL:      observation.HealthURL,
 			SessionName:    sessionName,
+			LogPath:        logPath,
+			LogTail:        LogTail(logPath, 20),
 		}, nil
 	}
 
@@ -321,13 +327,14 @@ func StartOrReuse(
 				AlreadyRunning: true,
 				HealthURL:      observation.HealthURL,
 				PID:            existingPID,
-				LogPath:        LogPath(alias, root),
+				LogPath:        logPath,
+				LogTail:        LogTail(logPath, 20),
 			}, nil
 		}
 	}
 
 	ClearHealthURLFile(alias, root)
-	process, err := rt.Start(TunnelClientArgs(tunnelClientBin, profileName, profileDir), childEnv(envOverrides), LogPath(alias, root))
+	process, err := rt.Start(TunnelClientArgs(tunnelClientBin, profileName, profileDir), childEnv(envOverrides), logPath)
 	if err != nil {
 		return LaunchResult{}, err
 	}
@@ -344,8 +351,9 @@ func StartOrReuse(
 			Ready:          false,
 			AlreadyRunning: false,
 			PID:            process.PID(),
-			LogPath:        LogPath(alias, root),
+			LogPath:        logPath,
 			ExitCode:       exitCodePtr,
+			LogTail:        LogTail(logPath, 20),
 		}, nil
 	}
 	observation := WaitForRuntimeHealth(rt, alias, root, "process", process.PID(), "")
@@ -360,7 +368,8 @@ func StartOrReuse(
 		AlreadyRunning: false,
 		HealthURL:      observation.HealthURL,
 		PID:            process.PID(),
-		LogPath:        LogPath(alias, root),
+		LogPath:        logPath,
+		LogTail:        LogTail(logPath, 20),
 	}, nil
 }
 
@@ -390,7 +399,10 @@ func TmuxHasSessionName(rt Runtime, sessionName string) (bool, error) {
 	return result.ReturnCode == 0, nil
 }
 
-func StartTmux(rt Runtime, sessionName string, tunnelClientBin string, profileName string, profileDir string, env map[string]string) (CompletedProcess, error) {
+func StartTmux(rt Runtime, sessionName string, tunnelClientBin string, profileName string, profileDir string, env map[string]string, logPath string) (CompletedProcess, error) {
+	if err := ensureLogDir(logPath); err != nil {
+		return CompletedProcess{}, err
+	}
 	if len(env) > 0 && rt.RunInput != nil {
 		if result, err := rt.Run([]string{"tmux", "new-session", "-d", "-s", sessionName}, nil); err != nil {
 			return result, err
@@ -405,7 +417,7 @@ func StartTmux(rt Runtime, sessionName string, tunnelClientBin string, profileNa
 			cleanupSession()
 			return CompletedProcess{}, err
 		}
-		result, err := rt.RunInput([]string{"tmux", "source-file", "-"}, nil, tmuxLaunchScript(sessionName, paneID, tunnelClientBin, profileName, profileDir, env))
+		result, err := rt.RunInput([]string{"tmux", "source-file", "-"}, nil, tmuxLaunchScript(sessionName, paneID, tunnelClientBin, profileName, profileDir, env, logPath))
 		if err != nil {
 			cleanupSession()
 			return result, err
@@ -424,11 +436,11 @@ func StartTmux(rt Runtime, sessionName string, tunnelClientBin string, profileNa
 	for _, key := range keys {
 		args = append(args, "-e", key+"="+env[key])
 	}
-	args = append(args, "-s", sessionName, TunnelClientCommand(tunnelClientBin, profileName, profileDir))
+	args = append(args, "-s", sessionName, logShellCommand(TunnelClientCommand(tunnelClientBin, profileName, profileDir), logPath))
 	return rt.Run(args, childEnv(env))
 }
 
-func tmuxLaunchScript(sessionName string, paneID string, tunnelClientBin string, profileName string, profileDir string, env map[string]string) string {
+func tmuxLaunchScript(sessionName string, paneID string, tunnelClientBin string, profileName string, profileDir string, env map[string]string, logPath string) string {
 	lines := make([]string, 0, len(env)+1)
 	keys := make([]string, 0, len(env))
 	for key := range env {
@@ -438,7 +450,7 @@ func tmuxLaunchScript(sessionName string, paneID string, tunnelClientBin string,
 	for _, key := range keys {
 		lines = append(lines, fmt.Sprintf("set-environment -t =%s %s %s", shellQuote(sessionName), shellQuote(key), shellQuote(env[key])))
 	}
-	lines = append(lines, fmt.Sprintf("respawn-pane -k -t %s %s", shellQuote(paneID), shellQuote(TunnelClientCommand(tunnelClientBin, profileName, profileDir))))
+	lines = append(lines, fmt.Sprintf("respawn-pane -k -t %s %s", shellQuote(paneID), shellQuote(logShellCommand(TunnelClientCommand(tunnelClientBin, profileName, profileDir), logPath))))
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -464,6 +476,35 @@ func StopTmux(rt Runtime, sessionName string) (CompletedProcess, error) {
 
 func LogPath(alias string, root state.Root) string {
 	return filepath.Join(root.Path, "logs", mustNormalizeAlias(alias)+".log")
+}
+
+func LogTail(pathValue string, maxLines int) string {
+	if strings.TrimSpace(pathValue) == "" || maxLines <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(pathValue)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func ensureLogDir(pathValue string) error {
+	if strings.TrimSpace(pathValue) == "" {
+		return nil
+	}
+	return os.MkdirAll(filepath.Dir(pathValue), 0o755)
+}
+
+func logShellCommand(command string, logPath string) string {
+	if strings.TrimSpace(logPath) == "" {
+		return command
+	}
+	return command + " >> " + shellQuote(logPath) + " 2>&1"
 }
 
 func WaitForRuntimeHealth(rt Runtime, alias string, root state.Root, mode string, pid int, sessionName string) RuntimeObservation {

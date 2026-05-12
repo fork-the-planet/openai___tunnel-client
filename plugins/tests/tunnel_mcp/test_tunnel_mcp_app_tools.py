@@ -11,6 +11,7 @@ import textwrap
 import unittest
 
 PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[2] / "tunnel-mcp"
+BIN_HINT = PLUGIN_ROOT / ".tunnel-client-bin"
 
 
 def _node_binary() -> str:
@@ -97,6 +98,20 @@ JSON
 }
 JSON
                 ;;
+              "runtimes list")
+                cat <<'JSON'
+{
+  "state_root": "/tmp/tunnel-mcp",
+  "aliases": [
+    {
+      "alias": "docs-mcp",
+      "tunnel_id": "tunnel_status",
+      "runtime_state": "ready"
+    }
+  ]
+}
+JSON
+                ;;
               "runtimes stop")
                 printf '%s\n' '{"alias":"docs-mcp","tunnel_id":"tunnel_status","stopped":true,"repair_actions":[]}'
                 ;;
@@ -168,6 +183,7 @@ process.stdout.write(JSON.stringify(server.toolDefinitions().map((tool) => tool.
                 "install_or_select_tunnel_client",
                 "create_tunnel_runtime",
                 "connect_stdio_mcp",
+                "list_runtime_aliases",
                 "runtime_status",
                 "stop_runtime",
             ],
@@ -200,6 +216,7 @@ process.stdout.write(JSON.stringify(server.toolDefinitions().map((tool) => tool.
             self.assertEqual(payload["readyz"]["status"], 200)
             self.assertEqual(payload["control_plane_poll_health"]["state"], "ok")
             self.assertEqual(payload["repair_actions"], [])
+            self.assertEqual(payload["selected_tunnel_client_bin"], str(fake_bin))
             self.assertEqual(
                 args_path.read_text(encoding="utf-8").splitlines(),
                 [
@@ -240,6 +257,55 @@ process.stdout.write(JSON.stringify(server.toolDefinitions().map((tool) => tool.
             ]:
                 self.assertIn(key, payload)
             self.assertEqual(payload["repair_actions"][0]["action"], "none")
+            self.assertEqual(payload["live_process_command"], None)
+            self.assertEqual(payload["live_process_binary"], None)
+
+    def test_list_runtime_aliases_invokes_native_runtime_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            fake_bin = tmp_path / "tunnel-client"
+            args_path = tmp_path / "args.txt"
+            _write_fake_tunnel_client(fake_bin)
+
+            result = _node_call(
+                "list_runtime_aliases",
+                {"organization_id": "org_123", "tunnel_client_bin": str(fake_bin)},
+                {**os.environ, "TUNNEL_MCP_APP_TEST_ARGS": str(args_path)},
+            )
+
+            payload = result["structuredContent"]
+            self.assertEqual(payload["native"]["aliases"][0]["alias"], "docs-mcp")
+            self.assertEqual(
+                args_path.read_text(encoding="utf-8").splitlines(),
+                ["runtimes", "list", "--organization-id", "org_123", "--json"],
+            )
+
+    def test_runtime_status_reports_live_process_binary_and_launch_diagnostics(self) -> None:
+        script = """
+const server = require("./mcp/server.cjs");
+const payload = server.normalizedPayload(
+  {operation: "runtime_status", tunnel_client_bin: "/selected/tunnel-client"},
+  {
+    process: {command: "'/tmp/tunnel client' run --profile docs-mcp"},
+    local: {log: {path: "/tmp/runtime.log", tail: "boom"}}
+  },
+);
+process.stdout.write(JSON.stringify(payload));
+"""
+        result = subprocess.run(
+            [_node_binary(), "-e", script],
+            cwd=PLUGIN_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["selected_tunnel_client_bin"], "/selected/tunnel-client")
+        self.assertEqual(
+            payload["live_process_command"], "'/tmp/tunnel client' run --profile docs-mcp"
+        )
+        self.assertEqual(payload["live_process_binary"], "/tmp/tunnel client")
+        self.assertEqual(payload["launch_diagnostics"]["log_tail"], "boom")
 
     def test_argument_validation_rejects_bad_connect_requests(self) -> None:
         error = _node_call_error(
@@ -298,6 +364,39 @@ process.stdout.write(JSON.stringify(server.toolDefinitions().map((tool) => tool.
             self.assertIsNone(payload["tunnel_id"])
             self.assertIsNone(payload["healthz"])
             self.assertEqual(payload["repair_actions"], [])
+
+    def test_install_or_select_tunnel_client_persists_env_selection_by_default(self) -> None:
+        old_hint = BIN_HINT.read_text(encoding="utf-8") if BIN_HINT.exists() else None
+        try:
+            if BIN_HINT.exists():
+                BIN_HINT.unlink()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = pathlib.Path(tmp)
+                fake_bin = tmp_path / "tunnel-client"
+                _write_fake_tunnel_client(fake_bin)
+
+                result = _node_call(
+                    "install_or_select_tunnel_client",
+                    {"allow_path_lookup": True},
+                    {
+                        **os.environ,
+                        "TUNNEL_CLIENT_BIN": str(fake_bin),
+                        "TUNNEL_MCP_APP_TEST_ARGS": str(tmp_path / "args.txt"),
+                    },
+                )
+
+                payload = result["structuredContent"]
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["selection_source"], "TUNNEL_CLIENT_BIN")
+                self.assertEqual(BIN_HINT.read_text(encoding="utf-8").strip(), str(fake_bin))
+        finally:
+            if old_hint is None:
+                try:
+                    BIN_HINT.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                BIN_HINT.write_text(old_hint, encoding="utf-8")
 
 
 if __name__ == "__main__":

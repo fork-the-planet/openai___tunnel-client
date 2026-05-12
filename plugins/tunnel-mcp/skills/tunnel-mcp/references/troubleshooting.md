@@ -17,6 +17,11 @@ Health/debug signals:
 - `control_plane_poll_health`: route-level poll health from the local admin UI,
   separate from `/healthz` and `/readyz`
 - `repair_actions`: structured commands and reasons for branchable fixes
+- `selected_tunnel_client_bin`: the binary selected for the app tool invocation
+- `live_process_binary`: the binary recorded in the active runtime command, if
+  the runtime has one
+- `launch_diagnostics`: exit code and runtime log tail captured during launch
+  failures
 
 If `tmux` is available, tunnel-client prefers a tmux-managed runtime. When
 `tmux` is unavailable, it falls back to a detached background process and

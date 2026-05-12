@@ -130,6 +130,7 @@ func TestStartTmuxUsesSourceFileForSecretEnv(t *testing.T) {
 		"docs-mcp",
 		"/tmp/profiles",
 		map[string]string{"OPENAI_TUNNEL_KEY_PROD": "sk-proj-runtime-secret"},
+		filepath.Join(t.TempDir(), "runtime.log"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, [][]string{
@@ -140,6 +141,7 @@ func TestStartTmuxUsesSourceFileForSecretEnv(t *testing.T) {
 	require.Contains(t, gotStdin, "set-environment -t =tunnel-mcp__docs-mcp__deadbeef OPENAI_TUNNEL_KEY_PROD sk-proj-runtime-secret")
 	require.Contains(t, gotStdin, "respawn-pane -k -t %42")
 	require.Contains(t, gotStdin, "tunnel-client run --profile-dir /tmp/profiles --profile docs-mcp")
+	require.Contains(t, gotStdin, " 2>&1")
 	require.NotContains(t, strings.Join(gotRunArgs[0], " "), "OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret")
 	require.NotContains(t, strings.Join(gotRunArgs[1], " "), "OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret")
 	require.NotContains(t, strings.Join(gotArgs, " "), "OPENAI_TUNNEL_KEY_PROD=sk-proj-runtime-secret")
@@ -169,6 +171,7 @@ func TestStartTmuxCleansUpSessionWhenSourceFileFails(t *testing.T) {
 		"docs-mcp",
 		"/tmp/profiles",
 		map[string]string{"OPENAI_TUNNEL_KEY_PROD": "sk-proj-runtime-secret"},
+		filepath.Join(t.TempDir(), "runtime.log"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.ReturnCode)

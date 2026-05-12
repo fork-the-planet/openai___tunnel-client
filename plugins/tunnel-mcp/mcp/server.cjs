@@ -9,6 +9,7 @@ const SERVER_NAME = "tunnel-mcp";
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const SERVER_VERSION = readPluginVersion();
 const MAX_STDIO_COMMAND_LENGTH = 4096;
+const BIN_HINT_PATH = path.join(PLUGIN_ROOT, ".tunnel-client-bin");
 
 const NORMALIZED_KEYS = [
   "tunnel_id",
@@ -19,6 +20,10 @@ const NORMALIZED_KEYS = [
   "control_plane_poll_health",
   "session_name",
   "repair_actions",
+  "selected_tunnel_client_bin",
+  "live_process_command",
+  "live_process_binary",
+  "launch_diagnostics",
 ];
 
 function readPluginVersion() {
@@ -53,8 +58,9 @@ function toolDefinitions() {
             type: "boolean",
             description:
               [
-                "When true with tunnel_client_bin, write the selected path",
-                "to .tunnel-client-bin in the installed plugin.",
+                "When true, write the selected path to .tunnel-client-bin",
+                "in the installed plugin. Defaults to true for explicit,",
+                "environment, adjacent, and PATH selections.",
               ].join(" "),
             default: true,
           },
@@ -90,6 +96,13 @@ function toolDefinitions() {
         requireRemoteScope: false,
       }),
       false,
+    ),
+    tool(
+      "list_runtime_aliases",
+      "List Runtime Aliases",
+      "List local tunnel-client runtime aliases and optionally remote scoped tunnels.",
+      listRuntimeAliasesSchema(),
+      true,
     ),
     tool(
       "runtime_status",
@@ -213,6 +226,8 @@ async function callTool(name, args = {}) {
       return runLifecycleTool("create_tunnel_runtime", args, buildCreateArgs);
     case "connect_stdio_mcp":
       return runLifecycleTool("connect_stdio_mcp", args, buildConnectArgs);
+    case "list_runtime_aliases":
+      return runLifecycleTool("list_runtime_aliases", args, buildListArgs);
     case "runtime_status":
       return runLifecycleTool("runtime_status", args, buildStatusArgs);
     case "stop_runtime":
@@ -231,10 +246,8 @@ function installOrSelect(args) {
   const selected = selectTunnelClientBin(args);
   const persistHint = args.persist_hint !== false;
 
-  if (selected.path && args.tunnel_client_bin && persistHint) {
-    fs.writeFileSync(path.join(PLUGIN_ROOT, ".tunnel-client-bin"), `${selected.path}\n`, {
-      mode: 0o600,
-    });
+  if (selected.path && persistHint && selected.source !== ".tunnel-client-bin") {
+    persistTunnelClientHint(selected.path);
   }
 
   return normalizedPayload(
@@ -264,7 +277,9 @@ function installOrSelect(args) {
 
 function runLifecycleTool(operation, args, buildArgs) {
   assertNoUnknown(args, allowedArgsForOperation(operation));
-  validateAlias(args.alias);
+  if (args.alias !== undefined) {
+    validateAlias(args.alias);
+  }
   const nativeArgs = buildArgs(args);
   const selected = selectTunnelClientBin(args);
   if (!selected.path) {
@@ -283,6 +298,7 @@ function runLifecycleTool(operation, args, buildArgs) {
       ok: completed.status === 0,
       operation,
       tunnel_client_bin: selected.path,
+      selected_tunnel_client_bin: selected.path,
       selection_source: selected.source,
       command: ["tunnel-client", ...nativeArgs],
       exit_code: completed.status,
@@ -320,7 +336,43 @@ function allowedArgsForOperation(operation) {
       requireRemoteScope: false,
     }).properties);
   }
+  if (operation === "list_runtime_aliases") {
+    return Object.keys(listRuntimeAliasesSchema().properties);
+  }
   return Object.keys(aliasSchema().properties);
+}
+
+function listRuntimeAliasesSchema() {
+  return {
+    type: "object",
+    properties: {
+      organization_id: {
+        type: "string",
+        description: "Optional organization scope for remote listing.",
+      },
+      workspace_id: {
+        type: "string",
+        description: "Optional workspace scope for remote listing.",
+      },
+      tenant_id: {
+        type: "string",
+        description: "Optional tenant scope for remote listing.",
+      },
+      admin_profile: {
+        type: "string",
+        description: "Native tunnel-client admin profile name.",
+      },
+      control_plane_base_url: {
+        type: "string",
+        description: "Optional control-plane base URL override stored in the admin profile.",
+      },
+      tunnel_client_bin: {
+        type: "string",
+        description: "Optional full path to an executable tunnel-client binary.",
+      },
+    },
+    additionalProperties: false,
+  };
 }
 
 function buildCreateArgs(args) {
@@ -347,6 +399,17 @@ function buildConnectArgs(args) {
   appendOptional(out, "--control-plane-base-url", args.control_plane_base_url);
   appendOptional(out, "--name", args.name);
   appendOptional(out, "--description", args.description);
+  out.push("--json");
+  return out;
+}
+
+function buildListArgs(args) {
+  validateListScope(args);
+  const out = ["runtimes", "list"];
+  appendRemoteScope(out, args);
+  appendOptional(out, "--tenant-id", args.tenant_id);
+  appendOptional(out, "--admin-profile", args.admin_profile);
+  appendOptional(out, "--control-plane-base-url", args.control_plane_base_url);
   out.push("--json");
   return out;
 }
@@ -381,9 +444,8 @@ function selectTunnelClientBin(args) {
     attempts.push("TUNNEL_CLIENT_BIN: not set");
   }
 
-  const hintPath = path.join(PLUGIN_ROOT, ".tunnel-client-bin");
-  if (fs.existsSync(hintPath)) {
-    const hinted = trimString(fs.readFileSync(hintPath, "utf8"));
+  if (fs.existsSync(BIN_HINT_PATH)) {
+    const hinted = trimString(fs.readFileSync(BIN_HINT_PATH, "utf8"));
     if (hinted && isExecutable(hinted)) {
       return { path: path.resolve(hinted), source: ".tunnel-client-bin", attempts };
     }
@@ -520,6 +582,10 @@ function normalizedPayload(base, native) {
       : Array.isArray(base.repair_actions)
         ? base.repair_actions
         : [],
+    selected_tunnel_client_bin: stringOrNull(base.selected_tunnel_client_bin || base.tunnel_client_bin),
+    live_process_command: liveProcessCommand(native),
+    live_process_binary: liveProcessBinary(native),
+    launch_diagnostics: launchDiagnostics(native),
     ...base,
   };
 
@@ -529,6 +595,78 @@ function normalizedPayload(base, native) {
     }
   }
   return payload;
+}
+
+function liveProcessCommand(native) {
+  return stringOrNull(nested(native, ["process", "command"]) || native.process_command);
+}
+
+function liveProcessBinary(native) {
+  const explicit = stringOrNull(
+    nested(native, ["process", "binary"]) ||
+      nested(native, ["process", "tunnel_client_bin"]) ||
+      native.live_process_binary,
+  );
+  if (explicit) {
+    return explicit;
+  }
+  const command = liveProcessCommand(native);
+  if (!command) {
+    return null;
+  }
+  return firstShellWord(command);
+}
+
+function launchDiagnostics(native) {
+  const diagnostics = {};
+  const launch = native.launch_diagnostics;
+  if (launch && typeof launch === "object") {
+    Object.assign(diagnostics, launch);
+  }
+  for (const key of ["exit_code", "stderr", "stdout"]) {
+    if (native[key] !== undefined && native[key] !== null && native[key] !== "") {
+      diagnostics[key] = native[key];
+    }
+  }
+  const log = nested(native, ["local", "log"]) || native.log;
+  if (log && typeof log === "object") {
+    const tail = trimString(log.tail);
+    if (tail) {
+      diagnostics.log_path = stringOrNull(log.path) || null;
+      diagnostics.log_tail = tail;
+    }
+  }
+  return Object.keys(diagnostics).length ? diagnostics : null;
+}
+
+function firstShellWord(command) {
+  const text = trimString(command);
+  if (!text) {
+    return null;
+  }
+  if (text[0] === "'") {
+    const end = text.indexOf("'", 1);
+    return end === -1 ? text.slice(1) : text.slice(1, end);
+  }
+  if (text[0] === '"') {
+    let out = "";
+    for (let index = 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === "\\") {
+        index += 1;
+        if (index < text.length) {
+          out += text[index];
+        }
+        continue;
+      }
+      if (char === '"') {
+        return out;
+      }
+      out += char;
+    }
+    return out;
+  }
+  return text.split(/\s+/)[0] || null;
 }
 
 function tunnelIdFrom(native) {
@@ -583,6 +721,10 @@ function repairAction(action, reason, command) {
   return { action, reason, command };
 }
 
+function persistTunnelClientHint(selectedPath) {
+  fs.writeFileSync(BIN_HINT_PATH, `${selectedPath}\n`, { mode: 0o600 });
+}
+
 function validateAlias(value) {
   const alias = trimString(value);
   if (!alias) {
@@ -625,6 +767,15 @@ function validateRemoteScope(args, { allowTunnelId, required, command }) {
   }
   if (!required && count > 1) {
     throw new Error(`${command} accepts only one remote scope`);
+  }
+}
+
+function validateListScope(args) {
+  const count = [args.organization_id, args.workspace_id, args.tenant_id]
+    .map(trimString)
+    .filter(Boolean).length;
+  if (count > 1) {
+    throw new Error("list_runtime_aliases accepts at most one of organization_id, workspace_id, or tenant_id");
   }
 }
 

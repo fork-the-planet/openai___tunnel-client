@@ -31,9 +31,12 @@ Inspect, list, or stop managed local runtimes:
 `connect` success means the local runtime is actually launched and health is
 reachable, not merely that a launch command was issued.
 
+The MCP app server exposes `list_runtime_aliases` as the first-class tool for
+`tunnel-client runtimes list`.
+
 `status` reports structured `repair_actions`, live-admin reconciliation when a
-stored health URL is stale, and `control_plane_poll_health` separately from
-local `/healthz` and `/readyz`.
+stored health URL is stale, selected/live binary fields, launch diagnostics, and
+`control_plane_poll_health` separately from local `/healthz` and `/readyz`.
 
 `cleanup --apply` only removes aliases classified as `stale_alias`. It leaves
 `live_runtime`, `valid_profile`, and `missing_profile` entries in place.

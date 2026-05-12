@@ -972,6 +972,7 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 		"command":            launch.Command,
 		"session_name":       launch.SessionName,
 		"log_path":           launch.LogPath,
+		"launch_diagnostics": launchDiagnostics(launch),
 		"started":            launch.Started,
 		"running":            launch.Running,
 		"already_running":    launch.AlreadyRunning,
@@ -1296,7 +1297,7 @@ func repairCommand(alias string, record pluginstate.AliasRecord, process plugins
 	default:
 		parts = append(parts, "<add --mcp-server-url or --mcp-command>")
 	}
-	return strings.Join(parts, " ")
+	return shellJoin(parts)
 }
 
 func doctorCommand(profileName, profileDir, configPath string, explain bool) string {
@@ -1313,6 +1314,58 @@ func doctorCommand(profileName, profileDir, configPath string, explain bool) str
 		parts = append(parts, "--explain")
 	}
 	return strings.Join(parts, " ")
+}
+
+func launchDiagnostics(launch session.LaunchResult) map[string]any {
+	diagnostics := map[string]any{}
+	if launch.ExitCode != nil {
+		diagnostics["exit_code"] = *launch.ExitCode
+	}
+	if strings.TrimSpace(launch.LogPath) != "" {
+		diagnostics["log_path"] = launch.LogPath
+	}
+	if strings.TrimSpace(launch.LogTail) != "" {
+		diagnostics["log_tail"] = launch.LogTail
+	}
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	return diagnostics
+}
+
+func shellJoin(parts []string) string {
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		quoted = append(quoted, shellQuote(part))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if strings.Contains(value, "<") && strings.Contains(value, ">") {
+		return value
+	}
+	if isShellSafe(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func isShellSafe(value string) bool {
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case strings.ContainsRune("@%_+=:,./-", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func firstProfileName(profiles map[string]pluginstate.AdminProfile) string {

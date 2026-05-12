@@ -16,6 +16,7 @@ manual shell routing:
 - `install_or_select_tunnel_client`
 - `create_tunnel_runtime`
 - `connect_stdio_mcp`
+- `list_runtime_aliases`
 - `runtime_status`
 - `stop_runtime`
 
