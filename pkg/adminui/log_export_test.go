@@ -443,6 +443,8 @@ control_plane:
   base_url: https://alice:secret@api.example/v1?access_token=control-token
   tunnel_id: tunnel_0123456789abcdef0123456789abcdef
   api_key: sk-proj-config-secret123456
+  client_cert: /tmp/control-plane-client.crt
+  client_key: /tmp/control-plane-private.pem
   extra_headers:
     Authorization: Bearer config-bearer
     X-Tunnel-Shard-Token: config-shard-token
@@ -486,6 +488,7 @@ mcp:
 	require.Contains(t, runtimeYAML, "base_url: https://api.example/v1")
 	require.Contains(t, runtimeYAML, "url: https://mcp.example/mcp")
 	require.Contains(t, runtimeYAML, "client_cert: /tmp/client.crt")
+	require.Contains(t, runtimeYAML, "client_cert: /tmp/control-plane-client.crt")
 	require.Contains(t, runtimeYAML, "X-Debug: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "api_key: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "Authorization: '[REDACTED]'")
@@ -511,6 +514,7 @@ mcp:
 	require.NotContains(t, runtimeYAML, "MCP_HEADER_SECRET")
 	require.NotContains(t, runtimeYAML, "/run/secrets/mcp-discovery-header")
 	require.NotContains(t, runtimeYAML, "client.key")
+	require.NotContains(t, runtimeYAML, "control-plane-private.pem")
 	require.NotContains(t, runtimeYAML, "command-secret")
 }
 

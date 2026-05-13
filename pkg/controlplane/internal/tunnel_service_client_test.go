@@ -2,15 +2,25 @@ package internal
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -22,6 +32,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
+	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/pkg/version"
@@ -213,6 +224,91 @@ func TestTunnelServiceClientPollWithNonPositiveLimit(t *testing.T) {
 	cmds, _, pollErr := client.Poll(context.Background(), 0)
 	assert.NoError(t, pollErr, "Poll should not error")
 	assert.Nil(t, cmds, "expected nil result for non-positive limit")
+}
+
+func TestTunnelServiceClientControlPlaneMTLS(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "tunnel_0123456789abcdef0123456789abcdef"
+		apiKey   = "test-api-key"
+	)
+
+	material := newControlPlaneMTLSTestMaterial(t)
+
+	var (
+		mu       sync.Mutex
+		seenPath = map[string]int{}
+	)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+			http.Error(w, "missing client certificate", http.StatusUnauthorized)
+			return
+		}
+		if got := r.TLS.PeerCertificates[0].Subject.CommonName; got != "control-plane-client" {
+			http.Error(w, "unexpected client certificate", http.StatusUnauthorized)
+			return
+		}
+
+		mu.Lock()
+		seenPath[r.URL.Path]++
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/v1/tunnels/" + url.PathEscape(tunnelID):
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + tunnelID + `","name":"mtls-test","description":"fake tunnel-service"}`))
+		case "/v1/tunnel/" + url.PathEscape(tunnelID) + "/poll":
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/tunnel/" + url.PathEscape(tunnelID) + "/response":
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
+			assert.Equal(t, "shard-mtls", r.Header.Get("X-Tunnel-Shard-Token"))
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{material.serverCertificate},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    material.caPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:           mustParseURL(t, server.URL),
+		TunnelID:          types.TunnelID(tunnelID),
+		APIKey:            apiKey,
+		PollTimeout:       time.Second,
+		ClientCertificate: material.clientCertificate,
+	}, &tlsconfig.Bundle{RootCAs: material.caPool}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	metadata, err := client.FetchTunnelMetadata(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, tunnelID, metadata.ID)
+
+	commands, _, err := client.Poll(context.Background(), 1)
+	require.NoError(t, err)
+	require.Nil(t, commands)
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-mtls")
+	ctx = tunnelctx.ContextWithChannel(ctx, types.DefaultChannel)
+	_, err = client.PostResponse(ctx, types.RequestID("req-mtls"), types.NewNotificationAck(types.DefaultChannel, http.StatusOK, http.Header{}))
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, seenPath["/v1/tunnels/"+url.PathEscape(tunnelID)])
+	require.Equal(t, 1, seenPath["/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll"])
+	require.Equal(t, 1, seenPath["/v1/tunnel/"+url.PathEscape(tunnelID)+"/response"])
 }
 
 func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
@@ -1419,4 +1515,143 @@ func TestTunnelServiceClientPollReturnsTunnelServiceRequestIDFromHeader(t *testi
 	require.NoError(t, err)
 	require.Nil(t, cmds)
 	require.Equal(t, types.TunnelServiceRequestID(wantTSRID), gotTSRID)
+}
+
+type controlPlaneMTLSTestMaterial struct {
+	caPool            *x509.CertPool
+	serverCertificate tls.Certificate
+	clientCertificate *tlsconfig.ClientCertificate
+}
+
+func newControlPlaneMTLSTestMaterial(t *testing.T) controlPlaneMTLSTestMaterial {
+	t.Helper()
+
+	caCert, caKey, caPEM := generateControlPlaneTestCA(t)
+	serverCert := generateControlPlaneSignedLeaf(t, caCert, caKey, "control-plane-server", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	clientCert, clientCertPath, clientKeyPath := generateControlPlaneSignedClientCertificate(t, caCert, caKey)
+
+	pool := x509.NewCertPool()
+	if ok := pool.AppendCertsFromPEM(caPEM); !ok {
+		t.Fatalf("failed to append CA cert to pool")
+	}
+
+	return controlPlaneMTLSTestMaterial{
+		caPool:            pool,
+		serverCertificate: serverCert,
+		clientCertificate: &tlsconfig.ClientCertificate{
+			CertPath:    clientCertPath,
+			KeyPath:     clientKeyPath,
+			Certificate: clientCert,
+		},
+	}
+}
+
+func generateControlPlaneTestCA(t *testing.T) (*x509.Certificate, *rsa.PrivateKey, []byte) {
+	t.Helper()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(101),
+		Subject:               pkix.Name{CommonName: "control-plane-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(2 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA certificate: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA certificate: %v", err)
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	if caPEM == nil {
+		t.Fatalf("encode CA certificate PEM")
+	}
+	return caCert, caKey, caPEM
+}
+
+func generateControlPlaneSignedLeaf(t *testing.T, caCert *x509.Certificate, caKey *rsa.PrivateKey, commonName string, extKeyUsage []x509.ExtKeyUsage) tls.Certificate {
+	t.Helper()
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(102),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(2 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  extKeyUsage,
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create leaf certificate: %v", err)
+	}
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+	if leafPEM == nil {
+		t.Fatalf("encode leaf certificate PEM")
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(leafKey)})
+	if keyPEM == nil {
+		t.Fatalf("encode leaf key PEM")
+	}
+	pair, err := tls.X509KeyPair(leafPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("load leaf key pair: %v", err)
+	}
+	return pair
+}
+
+func generateControlPlaneSignedClientCertificate(t *testing.T, caCert *x509.Certificate, caKey *rsa.PrivateKey) (tls.Certificate, string, string) {
+	t.Helper()
+
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(103),
+		Subject:      pkix.Name{CommonName: "control-plane-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(2 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create client certificate: %v", err)
+	}
+	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER})
+	if clientPEM == nil {
+		t.Fatalf("encode client certificate PEM")
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey)})
+	if keyPEM == nil {
+		t.Fatalf("encode client key PEM")
+	}
+	clientPair, err := tls.X509KeyPair(clientPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("load client key pair: %v", err)
+	}
+	dir := t.TempDir()
+	clientCertPath := filepath.Join(dir, "control-plane-client.crt")
+	clientKeyPath := filepath.Join(dir, "control-plane-client.key")
+	if err := os.WriteFile(clientCertPath, clientPEM, 0o600); err != nil {
+		t.Fatalf("write client cert: %v", err)
+	}
+	if err := os.WriteFile(clientKeyPath, keyPEM, 0o600); err != nil {
+		t.Fatalf("write client key: %v", err)
+	}
+	return clientPair, clientCertPath, clientKeyPath
 }

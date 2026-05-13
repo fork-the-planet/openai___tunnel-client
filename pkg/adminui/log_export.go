@@ -565,6 +565,7 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 			"base_url":              urlForSnapshot(cfg.ControlPlane.BaseURL),
 			"tunnel_id":             cfg.ControlPlane.TunnelID.String(),
 			"api_key":               redactedPresence(cfg.ControlPlane.APIKey),
+			"client_certificate":    clientCertificateSnapshot(cfg.ControlPlane.ClientCertificate),
 			"max_inflight_requests": cfg.ControlPlane.MaxInFlightRequests,
 			"poll_timeout":          cfg.ControlPlane.PollTimeout.String(),
 			"extra_headers":         redactHeaderMap(cfg.ControlPlane.ExtraHeaders),

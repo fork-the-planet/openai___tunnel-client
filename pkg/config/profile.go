@@ -226,6 +226,16 @@ func validateFileConfigSyntax(c fileConfig) error {
 			return err
 		}
 	}
+	if c.ControlPlane.ClientCert != nil {
+		if err := validateSecretReferenceSyntax("control_plane.client_cert", *c.ControlPlane.ClientCert); err != nil {
+			return err
+		}
+	}
+	if c.ControlPlane.ClientKey != nil {
+		if err := validateSecretReferenceSyntax("control_plane.client_key", *c.ControlPlane.ClientKey); err != nil {
+			return err
+		}
+	}
 	if err := validateHeaderReferenceSyntax("control_plane.extra_headers", c.ControlPlane.ExtraHeaders); err != nil {
 		return err
 	}

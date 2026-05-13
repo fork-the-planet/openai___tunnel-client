@@ -39,6 +39,8 @@ type fileControlPlaneConfig struct {
 	BaseURL             *string           `yaml:"base_url"`
 	TunnelID            *string           `yaml:"tunnel_id"`
 	APIKey              *string           `yaml:"api_key"`
+	ClientCert          *string           `yaml:"client_cert"`
+	ClientKey           *string           `yaml:"client_key"`
 	HTTPProxy           *string           `yaml:"http_proxy"`
 	MaxInFlightRequests *int              `yaml:"max_inflight_requests"`
 	PollTimeout         *string           `yaml:"poll_timeout"`
@@ -183,6 +185,8 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 
 	setString(env, "CONTROL_PLANE_BASE_URL", c.ControlPlane.BaseURL)
 	setString(env, "CONTROL_PLANE_TUNNEL_ID", c.ControlPlane.TunnelID)
+	setString(env, "CONTROL_PLANE_CLIENT_CERT", c.ControlPlane.ClientCert)
+	setString(env, "CONTROL_PLANE_CLIENT_KEY", c.ControlPlane.ClientKey)
 	setString(env, "CONTROL_PLANE_HTTP_PROXY", c.ControlPlane.HTTPProxy)
 	setInt(env, "CONTROL_PLANE_MAX_INFLIGHT_REQUESTS", c.ControlPlane.MaxInFlightRequests)
 	setString(env, "CONTROL_PLANE_POLL_TIMEOUT", c.ControlPlane.PollTimeout)

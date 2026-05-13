@@ -46,6 +46,7 @@ const (
 
 const (
 	defaultControlPlaneBaseURL                = "https://api.openai.com"
+	defaultControlPlaneMTLSBaseURL            = "https://mtls.api.openai.com"
 	defaultControlPlaneMaxInFlight            = 20
 	maxControlPlaneMaxInFlight                = 10000
 	defaultControlPlanePollTimeout            = 30 * time.Second
@@ -84,6 +85,8 @@ var commonFlagAliases = []flagAlias{
 	{Canonical: "control-plane.base-url", Alias: "control-plane-base-url", Kind: "string"},
 	{Canonical: "control-plane.tunnel-id", Alias: "control-plane-tunnel-id", Kind: "string"},
 	{Canonical: "control-plane.api-key", Alias: "control-plane-api-key", Kind: "string"},
+	{Canonical: "control-plane.client-cert", Alias: "control-plane-client-cert", Kind: "string"},
+	{Canonical: "control-plane.client-key", Alias: "control-plane-client-key", Kind: "string"},
 	{Canonical: "mcp.server-url", Alias: "mcp-server-url", Kind: "stringArray"},
 	{Canonical: "mcp.command", Alias: "mcp-command", Kind: "stringArray"},
 	{Canonical: "mcp.extra-headers", Alias: "mcp-extra-headers", Kind: "stringArray"},
@@ -140,11 +143,12 @@ type ControlPlaneConfig struct {
 	PollTimeout         time.Duration
 	// PollBackoffMin/PollBackoffMax allow overriding the poller's retry window.
 	// Zero values fall back to the internal defaults.
-	PollBackoffMin  time.Duration
-	PollBackoffMax  time.Duration
-	ExtraHeaders    map[string]string
-	HTTPProxy       *url.URL
-	HTTPProxySource ProxySource
+	PollBackoffMin    time.Duration
+	PollBackoffMax    time.Duration
+	ClientCertificate *tlsconfig.ClientCertificate
+	ExtraHeaders      map[string]string
+	HTTPProxy         *url.URL
+	HTTPProxySource   ProxySource
 }
 
 // LoggingConfig defines logging behavior for the client.
@@ -317,6 +321,8 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_CERT\tPath to PEM client certificate for control-plane mTLS (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_KEY\tPath to PEM client private key for control-plane mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_EXTRA_HEADERS\tStatic headers for tunnel control-plane requests; values accept env:VAR or file:/path (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_CONFIG\tPath to YAML config file (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE\tProfile name to load from the profile directory (optional)")
@@ -344,6 +350,8 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
 	fs.String("control-plane.api-key", "", "Reference to environment variable or file containing the control-plane API key (format env:VARNAME or file:/path/to/secret)")
+	fs.String("control-plane.client-cert", "", "Path to PEM client certificate for control-plane mTLS (format <path|env:VAR|file:/path>) (env.CONTROL_PLANE_CLIENT_CERT)")
+	fs.String("control-plane.client-key", "", "Path to PEM client private key for control-plane mTLS (format <path|env:VAR|file:/path>) (env.CONTROL_PLANE_CLIENT_KEY)")
 	fs.String("control-plane.http-proxy", "", "Outbound HTTP proxy for the control plane (format <url|env:VAR>)")
 	fs.Int("control-plane.max-inflight", defaultControlPlaneMaxInFlight, "Maximum number of in-flight MCP requests before applying backpressure (env.CONTROL_PLANE_MAX_INFLIGHT_REQUESTS, max 10000)")
 	fs.Duration("control-plane.poll-timeout", defaultControlPlanePollTimeout, "Long-poll timeout when fetching commands from the control plane (env.CONTROL_PLANE_POLL_TIMEOUT)")
@@ -584,26 +592,34 @@ func buildTLSBundle(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*
 }
 
 func buildMCPClientCertificate(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*tlsconfig.ClientCertificate, error) {
+	return buildClientCertificate("mcp.client-cert", "mcp.client-key", "MCP_CLIENT_CERT", "MCP_CLIENT_KEY", "MCP", fs, lookupEnv)
+}
+
+func buildControlPlaneClientCertificate(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*tlsconfig.ClientCertificate, error) {
+	return buildClientCertificate("control-plane.client-cert", "control-plane.client-key", "CONTROL_PLANE_CLIENT_CERT", "CONTROL_PLANE_CLIENT_KEY", "control-plane", fs, lookupEnv)
+}
+
+func buildClientCertificate(certFlagName, keyFlagName, certEnvName, keyEnvName, errorLabel string, fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*tlsconfig.ClientCertificate, error) {
 	rawCertPath := firstSet(
-		getValue(fs, "mcp.client-cert"),
-		envOrDefault(lookupEnv, "MCP_CLIENT_CERT", ""),
+		getValue(fs, certFlagName),
+		envOrDefault(lookupEnv, certEnvName, ""),
 	)
 	rawKeyPath := firstSet(
-		getValue(fs, "mcp.client-key"),
-		envOrDefault(lookupEnv, "MCP_CLIENT_KEY", ""),
+		getValue(fs, keyFlagName),
+		envOrDefault(lookupEnv, keyEnvName, ""),
 	)
 
-	certPath, err := resolvePathReference("mcp.client-cert", rawCertPath, lookupEnv)
+	certPath, err := resolvePathReference(certFlagName, rawCertPath, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
-	keyPath, err := resolvePathReference("mcp.client-key", rawKeyPath, lookupEnv)
+	keyPath, err := resolvePathReference(keyFlagName, rawKeyPath, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
 	clientCert, err := tlsconfig.LoadClientCertificate(certPath, keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("invalid MCP client certificate configuration: %w", err)
+		return nil, fmt.Errorf("invalid %s client certificate configuration: %w", errorLabel, err)
 	}
 	return clientCert, nil
 }
@@ -613,7 +629,15 @@ func resolvePathReference(source, raw string, lookupEnv func(string) (string, bo
 	if raw == "" {
 		return "", nil
 	}
-	if !strings.HasPrefix(strings.ToLower(raw), "env:") {
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "file:") {
+		path := strings.TrimSpace(raw[len("file:"):])
+		if path == "" {
+			return "", fmt.Errorf("invalid %s reference %q: file path is required", source, raw)
+		}
+		return path, nil
+	}
+	if !strings.HasPrefix(lower, "env:") {
 		return raw, nil
 	}
 
@@ -705,10 +729,11 @@ func getControlPlaneAPIKey(flagValue string, lookupEnv func(string) (string, boo
 }
 
 func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), globalProxy *url.URL, globalProxySource ProxySource) (ControlPlaneConfig, error) {
-	baseURLRaw := firstSet(
-		getValue(fs, "control-plane.base-url"),
-		envOrDefault(lookupEnv, "CONTROL_PLANE_BASE_URL", defaultControlPlaneBaseURL),
-	)
+	clientCertificate, err := buildControlPlaneClientCertificate(fs, lookupEnv)
+	if err != nil {
+		return ControlPlaneConfig{}, err
+	}
+	baseURLRaw := controlPlaneBaseURLRaw(fs, lookupEnv, clientCertificate)
 	baseURL, err := parseURL(baseURLRaw)
 	if err != nil {
 		return ControlPlaneConfig{}, fmt.Errorf("invalid control-plane.base-url: %w", err)
@@ -813,10 +838,25 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		APIKey:              apiKey,
 		MaxInFlightRequests: maxInFlight,
 		PollTimeout:         pollTimeout,
+		ClientCertificate:   clientCertificate,
 		ExtraHeaders:        extraHeaders,
 		HTTPProxy:           httpProxy,
 		HTTPProxySource:     httpProxySource,
 	}, nil
+}
+
+func controlPlaneBaseURLRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), clientCertificate *tlsconfig.ClientCertificate) string {
+	baseURLRaw := firstSet(
+		getValue(fs, "control-plane.base-url"),
+		envOrDefault(lookupEnv, "CONTROL_PLANE_BASE_URL", defaultControlPlaneBaseURL),
+	)
+	if clientCertificate == nil {
+		return baseURLRaw
+	}
+	if strings.TrimRight(strings.TrimSpace(baseURLRaw), "/") == defaultControlPlaneBaseURL {
+		return defaultControlPlaneMTLSBaseURL
+	}
+	return baseURLRaw
 }
 
 // buildControlPlaneExtraHeaders resolves additional headers for the control-plane HTTP client.

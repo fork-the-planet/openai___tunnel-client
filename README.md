@@ -135,6 +135,11 @@ Starter prompts for Codex:
   - `GET /v1/tunnel/{tunnel_id}/poll`
   - `POST /v1/tunnel/{tunnel_id}/response`
 - Control-plane requests include `User-Agent: oai-tunnel-client/<version>` for compatibility, plus explicit `X-Tunnel-Client-Name` and `X-Tunnel-Client-Version` headers for service-side logs and metrics.
+- Control-plane HTTPS requests can present a separate client certificate/key
+  pair using `--control-plane.client-cert` and `--control-plane.client-key`
+  (or `CONTROL_PLANE_CLIENT_CERT` / `CONTROL_PLANE_CLIENT_KEY`). When those are
+  configured with the default `https://api.openai.com` host, the client
+  automatically uses `https://mtls.api.openai.com` for control-plane calls.
 - On startup, it fetches tunnel metadata for operator visibility:
   - `GET /v1/tunnels/{tunnel_id}`
 - It forwards received JSON-RPC requests to your configured MCP server over

@@ -1370,6 +1370,142 @@ func TestLoadParsesMCPClientCertificateFlags(t *testing.T) {
 	}
 }
 
+func TestLoadParsesControlPlaneClientCertificateFlagsAndSelectsMTLSBaseURL(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+		"--control-plane.client-cert", certPath,
+		"--control-plane.client-key", keyPath,
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ControlPlane.ClientCertificate == nil {
+		t.Fatalf("expected control-plane client certificate to be configured")
+	}
+	if cfg.ControlPlane.ClientCertificate.CertPath != certPath {
+		t.Fatalf("expected cert path %q, got %q", certPath, cfg.ControlPlane.ClientCertificate.CertPath)
+	}
+	if cfg.ControlPlane.ClientCertificate.KeyPath != keyPath {
+		t.Fatalf("expected key path %q, got %q", keyPath, cfg.ControlPlane.ClientCertificate.KeyPath)
+	}
+	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://mtls.api.openai.com" {
+		t.Fatalf("expected mTLS base URL, got %v", cfg.ControlPlane.BaseURL)
+	}
+}
+
+func TestLoadParsesControlPlaneClientCertificateEnvReferences(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	cfg, err := Load([]string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY":     "control-key",
+		"CONTROL_PLANE_CLIENT_CERT": "env:CONTROL_CERT_FILE",
+		"CONTROL_PLANE_CLIENT_KEY":  "env:CONTROL_KEY_FILE",
+		"CONTROL_CERT_FILE":         certPath,
+		"CONTROL_KEY_FILE":          keyPath,
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ControlPlane.ClientCertificate == nil {
+		t.Fatalf("expected control-plane client certificate")
+	}
+	if cfg.ControlPlane.ClientCertificate.CertPath != certPath {
+		t.Fatalf("expected cert path %q, got %q", certPath, cfg.ControlPlane.ClientCertificate.CertPath)
+	}
+}
+
+func TestLoadParsesControlPlaneClientCertificateYAMLFileReferences(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	configPath := writeTempConfigFile(t, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: env:YAML_CONTROL_PLANE_API_KEY
+  client_cert: file:`+certPath+`
+  client_key: file:`+keyPath+`
+mcp:
+  server_urls:
+    - channel: main
+      url: https://yaml-mcp.example/mcp
+`)
+	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
+		"YAML_CONTROL_PLANE_API_KEY": "yaml-control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ControlPlane.ClientCertificate == nil {
+		t.Fatalf("expected control-plane client certificate")
+	}
+	if cfg.ControlPlane.ClientCertificate.CertPath != certPath {
+		t.Fatalf("expected cert path %q, got %q", certPath, cfg.ControlPlane.ClientCertificate.CertPath)
+	}
+	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://mtls.api.openai.com" {
+		t.Fatalf("expected default control-plane URL to switch to mTLS host, got %v", cfg.ControlPlane.BaseURL)
+	}
+}
+
+func TestLoadPreservesExplicitNonDefaultControlPlaneBaseURLWithMTLS(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	cfg, err := Load([]string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--control-plane.base-url", "https://local-control.example",
+		"--control-plane.client-cert", certPath,
+		"--control-plane.client-key", keyPath,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://local-control.example" {
+		t.Fatalf("expected explicit base URL to be preserved, got %v", cfg.ControlPlane.BaseURL)
+	}
+}
+
+func TestLoadRejectsIncompleteControlPlaneClientCertificate(t *testing.T) {
+	certPath, _ := writeTempClientCertPair(t)
+	_, err := Load([]string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--control-plane.client-cert", certPath,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatalf("expected error for incomplete control-plane client certificate")
+	}
+	if !strings.Contains(err.Error(), "control-plane") || !strings.Contains(err.Error(), "client key path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsMismatchedControlPlaneClientCertificate(t *testing.T) {
+	certPath, _ := writeTempClientCertPair(t)
+	_, keyPath := writeTempClientCertPair(t)
+	_, err := Load([]string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--control-plane.client-cert", certPath,
+		"--control-plane.client-key", keyPath,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatalf("expected error for mismatched control-plane client certificate")
+	}
+	if !strings.Contains(err.Error(), "control-plane") || !strings.Contains(err.Error(), "private key does not match") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadParsesMCPClientCertificatePerChannel(t *testing.T) {
 	certPath, keyPath := writeTempClientCertPair(t)
 	args := []string{

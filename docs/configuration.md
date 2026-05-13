@@ -99,6 +99,10 @@ control_plane:
   base_url: https://api.openai.com # citadel-ignore: public endpoint example for external tunnel-client config
   tunnel_id: tunnel_0123456789abcdef0123456789abcdef
   api_key: env:CONTROL_PLANE_API_KEY
+  # Optional. When configured with the default api.openai.com base URL,
+  # tunnel-client automatically uses https://mtls.api.openai.com.
+  client_cert: file:/run/secrets/control-plane-client.crt
+  client_key: file:/run/secrets/control-plane-client.key
   max_inflight_requests: 20
   poll_timeout: 30s
   extra_headers:
@@ -227,6 +231,10 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - Flag: `--control-plane.base-url`
   - Env: `CONTROL_PLANE_BASE_URL`
   - Default: `https://api.openai.com`
+  - With control-plane mTLS configured and this value left at the default API
+    host, `tunnel-client` automatically uses `https://mtls.api.openai.com`.
+    Set a non-default base URL explicitly for staging, development, or private
+    control-plane hosts.
   - **Important**: this value is treated as the **host root**, not a pre-prefixed path.
     - Correct: `https://api.openai.com`
     - Incorrect: `https://api.openai.com/v1/tunnel` (would create `/v1/tunnel/v1/tunnel/...`)
@@ -240,6 +248,16 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - Env (preferred): `CONTROL_PLANE_API_KEY`
   - Env (fallback): `OPENAI_API_KEY` (used only if `CONTROL_PLANE_API_KEY` is unset)
   - Required: yes
+- **Client certificate for mTLS (optional)**
+  - Flags: `--control-plane.client-cert=/path/to/client.crt` and `--control-plane.client-key=/path/to/client.key`
+  - Env: `CONTROL_PLANE_CLIENT_CERT` and `CONTROL_PLANE_CLIENT_KEY`
+  - YAML: `control_plane.client_cert` and `control_plane.client_key`
+  - Values may be plain paths, `env:VARNAME` path references, or
+    `file:/path/to/pem` file references.
+  - Configure both fields together. Cert-only, key-only, unreadable files,
+    invalid PEM, and mismatched key/cert pairs fail startup and `doctor`.
+  - The runtime API key is still required; mTLS only adds TLS client-certificate
+    presentation to the control-plane HTTPS connection.
 - **HTTP proxy (optional)**
   - Flag: `--control-plane.http-proxy=<url|env:VAR>`
   - Env: `CONTROL_PLANE_HTTP_PROXY`
