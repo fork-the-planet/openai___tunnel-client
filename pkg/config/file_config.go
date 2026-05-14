@@ -17,6 +17,7 @@ type fileConfigValues struct {
 	ProfileName string
 	ProfilePath string
 	ProfileDir  string
+	ProfileFile bool
 	Raw         []byte
 	Env         map[string]string
 }
@@ -146,6 +147,7 @@ func loadFileConfigValues(fs *pflag.FlagSet, lookupEnv func(string) (string, boo
 		ProfileName: source.ProfileName,
 		ProfilePath: source.ProfilePath,
 		ProfileDir:  source.ProfileDir,
+		ProfileFile: source.ProfileFile,
 		Raw:         bytes.Clone(data),
 		Env:         env,
 	}, nil
@@ -183,7 +185,9 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setString(env, "CA_BUNDLE", c.CABundle)
 	setString(env, "TUNNEL_CLIENT_HTTP_PROXY", c.HTTPProxy)
 
-	setString(env, "CONTROL_PLANE_BASE_URL", c.ControlPlane.BaseURL)
+	if err := setResolvedString(env, "CONTROL_PLANE_BASE_URL", "control_plane.base_url", c.ControlPlane.BaseURL, lookupEnv); err != nil {
+		return nil, err
+	}
 	setString(env, "CONTROL_PLANE_TUNNEL_ID", c.ControlPlane.TunnelID)
 	setString(env, "CONTROL_PLANE_CLIENT_CERT", c.ControlPlane.ClientCert)
 	setString(env, "CONTROL_PLANE_CLIENT_KEY", c.ControlPlane.ClientKey)
@@ -206,21 +210,23 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setString(env, "LOG_FILE", c.Log.File)
 	setBool(env, "LOG_HTTP_RAW_UNSAFE", c.Log.HTTPRawUnsafe)
 
-	setString(env, "HEALTH_LISTEN_ADDR", c.Health.ListenAddr)
+	if err := setResolvedString(env, "HEALTH_LISTEN_ADDR", "health.listen_addr", c.Health.ListenAddr, lookupEnv); err != nil {
+		return nil, err
+	}
 	setString(env, "HEALTH_URL_FILE", c.Health.URLFile)
 	setBool(env, "ALLOW_REMOTE_UI", c.AdminUI.AllowRemote)
 	setBool(env, "OPEN_WEB_UI", c.AdminUI.OpenBrowser)
 	setInt(env, "ADMIN_UI_LOG_BUFFER_EVENTS", c.AdminUI.LogBufferEvents)
 	setString(env, "PID_FILE", c.Process.PIDFile)
 
-	mcpServerEntries, err := formatMCPServerURLEntries(c.MCP.ServerURLs)
+	mcpServerEntries, err := formatResolvedMCPServerURLEntries(c.MCP.ServerURLs, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
 	if len(mcpServerEntries) > 0 {
 		env["MCP_SERVER_URL"] = strings.Join(mcpServerEntries, "\n")
 	}
-	mcpCommandEntries, err := formatMCPCommandEntries(c.MCP.Commands)
+	mcpCommandEntries, err := formatResolvedMCPCommandEntries(c.MCP.Commands, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +245,7 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setString(env, "MCP_CONNECTION_MAX_TTL", c.MCP.ConnectionMaxTTL)
 	setInt(env, "MCP_MAX_CONCURRENT_REQUESTS", c.MCP.MaxConcurrentRequests)
 
-	harpoonTargets, err := formatHarpoonTargets(c.Harpoon.Targets)
+	harpoonTargets, err := formatResolvedHarpoonTargets(c.Harpoon.Targets, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +280,18 @@ func setString(env map[string]string, key string, value *string) {
 	}
 }
 
+func setResolvedString(env map[string]string, key string, source string, value *string, lookupEnv func(string) (string, bool)) error {
+	if value == nil {
+		return nil
+	}
+	resolved, err := resolveConfigValueReference(source, *value, lookupEnv)
+	if err != nil {
+		return err
+	}
+	env[key] = resolved
+	return nil
+}
+
 func setBool(env map[string]string, key string, value *bool) {
 	if value != nil {
 		env[key] = strconv.FormatBool(*value)
@@ -287,19 +305,48 @@ func setInt(env map[string]string, key string, value *int) {
 }
 
 func resolveConfigSecretReference(source string, raw string, lookupEnv func(string) (string, bool)) (string, error) {
+	return resolveConfigValueReference(source, raw, lookupEnv)
+}
+
+func resolveConfigValueReference(source string, raw string, lookupEnv func(string) (string, bool)) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", fmt.Errorf("%s cannot be empty", source)
 	}
 	lower := strings.ToLower(raw)
-	if strings.HasPrefix(lower, "env:") || strings.HasPrefix(lower, "file:") {
-		secret, err := getControlPlaneAPIKey(raw, lookupEnv)
-		if err != nil {
-			return "", fmt.Errorf("invalid %s: %w", source, err)
+
+	switch {
+	case strings.HasPrefix(lower, "env:"):
+		name := strings.TrimSpace(raw[len("env:"):])
+		if name == "" {
+			return "", fmt.Errorf("invalid %s reference %q: environment variable name is required", source, raw)
 		}
-		return secret, nil
+		value, ok := lookupEnv(name)
+		if !ok {
+			return "", fmt.Errorf("invalid %s reference %q: environment variable %q is not set", source, raw, name)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return "", fmt.Errorf("invalid %s reference %q: environment variable %q is empty", source, raw, name)
+		}
+		return value, nil
+	case strings.HasPrefix(lower, "file:"):
+		path := strings.TrimSpace(raw[len("file:"):])
+		if path == "" {
+			return "", fmt.Errorf("invalid %s reference %q: file path is required", source, raw)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("invalid %s reference %q: read file: %w", source, raw, err)
+		}
+		value := strings.TrimSpace(string(data))
+		if value == "" {
+			return "", fmt.Errorf("invalid %s reference %q: file is empty", source, raw)
+		}
+		return value, nil
+	default:
+		return raw, nil
 	}
-	return raw, nil
 }
 
 func joinHeaderMap(headers map[string]string) string {
@@ -340,6 +387,35 @@ func formatMCPServerURLEntries(entries []fileMCPServerURL) ([]string, error) {
 	return out, nil
 }
 
+func formatResolvedMCPServerURLEntries(entries []fileMCPServerURL, lookupEnv func(string) (string, bool)) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.URL) == "" {
+			return nil, fmt.Errorf("mcp.server_urls entry requires url")
+		}
+		urlValue, err := resolveConfigValueReference("mcp.server_urls.url", entry.URL, lookupEnv)
+		if err != nil {
+			return nil, err
+		}
+		parts := []string{}
+		if entry.Channel != nil && *entry.Channel != "" {
+			parts = append(parts, "channel="+*entry.Channel)
+		}
+		parts = append(parts, "url="+urlValue)
+		if entry.HTTPProxy != nil && *entry.HTTPProxy != "" {
+			parts = append(parts, "http-proxy="+*entry.HTTPProxy)
+		}
+		if entry.ClientCert != nil && *entry.ClientCert != "" {
+			parts = append(parts, "client-cert="+*entry.ClientCert)
+		}
+		if entry.ClientKey != nil && *entry.ClientKey != "" {
+			parts = append(parts, "client-key="+*entry.ClientKey)
+		}
+		out = append(out, strings.Join(parts, ","))
+	}
+	return out, nil
+}
+
 func formatMCPCommandEntries(entries []fileMCPCommand) ([]string, error) {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -356,7 +432,27 @@ func formatMCPCommandEntries(entries []fileMCPCommand) ([]string, error) {
 	return out, nil
 }
 
-func formatHarpoonTargets(targets []fileHarpoonTarget) ([]string, error) {
+func formatResolvedMCPCommandEntries(entries []fileMCPCommand, lookupEnv func(string) (string, bool)) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Command) == "" {
+			return nil, fmt.Errorf("mcp.commands entry requires command")
+		}
+		commandValue, err := resolveConfigValueReference("mcp.commands.command", entry.Command, lookupEnv)
+		if err != nil {
+			return nil, err
+		}
+		parts := []string{}
+		if entry.Channel != nil && *entry.Channel != "" {
+			parts = append(parts, "channel="+*entry.Channel)
+		}
+		parts = append(parts, "command="+commandValue)
+		out = append(out, strings.Join(parts, ","))
+	}
+	return out, nil
+}
+
+func formatResolvedHarpoonTargets(targets []fileHarpoonTarget, lookupEnv func(string) (string, bool)) ([]string, error) {
 	out := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if strings.TrimSpace(target.Label) == "" {
@@ -365,7 +461,11 @@ func formatHarpoonTargets(targets []fileHarpoonTarget) ([]string, error) {
 		if strings.TrimSpace(target.URL) == "" {
 			return nil, fmt.Errorf("harpoon.targets entry %q requires url", target.Label)
 		}
-		parts := []string{"label=" + target.Label, "url=" + target.URL}
+		targetURL, err := resolveConfigValueReference("harpoon.targets.url", target.URL, lookupEnv)
+		if err != nil {
+			return nil, err
+		}
+		parts := []string{"label=" + target.Label, "url=" + targetURL}
 		if target.Description != nil && *target.Description != "" {
 			parts = append(parts, "desc="+*target.Description)
 		}

@@ -70,6 +70,46 @@ mcp:
 	}
 }
 
+func TestLoadUsesProfileFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile-file-demo.yaml")
+	writeProfileFile(t, path, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: env:PROFILE_CONTROL_PLANE_API_KEY
+mcp:
+  server_urls:
+    - channel: main
+      url: https://profile-file.example/mcp
+`)
+
+	cfg, err := Load([]string{"--profile-file", path}, lookupEnvMap(map[string]string{
+		"PROFILE_CONTROL_PLANE_API_KEY": "profile-file-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Runtime.ConfigFile != path {
+		t.Fatalf("expected config file %q, got %q", path, cfg.Runtime.ConfigFile)
+	}
+	if !cfg.Runtime.ProfileFile {
+		t.Fatalf("expected runtime metadata to mark profile-file source")
+	}
+	if cfg.Runtime.ProfileName != "profile-file-demo" {
+		t.Fatalf("expected derived profile name %q, got %q", "profile-file-demo", cfg.Runtime.ProfileName)
+	}
+	if cfg.Runtime.ProfilePath != path {
+		t.Fatalf("expected profile path %q, got %q", path, cfg.Runtime.ProfilePath)
+	}
+	if cfg.Runtime.ProfileDir != dir {
+		t.Fatalf("expected profile dir %q, got %q", dir, cfg.Runtime.ProfileDir)
+	}
+	if cfg.ControlPlane.APIKey != "profile-file-key" {
+		t.Fatalf("expected resolved profile API key, got %q", cfg.ControlPlane.APIKey)
+	}
+}
+
 func TestLoadUsesXDGProfileDefault(t *testing.T) {
 	xdgHome := t.TempDir()
 	name := "xdg_profile"
@@ -97,6 +137,34 @@ mcp:
 	}
 	if cfg.MCP.Command != "python server.py" {
 		t.Fatalf("expected MCP command from profile, got %q", cfg.MCP.Command)
+	}
+}
+
+func TestLoadUsesProfileFileEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env-profile-file.yaml")
+	writeProfileFile(t, path, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: profile-key
+mcp:
+  server_urls:
+    - channel: main
+      url: https://env-profile-file.example/mcp
+`)
+
+	cfg, err := Load(nil, lookupEnvMap(map[string]string{
+		ProfileFileEnvName: path,
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if !cfg.Runtime.ProfileFile {
+		t.Fatalf("expected runtime metadata to mark env profile-file source")
+	}
+	if cfg.Runtime.ProfileName != "env-profile-file" || cfg.Runtime.ProfilePath != path {
+		t.Fatalf("unexpected runtime profile metadata: %#v", cfg.Runtime)
 	}
 }
 
@@ -143,12 +211,38 @@ mcp:
 		t.Fatalf("expected explicit source conflict, got %v", err)
 	}
 
+	_, err = Load([]string{"--config", configPath, "--profile-file", configPath}, lookupEnvMap(nil))
+	if err == nil || !strings.Contains(err.Error(), "--config and --profile-file are mutually exclusive") {
+		t.Fatalf("expected config/profile-file conflict, got %v", err)
+	}
+
+	_, err = Load([]string{"--profile", "sample", "--profile-file", configPath}, lookupEnvMap(nil))
+	if err == nil || !strings.Contains(err.Error(), "--profile and --profile-file are mutually exclusive") {
+		t.Fatalf("expected profile/profile-file conflict, got %v", err)
+	}
+
 	_, err = Load(nil, lookupEnvMap(map[string]string{
 		ConfigEnvName:  configPath,
 		ProfileEnvName: "sample",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "TUNNEL_CLIENT_CONFIG and TUNNEL_CLIENT_PROFILE are mutually exclusive") {
 		t.Fatalf("expected env source conflict, got %v", err)
+	}
+
+	_, err = Load(nil, lookupEnvMap(map[string]string{
+		ConfigEnvName:      configPath,
+		ProfileFileEnvName: configPath,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "TUNNEL_CLIENT_CONFIG and TUNNEL_CLIENT_PROFILE_FILE are mutually exclusive") {
+		t.Fatalf("expected config/profile-file env conflict, got %v", err)
+	}
+
+	_, err = Load(nil, lookupEnvMap(map[string]string{
+		ProfileEnvName:     "sample",
+		ProfileFileEnvName: configPath,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "TUNNEL_CLIENT_PROFILE and TUNNEL_CLIENT_PROFILE_FILE are mutually exclusive") {
+		t.Fatalf("expected profile/profile-file env conflict, got %v", err)
 	}
 }
 
@@ -177,6 +271,7 @@ mcp:
 control_plane:
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   api_key: env:PROFILE_CONTROL_PLANE_API_KEY
+  base_url: env:BAD-NAME
 mcp:
   extra_headers:
     X-Internal-Auth: env:BAD-NAME
@@ -192,6 +287,7 @@ mcp:
 func TestValidateProfileDoesNotResolveSecrets(t *testing.T) {
 	err := ValidateProfileBytes("profile.yaml", []byte(`
 control_plane:
+  base_url: env:NOT_SET_IN_TEST
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   api_key: env:NOT_SET_IN_TEST
 mcp:
@@ -199,9 +295,16 @@ mcp:
     X-Internal-Auth: env:NOT_SET_IN_TEST
   discovery_extra_headers:
     X-Discovery-Auth: file:/path/not/read/during/validation
+  commands:
+    - channel: main
+      command: file:/path/not/read/during/validation
   server_urls:
     - channel: main
-      url: https://mcp.example/mcp
+      url: env:NOT_SET_IN_TEST
+harpoon:
+  targets:
+    - label: auth
+      url: file:/path/not/read/during/validation
 `))
 	if err != nil {
 		t.Fatalf("expected validation without secret resolution to pass, got %v", err)

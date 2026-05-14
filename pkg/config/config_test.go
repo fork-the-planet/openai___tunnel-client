@@ -215,10 +215,13 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 func TestLoadUsesYAMLConfigWhenFlagsAndEnvUnset(t *testing.T) {
 	controlHeaderPath := writeTempSecretFile(t, "yaml-control-header\n")
 	discoveryHeaderPath := writeTempSecretFile(t, "yaml-discovery-from-file\n")
+	healthListenAddrPath := writeTempSecretFile(t, "127.0.0.1:9090\n")
+	toolsCommandPath := writeTempSecretFile(t, "python -m tools\n")
+	harpoonTargetPath := writeTempSecretFile(t, "https://auth.example\n")
 	configPath := writeTempConfigFile(t, `
 config_version: 1
 control_plane:
-  base_url: https://yaml-control.example
+  base_url: env:YAML_CONTROL_PLANE_BASE_URL
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   api_key: env:YAML_CONTROL_PLANE_API_KEY
   max_inflight_requests: 17
@@ -232,7 +235,7 @@ log:
   file: /tmp/yaml-log.ndjson
   http_raw_unsafe: true
 health:
-  listen_addr: 127.0.0.1:9090
+  listen_addr: file:`+healthListenAddrPath+`
   url_file: /tmp/yaml-health-url
 admin_ui:
   allow_remote: true
@@ -243,10 +246,10 @@ process:
 mcp:
   server_urls:
     - channel: main
-      url: https://yaml-mcp.example/mcp
+      url: env:YAML_MCP_MAIN_URL
   commands:
     - channel: tools
-      command: python -m tools
+      command: file:`+toolsCommandPath+`
   extra_headers:
     X-Internal-Auth: env:YAML_MCP_STATIC_HEADER
   discovery_extra_headers:
@@ -256,7 +259,7 @@ mcp:
 harpoon:
   targets:
     - label: auth
-      url: https://auth.example
+      url: file:`+harpoonTargetPath+`
       description: Auth server
   additional_transports:
     - http-streamable
@@ -266,8 +269,10 @@ proxy:
 `)
 
 	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
-		"YAML_CONTROL_PLANE_API_KEY": "yaml-control-key",
-		"YAML_MCP_STATIC_HEADER":     "yaml-static-from-env",
+		"YAML_CONTROL_PLANE_BASE_URL": "https://yaml-control.example",
+		"YAML_CONTROL_PLANE_API_KEY":  "yaml-control-key",
+		"YAML_MCP_MAIN_URL":           "https://yaml-mcp.example/mcp",
+		"YAML_MCP_STATIC_HEADER":      "yaml-static-from-env",
 	}))
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -276,7 +281,7 @@ proxy:
 	if cfg.Runtime.ConfigFile != configPath {
 		t.Fatalf("expected config file %q, got %q", configPath, cfg.Runtime.ConfigFile)
 	}
-	if !strings.Contains(string(cfg.Runtime.ConfigFileContents), "yaml-control.example") {
+	if !strings.Contains(string(cfg.Runtime.ConfigFileContents), "env:YAML_CONTROL_PLANE_BASE_URL") {
 		t.Fatalf("expected runtime config file contents to contain startup YAML")
 	}
 	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://yaml-control.example" {
@@ -332,6 +337,9 @@ proxy:
 	}
 	if len(cfg.Harpoon.Targets) != 1 || cfg.Harpoon.Targets[0].Label != "auth" {
 		t.Fatalf("unexpected harpoon targets: %#v", cfg.Harpoon.Targets)
+	}
+	if cfg.Harpoon.Targets[0].BaseURL == nil || cfg.Harpoon.Targets[0].BaseURL.String() != "https://auth.example" {
+		t.Fatalf("unexpected resolved harpoon target url: %v", cfg.Harpoon.Targets[0].BaseURL)
 	}
 	if !cfg.Harpoon.AdditionalTransportEnabled(HarpoonTransportHTTPStreamable) || !cfg.Harpoon.CapturePayloads {
 		t.Fatalf("unexpected harpoon config: %#v", cfg.Harpoon)

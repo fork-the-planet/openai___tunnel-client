@@ -73,6 +73,12 @@ Named profiles use the same YAML schema. Run a profile with:
 tunnel-client run --profile sample_mcp_with_dcr
 ```
 
+Or point `run` at one checked-in or ad hoc profile file directly:
+
+```bash
+tunnel-client run --profile-file ./fixtures/sample_mcp_with_dcr.yaml
+```
+
 Profile lookup uses this precedence:
 
 1. `--profile-dir /path/to/profiles`
@@ -87,8 +93,10 @@ For example, with the default XDG fallback, the command above loads:
 ```
 
 `TUNNEL_CLIENT_PROFILE=sample_mcp_with_dcr` is equivalent to passing
-`--profile sample_mcp_with_dcr`. `--config` and `--profile` are mutually
-exclusive, and `TUNNEL_CLIENT_CONFIG` and `TUNNEL_CLIENT_PROFILE` are mutually
+`--profile sample_mcp_with_dcr`. `TUNNEL_CLIENT_PROFILE_FILE` is equivalent to
+passing `--profile-file /path/to/profile.yaml`. `--config`, `--profile`, and
+`--profile-file` are mutually exclusive, and `TUNNEL_CLIENT_CONFIG`,
+`TUNNEL_CLIENT_PROFILE`, and `TUNNEL_CLIENT_PROFILE_FILE` are mutually
 exclusive.
 
 Example:

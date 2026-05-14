@@ -201,6 +201,30 @@ func TestDoctorReadsProfile(t *testing.T) {
 	require.Contains(t, stdout, path)
 }
 
+func TestDoctorReadsProfileFile(t *testing.T) {
+	t.Parallel()
+
+	profileDir := t.TempDir()
+	path := filepath.Join(profileDir, "sample-profile-file.yaml")
+	data, err := generateProfileSample("sample_mcp_with_dcr", sampleProfileRequest{
+		TunnelID:         "tunnel_0123456789abcdef0123456789abcdef",
+		APIKeyRef:        "env:CONTROL_PLANE_API_KEY",
+		HealthListenAddr: "127.0.0.1:0",
+		MCPCommand:       testExecutableCommand(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor", "--profile-file", path)
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "profile file: "+path)
+	require.Contains(t, stdout, "NEXT   tunnel-client run --profile-file "+path)
+}
+
 func TestDoctorUsesEphemeralUIHintForPortZero(t *testing.T) {
 	t.Parallel()
 

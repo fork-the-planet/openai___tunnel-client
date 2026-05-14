@@ -81,6 +81,7 @@ tunnel-client profiles samples show sample_mcp_enterprise_proxy
 tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunnel-id tunnel_0123456789abcdef0123456789abcdef --mcp-command "python /path/to/server.py"
 tunnel-client doctor --profile local-stdio --explain
 tunnel-client run --profile local-stdio
+tunnel-client run --profile-file ./profiles/local-stdio.yaml
 ```
 
 If you need the tunnel id or runtime/admin keys first, open the matching URL

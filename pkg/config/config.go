@@ -117,6 +117,7 @@ type RuntimeConfig struct {
 	ProfileName        string
 	ProfilePath        string
 	ProfileDir         string
+	ProfileFile        bool
 }
 
 // AdminUIConfig defines runtime behavior for the embedded admin web UI.
@@ -326,6 +327,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_EXTRA_HEADERS\tStatic headers for tunnel control-plane requests; values accept env:VAR or file:/path (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_CONFIG\tPath to YAML config file (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE\tProfile name to load from the profile directory (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE_FILE\tPath to a specific profile YAML file (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE_DIR\tProfile directory override (default: $XDG_CONFIG_HOME/tunnel-client or ~/.config/tunnel-client)")
 	_, _ = fmt.Fprintln(fs.Output(), "  XDG_CONFIG_HOME\tBase directory for default tunnel-client profiles (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  HEALTH_LISTEN_ADDR\tHealth/admin listen address; use :0 to request an ephemeral port (optional)")
@@ -346,6 +348,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	registerTLSFlags(fs)
 	fs.String("config", "", "Path to YAML config file (env.TUNNEL_CLIENT_CONFIG). Precedence: flags > environment > YAML > defaults")
 	fs.String("profile", "", "Profile name to load from the profile directory (env.TUNNEL_CLIENT_PROFILE)")
+	fs.String("profile-file", "", "Path to a specific profile YAML file (env.TUNNEL_CLIENT_PROFILE_FILE)")
 	fs.String("profile-dir", "", "Directory containing profile YAML files (env.TUNNEL_CLIENT_PROFILE_DIR; default $XDG_CONFIG_HOME/tunnel-client or ~/.config/tunnel-client)")
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
@@ -471,6 +474,7 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		cfg.Runtime.ProfileName = fileValues.ProfileName
 		cfg.Runtime.ProfilePath = fileValues.ProfilePath
 		cfg.Runtime.ProfileDir = fileValues.ProfileDir
+		cfg.Runtime.ProfileFile = fileValues.ProfileFile
 	}
 
 	return cfg, nil

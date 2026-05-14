@@ -212,6 +212,7 @@ func TestRunHelpMentionsProfileEnvironment(t *testing.T) {
 	require.NoError(t, root.Execute())
 	output := stdout.String()
 	require.Contains(t, output, "TUNNEL_CLIENT_PROFILE")
+	require.Contains(t, output, "TUNNEL_CLIENT_PROFILE_FILE")
 	require.Contains(t, output, "XDG_CONFIG_HOME")
 	require.False(t, strings.Contains(output, "Commands:"))
 }

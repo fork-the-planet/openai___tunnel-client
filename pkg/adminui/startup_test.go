@@ -65,6 +65,20 @@ func TestBuildStartupSummaryIncludesRuntimeAndPluginGuidance(t *testing.T) {
 	require.Equal(t, "tunnel-client codex plugin install", summary.CodexPluginInstallHint)
 }
 
+func TestBuildStartupSummaryMarksProfileFileSource(t *testing.T) {
+	t.Parallel()
+
+	summary := buildStartupSummary(&config.Config{
+		Runtime: config.RuntimeConfig{
+			ProfileName: "demo",
+			ProfilePath: "/tmp/demo.yaml",
+			ProfileFile: true,
+		},
+	}, "http://127.0.0.1:7777", nil, nil, codexplugin.Detection{})
+
+	require.Equal(t, "profile-file:/tmp/demo.yaml", summary.ConfigSource)
+}
+
 func TestBuildStartupSummaryHandlesNilConfig(t *testing.T) {
 	t.Parallel()
 

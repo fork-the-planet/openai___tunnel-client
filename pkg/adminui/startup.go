@@ -195,6 +195,8 @@ func buildStartupSummary(
 
 func startupConfigSource(runtimeCfg config.RuntimeConfig) string {
 	switch {
+	case runtimeCfg.ProfileFile && runtimeCfg.ProfilePath != "":
+		return "profile-file:" + runtimeCfg.ProfilePath
 	case runtimeCfg.ProfileName != "":
 		return "profile:" + runtimeCfg.ProfileName
 	case runtimeCfg.ProfilePath != "":

@@ -255,6 +255,8 @@ func writeDoctorReport(w io.Writer, report doctorReport, explain bool) {
 
 func doctorConfigSourceSummary(source config.ConfigSource) string {
 	switch {
+	case source.ProfileFile && source.ProfilePath != "":
+		return "profile file: " + source.ProfilePath
 	case source.ProfileName != "":
 		return "profile: " + source.ProfileName
 	case source.Path != "":
@@ -266,6 +268,8 @@ func doctorConfigSourceSummary(source config.ConfigSource) string {
 
 func doctorNextCommand(source config.ConfigSource) string {
 	switch {
+	case source.ProfileFile && source.ProfilePath != "":
+		return fmt.Sprintf("tunnel-client run --profile-file %s", source.ProfilePath)
 	case source.ProfileName != "":
 		return fmt.Sprintf("tunnel-client run --profile %s", source.ProfileName)
 	case source.Path != "":

@@ -12,6 +12,7 @@ import (
 
 const (
 	ProfileEnvName       = "TUNNEL_CLIENT_PROFILE"
+	ProfileFileEnvName   = "TUNNEL_CLIENT_PROFILE_FILE"
 	ProfileDirEnvName    = "TUNNEL_CLIENT_PROFILE_DIR"
 	ConfigEnvName        = "TUNNEL_CLIENT_CONFIG"
 	profileConfigDirName = "tunnel-client"
@@ -28,6 +29,7 @@ type ConfigSource struct {
 	ProfileName string
 	ProfilePath string
 	ProfileDir  string
+	ProfileFile bool
 }
 
 // ResolveConfigSource returns the config file selected by flags or environment.
@@ -38,6 +40,7 @@ func ResolveConfigSource(fs *pflag.FlagSet, lookupEnv func(string) (string, bool
 
 	configFlag, configChanged := changedStringFlag(fs, "config")
 	profileFlag, profileChanged := changedStringFlag(fs, "profile")
+	profileFileFlag, profileFileChanged := changedStringFlag(fs, "profile-file")
 	profileDirFlag, profileDirChanged := changedStringFlag(fs, "profile-dir")
 	if profileDirChanged && strings.TrimSpace(profileDirFlag) == "" {
 		return ConfigSource{}, fmt.Errorf("profile directory is required when --profile-dir is set")
@@ -49,8 +52,17 @@ func ResolveConfigSource(fs *pflag.FlagSet, lookupEnv func(string) (string, bool
 	if profileChanged && strings.TrimSpace(profileFlag) == "" {
 		return ConfigSource{}, fmt.Errorf("profile name is required when --profile is set")
 	}
+	if profileFileChanged && strings.TrimSpace(profileFileFlag) == "" {
+		return ConfigSource{}, fmt.Errorf("profile file path is required when --profile-file is set")
+	}
 	if configChanged && profileChanged {
 		return ConfigSource{}, fmt.Errorf("--config and --profile are mutually exclusive")
+	}
+	if configChanged && profileFileChanged {
+		return ConfigSource{}, fmt.Errorf("--config and --profile-file are mutually exclusive")
+	}
+	if profileChanged && profileFileChanged {
+		return ConfigSource{}, fmt.Errorf("--profile and --profile-file are mutually exclusive")
 	}
 
 	if configChanged {
@@ -59,17 +71,30 @@ func ResolveConfigSource(fs *pflag.FlagSet, lookupEnv func(string) (string, bool
 	if profileChanged {
 		return configSourceForProfile(strings.TrimSpace(profileFlag), profileDirFlag, lookupEnv)
 	}
+	if profileFileChanged {
+		return configSourceForProfileFile(strings.TrimSpace(profileFileFlag), lookupEnv)
+	}
 
 	envConfig, envConfigSet := trimmedEnv(lookupEnv, ConfigEnvName)
 	envProfile, envProfileSet := trimmedEnv(lookupEnv, ProfileEnvName)
+	envProfileFile, envProfileFileSet := trimmedEnv(lookupEnv, ProfileFileEnvName)
 	if envConfigSet && envProfileSet {
 		return ConfigSource{}, fmt.Errorf("%s and %s are mutually exclusive", ConfigEnvName, ProfileEnvName)
+	}
+	if envConfigSet && envProfileFileSet {
+		return ConfigSource{}, fmt.Errorf("%s and %s are mutually exclusive", ConfigEnvName, ProfileFileEnvName)
+	}
+	if envProfileSet && envProfileFileSet {
+		return ConfigSource{}, fmt.Errorf("%s and %s are mutually exclusive", ProfileEnvName, ProfileFileEnvName)
 	}
 	if envConfigSet {
 		return ConfigSource{Path: envConfig}, nil
 	}
 	if envProfileSet {
 		return configSourceForProfile(envProfile, profileDirFlag, lookupEnv)
+	}
+	if envProfileFileSet {
+		return configSourceForProfileFile(envProfileFile, lookupEnv)
 	}
 	return ConfigSource{}, nil
 }
@@ -177,6 +202,35 @@ func configSourceForProfile(name string, explicitDir string, lookupEnv func(stri
 	}, nil
 }
 
+func configSourceForProfileFile(path string, lookupEnv func(string) (string, bool)) (ConfigSource, error) {
+	expanded, err := expandHome(path, lookupEnv)
+	if err != nil {
+		return ConfigSource{}, err
+	}
+	expanded = strings.TrimSpace(expanded)
+	if expanded == "" {
+		return ConfigSource{}, fmt.Errorf("profile file path is required")
+	}
+
+	cleaned := filepath.Clean(expanded)
+	if filepath.Ext(cleaned) != ".yaml" {
+		return ConfigSource{}, fmt.Errorf("profile file %q must end with .yaml", cleaned)
+	}
+
+	name := strings.TrimSuffix(filepath.Base(cleaned), ".yaml")
+	if err := ValidateProfileName(name); err != nil {
+		return ConfigSource{}, err
+	}
+
+	return ConfigSource{
+		Path:        cleaned,
+		ProfileName: name,
+		ProfilePath: cleaned,
+		ProfileDir:  filepath.Dir(cleaned),
+		ProfileFile: true,
+	}, nil
+}
+
 func changedStringFlag(fs *pflag.FlagSet, name string) (string, bool) {
 	if fs == nil {
 		return "", false
@@ -221,6 +275,9 @@ func expandHome(path string, lookupEnv func(string) (string, bool)) (string, err
 }
 
 func validateFileConfigSyntax(c fileConfig) error {
+	if err := validateConfigValueReferenceSyntax("control_plane.base_url", c.ControlPlane.BaseURL); err != nil {
+		return err
+	}
 	if c.ControlPlane.APIKey != nil {
 		if err := validateSecretReferenceSyntax("control_plane.api_key", *c.ControlPlane.APIKey); err != nil {
 			return err
@@ -239,19 +296,59 @@ func validateFileConfigSyntax(c fileConfig) error {
 	if err := validateHeaderReferenceSyntax("control_plane.extra_headers", c.ControlPlane.ExtraHeaders); err != nil {
 		return err
 	}
+	if err := validateConfigValueReferenceSyntax("health.listen_addr", c.Health.ListenAddr); err != nil {
+		return err
+	}
 	if err := validateHeaderReferenceSyntax("mcp.extra_headers", c.MCP.ExtraHeaders); err != nil {
 		return err
 	}
 	if err := validateHeaderReferenceSyntax("mcp.discovery_extra_headers", c.MCP.DiscoveryExtraHeaders); err != nil {
 		return err
 	}
+	for _, entry := range c.MCP.ServerURLs {
+		if err := validateConfigValueReferenceSyntax("mcp.server_urls.url", stringPtr(entry.URL)); err != nil {
+			return err
+		}
+	}
 	if _, err := formatMCPServerURLEntries(c.MCP.ServerURLs); err != nil {
 		return err
+	}
+	for _, entry := range c.MCP.Commands {
+		if err := validateConfigValueReferenceSyntax("mcp.commands.command", stringPtr(entry.Command)); err != nil {
+			return err
+		}
 	}
 	if _, err := formatMCPCommandEntries(c.MCP.Commands); err != nil {
 		return err
 	}
+	for _, target := range c.Harpoon.Targets {
+		if err := validateConfigValueReferenceSyntax("harpoon.targets.url", stringPtr(target.URL)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateConfigValueReferenceSyntax(source string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return fmt.Errorf("%s cannot be empty", source)
+	}
+	if strings.ContainsAny(raw, "\r\n") {
+		return fmt.Errorf("%s cannot contain CR or LF", source)
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "env:") || strings.HasPrefix(lower, "file:") {
+		return validateSecretReferenceSyntax(source, raw)
+	}
+	return nil
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func validateHeaderReferenceSyntax(source string, headers map[string]string) error {
