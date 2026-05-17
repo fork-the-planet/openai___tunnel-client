@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -29,10 +30,11 @@ import (
 )
 
 const (
-	defaultPollTimeout = 30 * time.Second
-	pollPathFormat     = "/v1/tunnel/%s/poll"
-	responsePathFormat = "/v1/tunnel/%s/response"
-	metadataPathFormat = "/v1/tunnels/%s"
+	defaultPollTimeout           = 30 * time.Second
+	pollPathFormat               = "/v1/tunnel/%s/poll"
+	responsePathFormat           = "/v1/tunnel/%s/response"
+	metadataPathFormat           = "/v1/tunnels/%s"
+	maxControlPlaneErrorBodySize = 64 * 1024
 )
 
 var errMissingConfig = errors.New("controlplane client: config is required")
@@ -119,21 +121,139 @@ type TunnelMetadata struct {
 	Description string `json:"description"`
 }
 
-type MetadataStatusError struct {
+type APIStatusError struct {
+	prefix     string
 	statusCode int
 	status     string
+	code       string
+	errorType  string
+	message    string
+	body       string
 }
 
-func (e *MetadataStatusError) Error() string {
-	return fmt.Sprintf("controlplane client: unexpected metadata status %d", e.statusCode)
+type MetadataStatusError = APIStatusError
+
+func (e *APIStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	message := fmt.Sprintf("%s %d", e.prefix, e.statusCode)
+	if detail := e.Detail(); detail != "" {
+		message += ": " + detail
+	}
+	return message
 }
 
-func (e *MetadataStatusError) StatusCode() int {
+func (e *APIStatusError) StatusCode() int {
 	return e.statusCode
 }
 
-func (e *MetadataStatusError) Status() string {
+func (e *APIStatusError) Status() string {
 	return e.status
+}
+
+func (e *APIStatusError) Code() string {
+	return e.code
+}
+
+func (e *APIStatusError) Type() string {
+	return e.errorType
+}
+
+func (e *APIStatusError) Message() string {
+	return e.message
+}
+
+func (e *APIStatusError) Detail() string {
+	if e == nil {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	if e.code != "" {
+		parts = append(parts, e.code)
+	}
+	if e.message != "" {
+		parts = append(parts, e.message)
+	} else if e.body != "" {
+		parts = append(parts, e.body)
+	}
+	return strings.Join(parts, ": ")
+}
+
+func newAPIStatusError(prefix string, resp *http.Response) *APIStatusError {
+	statusErr := &APIStatusError{
+		prefix:     prefix,
+		statusCode: resp.StatusCode,
+		status:     resp.Status,
+	}
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneErrorBodySize))
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if readErr != nil {
+		statusErr.message = "read error body: " + readErr.Error()
+		return statusErr
+	}
+	populateAPIStatusError(statusErr, body)
+	return statusErr
+}
+
+func populateAPIStatusError(statusErr *APIStatusError, body []byte) {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return
+	}
+
+	var payload struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Detail  any    `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		statusErr.body = truncateErrorDetail(string(body))
+		return
+	}
+
+	if payload.Error != nil {
+		statusErr.code = payload.Error.Code
+		statusErr.errorType = payload.Error.Type
+		statusErr.message = payload.Error.Message
+		return
+	}
+
+	statusErr.code = payload.Code
+	statusErr.errorType = payload.Type
+	statusErr.message = payload.Message
+	if statusErr.message == "" && payload.Detail != nil {
+		statusErr.message = stringifyDetail(payload.Detail)
+	}
+}
+
+func stringifyDetail(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(data)
+	}
+}
+
+func truncateErrorDetail(value string) string {
+	const maxDetailLength = 1024
+	value = strings.TrimSpace(value)
+	if len(value) <= maxDetailLength {
+		return value
+	}
+	return value[:maxDetailLength] + "..."
 }
 
 // FetchTunnelMetadata requests the tunnel metadata record for the configured tunnel.
@@ -152,8 +272,7 @@ func (c *TunnelServiceClient) FetchTunnelMetadata(ctx context.Context) (*TunnelM
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, &MetadataStatusError{statusCode: resp.StatusCode, status: resp.Status}
+		return nil, newAPIStatusError("controlplane client: unexpected metadata status", resp)
 	}
 
 	var metadata TunnelMetadata
@@ -280,8 +399,7 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 		logger.WarnContext(ctx, "response already fulfilled or unknown request")
 		return tunnelServiceRequestID, nil
 	default:
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return tunnelServiceRequestID, fmt.Errorf("controlplane responder: unexpected status %d", resp.StatusCode)
+		return tunnelServiceRequestID, newAPIStatusError("controlplane responder: unexpected status", resp)
 	}
 }
 
@@ -321,8 +439,7 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 		cmds, err := c.decodeCommands(ctx, resp.Body, limit)
 		return cmds, tunnelServiceRequestID, err
 	default:
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, tunnelServiceRequestID, fmt.Errorf("controlplane client: unexpected status %d", resp.StatusCode)
+		return nil, tunnelServiceRequestID, newAPIStatusError("controlplane client: unexpected status", resp)
 	}
 }
 

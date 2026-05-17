@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,11 +33,27 @@ func TestAppBoots(t *testing.T) {
 	tempDir := t.TempDir()
 	healthURLPath := filepath.Join(tempDir, "health_url")
 	pidPath := filepath.Join(tempDir, "pid")
+	tunnelID := types.TunnelID("tunnel_0123456789abcdef0123456789abcdef")
+
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + tunnelID.String() + `","name":"test tunnel","description":"test fixture"}`))
+		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/poll":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/response":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(controlPlane.Close)
 
 	cfg := &config.Config{
 		ControlPlane: config.ControlPlaneConfig{
-			BaseURL:             mustParseURL(t, "http://127.0.0.1"),
-			TunnelID:            types.TunnelID("tunnel_0123456789abcdef0123456789abcdef"),
+			BaseURL:             mustParseURL(t, controlPlane.URL),
+			TunnelID:            tunnelID,
 			APIKey:              "test-api-key",
 			MaxInFlightRequests: 1,
 			PollTimeout:         100 * time.Millisecond,

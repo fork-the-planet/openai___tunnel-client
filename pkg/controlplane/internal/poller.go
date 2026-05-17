@@ -149,6 +149,19 @@ func (p *poller) Run(ctx context.Context) {
 				slog.Int64("retry_in_ms", delay.Milliseconds()),
 				slog.String(tclog.FieldTunnelServiceRequestID, requestIDValue),
 			}
+			var statusErr *APIStatusError
+			if errors.As(err, &statusErr) {
+				attrs = append(attrs,
+					slog.Int("status_code", statusErr.StatusCode()),
+					slog.String("status", statusErr.Status()),
+				)
+				if statusErr.Code() != "" {
+					attrs = append(attrs, slog.String("error_code", statusErr.Code()))
+				}
+				if statusErr.Message() != "" {
+					attrs = append(attrs, slog.String("error_message", statusErr.Message()))
+				}
+			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				attrs = append(attrs, slog.Int64("poll_timeout_ms", p.pollTimeout.Milliseconds()))
 				p.logger.WarnContext(ctx, "poll timed out; backing off", attrs...)

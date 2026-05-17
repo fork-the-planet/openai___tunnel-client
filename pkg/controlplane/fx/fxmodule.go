@@ -124,12 +124,18 @@ func runMetadataFetch(p metadataParams) error {
 					}
 					var statusErr *internal.MetadataStatusError
 					if errors.As(err, &statusErr) {
-						logger.WarnContext(
-							ctx,
-							"tunnel metadata fetch failed",
+						attrs := []any{
 							slog.Int("status_code", statusErr.StatusCode()),
 							slog.String("status", statusErr.Status()),
-						)
+							slog.String("error", statusErr.Error()),
+						}
+						if statusErr.Code() != "" {
+							attrs = append(attrs, slog.String("error_code", statusErr.Code()))
+						}
+						if statusErr.Message() != "" {
+							attrs = append(attrs, slog.String("error_message", statusErr.Message()))
+						}
+						logger.WarnContext(ctx, "tunnel metadata fetch failed", attrs...)
 						p.MetadataState.Set(nil, err)
 						return
 					}

@@ -896,6 +896,57 @@ func TestPollerLogsRecoveryAfterError(t *testing.T) {
 	}
 }
 
+func TestPollerLogsAPIStatusErrorDetails(t *testing.T) {
+	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
+	var output strings.Builder
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fetcher := &sequenceFetcher{
+		errs: []error{
+			&APIStatusError{
+				prefix:     "controlplane client: unexpected status",
+				statusCode: http.StatusUnauthorized,
+				status:     "401 Unauthorized",
+				code:       "certificate_required",
+				errorType:  "invalid_request_error",
+				message:    "missing client certificate",
+			},
+			nil,
+		},
+		cancel: cancel,
+	}
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, time.Millisecond, 2*time.Millisecond)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+	wg.Wait()
+
+	logs := output.String()
+	for _, want := range []string{
+		"status_code=401",
+		"status=\"401 Unauthorized\"",
+		"error_code=certificate_required",
+		"error_message=\"missing client certificate\"",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("expected poller log to contain %q, got %q", want, logs)
+		}
+	}
+}
+
 func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
 	fetcher := &timeoutRecordingFetcher{pollCh: make(chan struct{}, 8)}

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -225,6 +226,51 @@ func TestTunnelServiceClientPollWithNonPositiveLimit(t *testing.T) {
 	cmds, _, pollErr := client.Poll(context.Background(), 0)
 	assert.NoError(t, pollErr, "Poll should not error")
 	assert.Nil(t, cmds, "expected nil result for non-positive limit")
+}
+
+func TestTunnelServiceClientPollSurfacesAPIErrorCode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "req_certificate_required")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Your request must be made with a client certificate in addition to your API key.","type":"invalid_request_error","code":"certificate_required"}}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, requestID, err := client.Poll(context.Background(), 1)
+	if !assert.Error(t, err, "expected error for mTLS-required poll request without certificate") {
+		return
+	}
+	assert.Equal(t, types.TunnelServiceRequestID("req_certificate_required"), requestID)
+	assert.ErrorContains(t, err, "unexpected status 401")
+	assert.ErrorContains(t, err, "certificate_required")
+	var statusErr *APIStatusError
+	if !assert.ErrorAs(t, err, &statusErr) {
+		return
+	}
+	assert.Equal(t, http.StatusUnauthorized, statusErr.StatusCode())
+	assert.Equal(t, "certificate_required", statusErr.Code())
 }
 
 func TestTunnelServiceClientControlPlaneMTLS(t *testing.T) {
@@ -718,6 +764,45 @@ func TestTunnelServiceClientPostResponseSurfacingNonSuccess(t *testing.T) {
 	assert.ErrorContains(t, err, "unexpected status 502")
 }
 
+func TestTunnelServiceClientPostResponseSurfacesAPIErrorCode(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Your request must be made with a client certificate in addition to your API key.","type":"invalid_request_error","code":"certificate_required"}}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-401")
+	ctx = tunnelctx.ContextWithChannel(ctx, types.DefaultChannel)
+	rawResponse := encodeResponse(t, &jsonrpc.Response{
+		Result: json.RawMessage(`{"ok":true}`),
+	})
+
+	resp := types.NewTunnelResponse(types.DefaultChannel, rawResponse, http.StatusOK, nil)
+	_, err = client.PostResponse(ctx, types.RequestID("request-401"), resp)
+	if !assert.Error(t, err, "PostResponse should propagate mTLS auth errors") {
+		return
+	}
+	assert.ErrorContains(t, err, "unexpected status 401")
+	assert.ErrorContains(t, err, "certificate_required")
+	var statusErr *APIStatusError
+	if !assert.ErrorAs(t, err, &statusErr) {
+		return
+	}
+	assert.Equal(t, http.StatusUnauthorized, statusErr.StatusCode())
+	assert.Equal(t, "certificate_required", statusErr.Code())
+}
+
 func TestTunnelServiceClientPostResponseNotificationAck(t *testing.T) {
 	t.Parallel()
 
@@ -969,6 +1054,184 @@ func TestTunnelServiceClientFetchTunnelMetadataStatusError(t *testing.T) {
 	}
 	assert.Equal(t, http.StatusForbidden, statusErr.StatusCode())
 	assert.Equal(t, "403 Forbidden", statusErr.Status())
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (r errorReadCloser) Read(_ []byte) (int, error) {
+	return 0, r.err
+}
+
+func (errorReadCloser) Close() error {
+	return nil
+}
+
+func TestNewAPIStatusErrorDrainsOversizedErrorBody(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Status:     "502 Bad Gateway",
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", maxControlPlaneErrorBodySize+17))),
+	}
+
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+
+	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
+	remainder, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
+	assert.Empty(t, remainder)
+}
+
+func TestNewAPIStatusErrorTruncatesInvalidErrorBody(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Status:     "502 Bad Gateway",
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", maxControlPlaneErrorBodySize+17))),
+	}
+
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+
+	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
+	assert.Empty(t, statusErr.Code())
+	assert.Empty(t, statusErr.Message())
+	assert.Len(t, statusErr.Detail(), 1027)
+	assert.True(t, strings.HasSuffix(statusErr.Detail(), "..."))
+}
+
+func TestNewAPIStatusErrorHandlesBodyReadFailure(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Status:     "502 Bad Gateway",
+		Body:       errorReadCloser{err: errors.New("boom")},
+	}
+
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+
+	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
+	assert.Empty(t, statusErr.Code())
+	assert.Equal(t, "read error body: boom", statusErr.Message())
+	assert.Equal(t, "read error body: boom", statusErr.Detail())
+}
+
+func TestPopulateAPIStatusErrorDefensiveParsing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		body        string
+		wantCode    string
+		wantType    string
+		wantMessage string
+		wantDetail  string
+	}{
+		{
+			name: "empty body",
+			body: " \n\t ",
+		},
+		{
+			name:       "malformed json",
+			body:       `{"error":`,
+			wantDetail: `{"error":`,
+		},
+		{
+			name:        "top-level api error",
+			body:        `{"message":"missing cert","type":"invalid_request_error","code":"certificate_required"}`,
+			wantCode:    "certificate_required",
+			wantType:    "invalid_request_error",
+			wantMessage: "missing cert",
+			wantDetail:  "certificate_required: missing cert",
+		},
+		{
+			name:        "nested api error",
+			body:        `{"error":{"message":"missing cert","type":"invalid_request_error","code":"certificate_required"}}`,
+			wantCode:    "certificate_required",
+			wantType:    "invalid_request_error",
+			wantMessage: "missing cert",
+			wantDetail:  "certificate_required: missing cert",
+		},
+		{
+			name:        "detail string",
+			body:        `{"detail":"missing cert"}`,
+			wantMessage: "missing cert",
+			wantDetail:  "missing cert",
+		},
+		{
+			name:        "detail object",
+			body:        `{"detail":{"reason":"certificate_required"}}`,
+			wantMessage: `{"reason":"certificate_required"}`,
+			wantDetail:  `{"reason":"certificate_required"}`,
+		},
+		{
+			name:       "unexpected json shape",
+			body:       `["not","an","object"]`,
+			wantDetail: `["not","an","object"]`,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			statusErr := &APIStatusError{}
+
+			populateAPIStatusError(statusErr, []byte(testCase.body))
+
+			assert.Equal(t, testCase.wantCode, statusErr.Code())
+			assert.Equal(t, testCase.wantType, statusErr.Type())
+			assert.Equal(t, testCase.wantMessage, statusErr.Message())
+			assert.Equal(t, testCase.wantDetail, statusErr.Detail())
+		})
+	}
+}
+
+func TestTunnelServiceClientFetchTunnelMetadataSurfacesAPIErrorCode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Your request must be made with a client certificate in addition to your API key.","type":"invalid_request_error","code":"certificate_required"}}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, err = client.FetchTunnelMetadata(context.Background())
+	if !assert.Error(t, err, "expected error for mTLS-required metadata request without certificate") {
+		return
+	}
+	assert.ErrorContains(t, err, "certificate_required")
+	assert.ErrorContains(t, err, "client certificate")
+	var statusErr *MetadataStatusError
+	if !assert.ErrorAs(t, err, &statusErr) {
+		return
+	}
+	assert.Equal(t, http.StatusUnauthorized, statusErr.StatusCode())
+	assert.Equal(t, "certificate_required", statusErr.Code())
+	assert.Equal(t, "invalid_request_error", statusErr.Type())
+	assert.Contains(t, statusErr.Message(), "client certificate")
 }
 
 func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
