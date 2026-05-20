@@ -1,16 +1,38 @@
-# Tunnel Client
+# Secure MCP Tunnel client
 
-The tunnel client is an enterprise-hosted agent that connects a private MCP
-(Model Context Protocol) server to OpenAI-hosted products over a secure,
-outbound-only HTTPS channel. It lets customers keep MCP servers inside their own
-network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
+`tunnel-client` is the customer-run agent behind Secure MCP Tunnel. It connects
+a private or localhost MCP (Model Context Protocol) server to ChatGPT, Codex,
+the Responses API, and AgentKit through an OpenAI-hosted MCP tunnel endpoint,
+while keeping the MCP server off the public internet.
 
-If you searched for "How do I connect local MCP server to ChatGPT",
-"How do I connect local MCP server to Codex", "localhost to ChatGPT", or
-"Codex local MCP", start with
-`tunnel-client help quickstart` and the onboarding guide below.
+Use it when:
 
-## Documentation
+- You have an MCP server on a laptop, VM, Kubernetes cluster, or private
+  network and need an OpenAI-hosted product to reach it.
+- Security will not approve a new inbound firewall rule or public endpoint for
+  the MCP server.
+- You want an operator-visible daemon with `/healthz`, `/readyz`, `/metrics`,
+  and `/ui` before a connector or API call depends on it.
+
+If you searched for "secure MCP tunnel", "MCP tunnel ChatGPT", "connect local
+MCP server to ChatGPT", "connect local MCP server to Codex", "localhost to
+ChatGPT", or "Codex local MCP", start with `tunnel-client help quickstart`,
+then read the onboarding guide below.
+
+## Start Here
+
+- **Need the shortest working path from localhost or a private MCP server to
+  ChatGPT or Codex?** Start with [`docs/onboarding.md`](docs/onboarding.md).
+- **Need the customer-shareable network and trust-boundary story?** Read
+  [`docs/architecture.md`](docs/architecture.md).
+- **Need roles, groups, tunnel IDs, or API keys?** Read
+  [`docs/permissions.md`](docs/permissions.md).
+- **Need Docker, Kubernetes, or VM deployment guidance?** Read
+  [`docs/deployment/overview.md`](docs/deployment/overview.md).
+- **Need to debug readiness, connector discovery, or OAuth?** Read
+  [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+## Documentation Map
 
 - **Public Secure MCP Tunnel guide**:
   [`developers.openai.com/api/docs/guides/secure-mcp-tunnels`](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)

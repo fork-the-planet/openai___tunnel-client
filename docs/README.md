@@ -1,9 +1,19 @@
-# Tunnel Client Documentation
+# Secure MCP Tunnel client docs
 
-This folder contains customer-facing operator documentation and contributor
-documentation for `tunnel-client`.
+This folder contains customer-facing operator docs and contributor docs for
+`tunnel-client`, the customer-run agent behind Secure MCP Tunnel.
 
-## Start here
+## Find The Right Guide
+
+| If you need to... | Read... |
+| --- | --- |
+| Connect a local or private MCP server to ChatGPT or Codex | [`onboarding.md`](onboarding.md) |
+| Explain the outbound-only network model or trust boundary | [`architecture.md`](architecture.md) |
+| Provision tunnel roles, groups, IDs, or API keys | [`permissions.md`](permissions.md) |
+| Choose Docker, Kubernetes, or VM deployment | [`deployment/overview.md`](deployment/overview.md) |
+| Debug readiness, connector discovery, OAuth, or support bundles | [`troubleshooting.md`](troubleshooting.md) |
+
+## Start Here
 
 - **Public Secure MCP Tunnel guide**:
   [`developers.openai.com/api/docs/guides/secure-mcp-tunnels`](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)

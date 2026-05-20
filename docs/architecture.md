@@ -23,7 +23,7 @@ the configured MCP server, and returns the response through the same tunnel.
 ```mermaid
 flowchart LR
   subgraph openai["OpenAI"]
-    product["ChatGPT, Responses API, or AgentKit"]
+    product["ChatGPT, Codex, Responses API, or AgentKit"]
     tunnel["OpenAI tunnel service"]
   end
 
