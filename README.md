@@ -12,6 +12,8 @@ If you searched for "How do I connect local MCP server to ChatGPT",
 
 ## Documentation
 
+- **Public Secure MCP Tunnel guide**:
+  [`developers.openai.com/api/docs/guides/secure-mcp-tunnels`](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 - **Shareable end-user guide**: [`docs/end-user-guide.md`](docs/end-user-guide.md)
 - **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
 - **Permissions, roles, and groups**: [`docs/permissions.md`](docs/permissions.md)

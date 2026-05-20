@@ -5,6 +5,8 @@ documentation for `tunnel-client`.
 
 ## Start here
 
+- **Public Secure MCP Tunnel guide**:
+  [`developers.openai.com/api/docs/guides/secure-mcp-tunnels`](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 - **Shareable end-user guide**: [`end-user-guide.md`](end-user-guide.md)
 - **Onboarding (recommended first read)**: [`onboarding.md`](onboarding.md)
 - **Permissions, roles, and groups**: [`permissions.md`](permissions.md)
