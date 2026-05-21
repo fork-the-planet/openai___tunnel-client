@@ -158,6 +158,49 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 
 }
 
+func TestTunnelServiceClientPollSuccessWithControlPlaneURLPath(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chatgpttunnelgateway/dev/us/v1/tunnel/cli-tunnel/poll", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"commands":[]}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL+"/"),
+		URLPath:     "/chatgpttunnelgateway/dev/us",
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	_, _, err = client.Poll(context.Background(), 1)
+	require.NoError(t, err)
+}
+
+func TestTunnelServiceClientPollIgnoresLegacyBaseURLPath(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/tunnel/cli-tunnel/poll", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"commands":[]}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL+"/v1/tunnel"),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	_, _, err = client.Poll(context.Background(), 1)
+	require.NoError(t, err)
+}
+
 func TestTunnelServiceClientPollSkipsInvalidCommands(t *testing.T) {
 	t.Parallel()
 

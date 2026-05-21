@@ -12,6 +12,9 @@ ca_bundle: "env:ENTERPRISE_CA_BUNDLE"
 http_proxy: "env:HTTPS_PROXY"
 control_plane:
   base_url: {{ printf "%q" .BaseURL }}
+{{ if .URLPath }}
+  url_path: {{ printf "%q" .URLPath }}
+{{ end }}
   tunnel_id: {{ printf "%q" .TunnelID }}
   api_key: {{ printf "%q" .APIKeyRef }}
 health:

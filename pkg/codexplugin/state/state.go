@@ -77,6 +77,7 @@ type ProcessRecord struct {
 type AdminProfile struct {
 	Name                string `json:"name"`
 	ControlPlaneBaseURL string `json:"control_plane_base_url"`
+	ControlPlaneURLPath string `json:"control_plane_url_path,omitempty"`
 	AdminKey            string `json:"admin_key"`
 	UpdatedAt           string `json:"updated_at,omitempty"`
 }

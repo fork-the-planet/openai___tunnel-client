@@ -278,6 +278,9 @@ func validateFileConfigSyntax(c fileConfig) error {
 	if err := validateConfigValueReferenceSyntax("control_plane.base_url", c.ControlPlane.BaseURL); err != nil {
 		return err
 	}
+	if err := validateConfigValueReferenceSyntax("control_plane.url_path", c.ControlPlane.URLPath); err != nil {
+		return err
+	}
 	if c.ControlPlane.APIKey != nil {
 		if err := validateSecretReferenceSyntax("control_plane.api_key", *c.ControlPlane.APIKey); err != nil {
 			return err

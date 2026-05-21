@@ -19,6 +19,7 @@ import (
 // organization/workspace headers required by the control plane.
 type AdminConfig struct {
 	BaseURL         *url.URL
+	URLPath         string
 	AdminKey        string
 	OrganizationIDs []string
 	WorkspaceIDs    []string
@@ -29,6 +30,7 @@ type AdminConfig struct {
 func RegisterAdminFlags(fs *pflag.FlagSet) {
 	registerTLSFlags(fs)
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
+	fs.String("control-plane.url-path", "", "Optional URL path appended to the control-plane base URL (env.CONTROL_PLANE_URL_PATH)")
 	fs.String("admin-key", "", "Admin API key for tunnel management (env.OPENAI_ADMIN_KEY)")
 	fs.Bool("json", false, "Output JSON instead of text")
 }
@@ -49,6 +51,10 @@ func LoadAdminConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 	baseURL, err := parseURL(baseURLRaw)
 	if err != nil {
 		return nil, fmt.Errorf("invalid control-plane.base-url: %w", err)
+	}
+	controlPlaneURLPath, err := NormalizeControlPlaneURLPath(controlPlaneURLPathRaw(fs, lookupEnv))
+	if err != nil {
+		return nil, err
 	}
 
 	tlsBundle, err := buildTLSBundle(fs, lookupEnv)
@@ -79,6 +85,7 @@ func LoadAdminConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 
 	return &AdminConfig{
 		BaseURL:         baseURL,
+		URLPath:         controlPlaneURLPath,
 		AdminKey:        adminKey,
 		OrganizationIDs: orgIDs,
 		WorkspaceIDs:    workspaceIDs,

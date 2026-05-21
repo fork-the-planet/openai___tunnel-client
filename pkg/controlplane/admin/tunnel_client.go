@@ -52,6 +52,7 @@ func (e *RequestError) Error() string {
 type AdminTunnelClient struct {
 	httpClient *http.Client
 	baseURL    *url.URL
+	urlPath    string
 	adminKey   string
 }
 
@@ -76,6 +77,7 @@ func NewAdminTunnelClient(cfg *config.AdminConfig) (*AdminTunnelClient, error) {
 	return &AdminTunnelClient{
 		httpClient: client,
 		baseURL:    cfg.BaseURL,
+		urlPath:    cfg.URLPath,
 		adminKey:   cfg.AdminKey,
 	}, nil
 }
@@ -148,7 +150,7 @@ func (c *AdminTunnelClient) DeleteTunnel(ctx context.Context, tunnelID string) (
 }
 
 func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
-	target := c.baseURL.ResolveReference(&url.URL{Path: path})
+	target := config.ResolveControlPlanePath(c.baseURL, c.urlPath, path)
 	if query != nil {
 		target.RawQuery = query.Encode()
 	}
@@ -217,7 +219,7 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 func formatAdminRequestError(method, path string, statusCode int, body string) string {
 	if method == http.MethodDelete &&
 		statusCode == http.StatusNotFound &&
-		strings.HasPrefix(path, "/v1/tunnels/") &&
+		strings.Contains(path, "/v1/tunnels/") &&
 		strings.Contains(body, "Invalid URL") {
 		return fmt.Sprintf(
 			"request %s %s failed: %d delete is not exposed on this control-plane base URL yet; get/list/create/update may still work (%s)",

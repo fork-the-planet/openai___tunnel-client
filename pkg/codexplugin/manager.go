@@ -43,6 +43,7 @@ func (e *PayloadError) Error() string {
 type AdminProfileResult struct {
 	Name                string `json:"name"`
 	ControlPlaneBaseURL string `json:"control_plane_base_url"`
+	ControlPlaneURLPath string `json:"control_plane_url_path,omitempty"`
 	AdminKey            string `json:"admin_key"`
 	UpdatedAt           string `json:"updated_at,omitempty"`
 	Path                string `json:"path"`
@@ -56,6 +57,7 @@ type CreateOptions struct {
 	AdminProfileName    string
 	AdminKeyRef         string
 	ControlPlaneBaseURL string
+	ControlPlaneURLPath string
 	OrganizationIDs     []string
 	WorkspaceIDs        []string
 }
@@ -75,6 +77,7 @@ type ListOptions struct {
 	AdminProfileName    string
 	AdminKeyRef         string
 	ControlPlaneBaseURL string
+	ControlPlaneURLPath string
 	OrganizationIDs     []string
 	WorkspaceIDs        []string
 	TenantID            string
@@ -85,6 +88,7 @@ type AliasOptions struct {
 	AdminProfileName    string
 	AdminKeyRef         string
 	ControlPlaneBaseURL string
+	ControlPlaneURLPath string
 }
 
 type CleanupOptions struct {
@@ -100,6 +104,7 @@ type RepairAction struct {
 type effectiveAdminProfile struct {
 	Name                string
 	ControlPlaneBaseURL string
+	ControlPlaneURLPath string
 	AdminKey            string
 	Path                string
 }
@@ -131,6 +136,7 @@ func (m *Manager) ListAdminProfiles() (map[string]any, error) {
 		entries = append(entries, AdminProfileResult{
 			Name:                profile.Name,
 			ControlPlaneBaseURL: profile.ControlPlaneBaseURL,
+			ControlPlaneURLPath: profile.ControlPlaneURLPath,
 			AdminKey:            profile.AdminKey,
 			UpdatedAt:           profile.UpdatedAt,
 			Path:                pluginstate.AdminProfilesPath(root),
@@ -145,7 +151,7 @@ func (m *Manager) ListAdminProfiles() (map[string]any, error) {
 	}, nil
 }
 
-func (m *Manager) SetAdminProfile(name, baseURL, adminKey string, activate bool) (map[string]any, error) {
+func (m *Manager) SetAdminProfile(name, baseURL, urlPath, adminKey string, activate bool) (map[string]any, error) {
 	root := pluginstate.ResolveRoot(m.lookupEnv)
 	if err := pluginstate.EnsureDirs(root); err != nil {
 		return nil, err
@@ -160,6 +166,7 @@ func (m *Manager) SetAdminProfile(name, baseURL, adminKey string, activate bool)
 	}
 	existing := file.Profiles[normalizedName]
 	resolvedBaseURL := firstNonEmpty(strings.TrimSpace(baseURL), existing.ControlPlaneBaseURL, envValue(m.lookupEnv, "CONTROL_PLANE_BASE_URL"), defaultControlPlaneBaseURL)
+	resolvedURLPath := firstNonEmpty(strings.TrimSpace(urlPath), existing.ControlPlaneURLPath, envValue(m.lookupEnv, "CONTROL_PLANE_URL_PATH"))
 	resolvedAdminKey := firstNonEmpty(strings.TrimSpace(adminKey), existing.AdminKey, defaultAdminKeyRef)
 	if err := pluginstate.ValidateSecretReference(resolvedAdminKey, "admin profile "+normalizedName+" admin_key"); err != nil {
 		return nil, err
@@ -167,6 +174,7 @@ func (m *Manager) SetAdminProfile(name, baseURL, adminKey string, activate bool)
 	file.Profiles[normalizedName] = pluginstate.AdminProfile{
 		Name:                normalizedName,
 		ControlPlaneBaseURL: resolvedBaseURL,
+		ControlPlaneURLPath: resolvedURLPath,
 		AdminKey:            resolvedAdminKey,
 		UpdatedAt:           pluginstate.UTCNow(),
 	}
@@ -180,6 +188,7 @@ func (m *Manager) SetAdminProfile(name, baseURL, adminKey string, activate bool)
 		"profile": AdminProfileResult{
 			Name:                normalizedName,
 			ControlPlaneBaseURL: resolvedBaseURL,
+			ControlPlaneURLPath: resolvedURLPath,
 			AdminKey:            resolvedAdminKey,
 			UpdatedAt:           file.Profiles[normalizedName].UpdatedAt,
 			Path:                pluginstate.AdminProfilesPath(root),
@@ -213,6 +222,7 @@ func (m *Manager) ActivateAdminProfile(name string) (map[string]any, error) {
 		"profile": AdminProfileResult{
 			Name:                profile.Name,
 			ControlPlaneBaseURL: profile.ControlPlaneBaseURL,
+			ControlPlaneURLPath: profile.ControlPlaneURLPath,
 			AdminKey:            profile.AdminKey,
 			UpdatedAt:           profile.UpdatedAt,
 			Path:                pluginstate.AdminProfilesPath(root),
@@ -287,7 +297,7 @@ func (m *Manager) Create(opts CreateOptions) (map[string]any, error) {
 		return nil, err
 	}
 	previous := aliases[alias]
-	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, previous.AdminProfile)
+	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, opts.ControlPlaneURLPath, previous.AdminProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +366,7 @@ func (m *Manager) Connect(opts ConnectOptions) (map[string]any, error) {
 		return nil, err
 	}
 	previous := aliases[alias]
-	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, previous.AdminProfile)
+	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, opts.ControlPlaneURLPath, previous.AdminProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +402,7 @@ func (m *Manager) Connect(opts ConnectOptions) (map[string]any, error) {
 		profileName,
 		tunnelID,
 		adminProfile.ControlPlaneBaseURL,
+		adminProfile.ControlPlaneURLPath,
 		runtimeAPIKey,
 		target,
 		profileDir,
@@ -480,7 +491,7 @@ func (m *Manager) ListRuntimes(opts ListOptions) (map[string]any, error) {
 	if err := pluginstate.EnsureDirs(root); err != nil {
 		return nil, err
 	}
-	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, "")
+	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, opts.ControlPlaneURLPath, "")
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +625,7 @@ func (m *Manager) Status(opts AliasOptions) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("alias %s is not known; run create or connect first", alias)
 	}
-	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, record.AdminProfile)
+	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, opts.ControlPlaneURLPath, record.AdminProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +679,7 @@ func (m *Manager) Stop(opts AliasOptions) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("alias %s is not known; run create or connect first", alias)
 	}
-	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, record.AdminProfile)
+	adminProfile, err := m.resolveAdminProfile(root, opts.AdminProfileName, opts.AdminKeyRef, opts.ControlPlaneBaseURL, opts.ControlPlaneURLPath, record.AdminProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +801,7 @@ type remoteError struct{ message string }
 
 func (e *remoteError) Error() string { return e.message }
 
-func (m *Manager) resolveAdminProfile(root pluginstate.Root, requestedName, adminKeyRef, baseURL, defaultName string) (effectiveAdminProfile, error) {
+func (m *Manager) resolveAdminProfile(root pluginstate.Root, requestedName, adminKeyRef, baseURL, urlPath, defaultName string) (effectiveAdminProfile, error) {
 	name := firstNonEmpty(requestedName, defaultName)
 	if name == "" {
 		if value, ok := m.lookupEnv("TUNNEL_MCP_ADMIN_PROFILE"); ok && strings.TrimSpace(value) != "" {
@@ -809,14 +820,16 @@ func (m *Manager) resolveAdminProfile(root pluginstate.Root, requestedName, admi
 	}
 	existing := file.Profiles[normalizedName]
 	resolvedBaseURL := firstNonEmpty(strings.TrimSpace(baseURL), existing.ControlPlaneBaseURL, envValue(m.lookupEnv, "CONTROL_PLANE_BASE_URL"), defaultControlPlaneBaseURL)
+	resolvedURLPath := firstNonEmpty(strings.TrimSpace(urlPath), existing.ControlPlaneURLPath, envValue(m.lookupEnv, "CONTROL_PLANE_URL_PATH"))
 	resolvedAdminKey := firstNonEmpty(strings.TrimSpace(adminKeyRef), existing.AdminKey, defaultAdminKeyRef)
 	if err := pluginstate.ValidateSecretReference(resolvedAdminKey, "admin profile "+normalizedName+" admin_key"); err != nil {
 		return effectiveAdminProfile{}, err
 	}
-	if existing.Name == "" || existing.ControlPlaneBaseURL != resolvedBaseURL || existing.AdminKey != resolvedAdminKey {
+	if existing.Name == "" || existing.ControlPlaneBaseURL != resolvedBaseURL || existing.ControlPlaneURLPath != resolvedURLPath || existing.AdminKey != resolvedAdminKey {
 		file.Profiles[normalizedName] = pluginstate.AdminProfile{
 			Name:                normalizedName,
 			ControlPlaneBaseURL: resolvedBaseURL,
+			ControlPlaneURLPath: resolvedURLPath,
 			AdminKey:            resolvedAdminKey,
 			UpdatedAt:           pluginstate.UTCNow(),
 		}
@@ -828,6 +841,7 @@ func (m *Manager) resolveAdminProfile(root pluginstate.Root, requestedName, admi
 	return effectiveAdminProfile{
 		Name:                normalizedName,
 		ControlPlaneBaseURL: resolvedBaseURL,
+		ControlPlaneURLPath: resolvedURLPath,
 		AdminKey:            resolvedAdminKey,
 		Path:                pluginstate.AdminProfilesPath(root),
 	}, nil
@@ -839,7 +853,7 @@ func (m *Manager) resolveTunnel(root pluginstate.Root, alias, requestedName, des
 		return nil, err
 	}
 	if existing, ok := aliases[alias]; ok && existing.TunnelID != "" {
-		existingAdmin, err := m.resolveAdminProfile(root, "", "", "", existing.AdminProfile)
+		existingAdmin, err := m.resolveAdminProfile(root, "", "", "", "", existing.AdminProfile)
 		if err != nil {
 			return nil, err
 		}
@@ -942,8 +956,13 @@ func (m *Manager) newAdminClient(adminProfile effectiveAdminProfile, keyRef stri
 	if err != nil {
 		return nil, fmt.Errorf("parse control-plane base URL %s: %w", adminProfile.ControlPlaneBaseURL, err)
 	}
+	controlPlaneURLPath, err := config.NormalizeControlPlaneURLPath(adminProfile.ControlPlaneURLPath)
+	if err != nil {
+		return nil, err
+	}
 	return adminapi.NewAdminTunnelClient(&config.AdminConfig{
 		BaseURL:  parsed,
+		URLPath:  controlPlaneURLPath,
 		AdminKey: key,
 	})
 }

@@ -17,6 +17,7 @@ func TestLoadAdminConfig_FlagsOverrideEnv(t *testing.T) {
 
 	args := []string{
 		"--control-plane.base-url=https://flag.example",
+		"--control-plane.url-path=/flag-path",
 		"--admin-key=env:FLAG_ADMIN_KEY",
 		"--organization-id", "org-1",
 		"--organization-id", " org-2 ",
@@ -27,6 +28,7 @@ func TestLoadAdminConfig_FlagsOverrideEnv(t *testing.T) {
 
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL": "https://env.example",
+		"CONTROL_PLANE_URL_PATH": "/env-path",
 		"OPENAI_ADMIN_KEY":       "env-key",
 		"FLAG_ADMIN_KEY":         "flag-key",
 	}
@@ -35,6 +37,7 @@ func TestLoadAdminConfig_FlagsOverrideEnv(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "https://flag.example", cfg.BaseURL.String())
+	require.Equal(t, "/flag-path", cfg.URLPath)
 	require.Equal(t, "flag-key", cfg.AdminKey)
 	require.Equal(t, []string{"org-1", "org-2"}, cfg.OrganizationIDs)
 	require.Equal(t, []string{"ws-1"}, cfg.WorkspaceIDs)
@@ -49,6 +52,7 @@ func TestLoadAdminConfig_UsesEnvWhenFlagsUnset(t *testing.T) {
 
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL": "https://env.example",
+		"CONTROL_PLANE_URL_PATH": "/env-path",
 		"OPENAI_ADMIN_KEY":       "env-key",
 	}
 
@@ -56,6 +60,7 @@ func TestLoadAdminConfig_UsesEnvWhenFlagsUnset(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "https://env.example", cfg.BaseURL.String())
+	require.Equal(t, "/env-path", cfg.URLPath)
 	require.Equal(t, "env-key", cfg.AdminKey)
 	require.Empty(t, cfg.OrganizationIDs)
 	require.Empty(t, cfg.WorkspaceIDs)
@@ -89,6 +94,18 @@ func TestLoadAdminConfig_InvalidBaseURL(t *testing.T) {
 	_, err := LoadAdminConfig(fs, lookupEnvMap(map[string]string{"FLAG_ADMIN_KEY": "flag-key"}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid control-plane.base-url")
+}
+
+func TestLoadAdminConfig_InvalidURLPath(t *testing.T) {
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	RegisterAdminFlags(fs)
+	fs.StringSlice("organization-id", nil, "")
+	fs.StringSlice("workspace-id", nil, "")
+	require.NoError(t, fs.Parse([]string{"--admin-key=env:FLAG_ADMIN_KEY", "--control-plane.url-path", "missing-leading-slash"}))
+
+	_, err := LoadAdminConfig(fs, lookupEnvMap(map[string]string{"FLAG_ADMIN_KEY": "flag-key"}))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid control-plane.url-path")
 }
 
 func TestResolveAdminKeyFlagPrefixes(t *testing.T) {

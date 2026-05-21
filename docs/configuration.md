@@ -105,6 +105,8 @@ Example:
 config_version: 1
 control_plane:
   base_url: https://api.openai.com # citadel-ignore: public endpoint example for external tunnel-client config
+  # Optional path appended before tunnel-client adds its /v1/... routes.
+  url_path: /chatgpttunnelgateway/dev/us
   tunnel_id: tunnel_0123456789abcdef0123456789abcdef
   api_key: env:CONTROL_PLANE_API_KEY
   # Optional. When configured with the default api.openai.com base URL,
@@ -245,7 +247,16 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
     control-plane hosts.
   - **Important**: this value is treated as the **host root**, not a pre-prefixed path.
     - Correct: `https://api.openai.com`
-    - Incorrect: `https://api.openai.com/v1/tunnel` (would create `/v1/tunnel/v1/tunnel/...`)
+    - Incorrect: `https://api.openai.com/v1/tunnel`
+- **URL path**
+  - Flag: `--control-plane.url-path`
+  - Env: `CONTROL_PLANE_URL_PATH`
+  - YAML: `control_plane.url_path`
+  - Optional. Set this when an enterprise gateway needs a workspace or environment path appended to the base URL before tunnel-client adds `/v1/...` routes.
+  - The same path is honored by `tunnel-client admin tunnels ...` via `--control-plane.url-path`, and by native `runtimes` / tunnel-mcp flows via `--control-plane-url-path` or `control_plane_url_path`.
+    - Example base URL: `https://gateway.example.com`
+    - Example URL path: `/workspace/dev/us`
+    - Effective poll URL: `https://gateway.example.com/workspace/dev/us/v1/tunnel/<tunnel_id>/poll`
 - **Tunnel ID**
   - Flag: `--control-plane.tunnel-id`
   - Env: `CONTROL_PLANE_TUNNEL_ID`

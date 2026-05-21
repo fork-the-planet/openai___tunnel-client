@@ -75,9 +75,9 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 	}
 
 	tunnelIDSegment := url.PathEscape(cfg.TunnelID.String())
-	pollEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(pollPathFormat, tunnelIDSegment)})
-	responseEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(responsePathFormat, tunnelIDSegment)})
-	metadataEndpoint := cfg.BaseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(metadataPathFormat, tunnelIDSegment)})
+	pollEndpoint := config.ResolveControlPlanePath(cfg.BaseURL, cfg.URLPath, fmt.Sprintf(pollPathFormat, tunnelIDSegment))
+	responseEndpoint := config.ResolveControlPlanePath(cfg.BaseURL, cfg.URLPath, fmt.Sprintf(responsePathFormat, tunnelIDSegment))
+	metadataEndpoint := config.ResolveControlPlanePath(cfg.BaseURL, cfg.URLPath, fmt.Sprintf(metadataPathFormat, tunnelIDSegment))
 
 	timeout := cfg.PollTimeout
 	if timeout <= 0 {

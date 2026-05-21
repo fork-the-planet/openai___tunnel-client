@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -83,6 +84,7 @@ type flagAlias struct {
 
 var commonFlagAliases = []flagAlias{
 	{Canonical: "control-plane.base-url", Alias: "control-plane-base-url", Kind: "string"},
+	{Canonical: "control-plane.url-path", Alias: "control-plane-url-path", Kind: "string"},
 	{Canonical: "control-plane.tunnel-id", Alias: "control-plane-tunnel-id", Kind: "string"},
 	{Canonical: "control-plane.api-key", Alias: "control-plane-api-key", Kind: "string"},
 	{Canonical: "control-plane.client-cert", Alias: "control-plane-client-cert", Kind: "string"},
@@ -138,6 +140,7 @@ type AdminUIConfig struct {
 // ControlPlaneConfig defines how the client reaches the tunnel control plane.
 type ControlPlaneConfig struct {
 	BaseURL             *url.URL
+	URLPath             string
 	TunnelID            types.TunnelID
 	APIKey              string
 	MaxInFlightRequests int
@@ -322,6 +325,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_URL_PATH\tOptional URL path appended to CONTROL_PLANE_BASE_URL before tunnel-client adds its /v1/... routes")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_CERT\tPath to PEM client certificate for control-plane mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_KEY\tPath to PEM client private key for control-plane mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_EXTRA_HEADERS\tStatic headers for tunnel control-plane requests; values accept env:VAR or file:/path (optional)")
@@ -351,6 +355,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("profile-file", "", "Path to a specific profile YAML file (env.TUNNEL_CLIENT_PROFILE_FILE)")
 	fs.String("profile-dir", "", "Directory containing profile YAML files (env.TUNNEL_CLIENT_PROFILE_DIR; default $XDG_CONFIG_HOME/tunnel-client or ~/.config/tunnel-client)")
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
+	fs.String("control-plane.url-path", "", "Optional URL path appended to the control-plane base URL before tunnel-client adds its /v1/... routes (env.CONTROL_PLANE_URL_PATH)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
 	fs.String("control-plane.api-key", "", "Reference to environment variable or file containing the control-plane API key (format env:VARNAME or file:/path/to/secret)")
 	fs.String("control-plane.client-cert", "", "Path to PEM client certificate for control-plane mTLS (format <path|env:VAR|file:/path>) (env.CONTROL_PLANE_CLIENT_CERT)")
@@ -742,6 +747,10 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 	if err != nil {
 		return ControlPlaneConfig{}, fmt.Errorf("invalid control-plane.base-url: %w", err)
 	}
+	controlPlaneURLPath, err := NormalizeControlPlaneURLPath(controlPlaneURLPathRaw(fs, lookupEnv))
+	if err != nil {
+		return ControlPlaneConfig{}, err
+	}
 
 	var tunnelID string
 	if flag := fs.Lookup("control-plane.tunnel-id"); flag != nil && flag.Changed {
@@ -838,6 +847,7 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 
 	return ControlPlaneConfig{
 		BaseURL:             baseURL,
+		URLPath:             controlPlaneURLPath,
 		TunnelID:            types.TunnelID(tunnelID),
 		APIKey:              apiKey,
 		MaxInFlightRequests: maxInFlight,
@@ -861,6 +871,52 @@ func controlPlaneBaseURLRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, b
 		return defaultControlPlaneMTLSBaseURL
 	}
 	return baseURLRaw
+}
+
+func controlPlaneURLPathRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) string {
+	return firstSet(
+		getValue(fs, "control-plane.url-path"),
+		envOrDefault(lookupEnv, "CONTROL_PLANE_URL_PATH", ""),
+	)
+}
+
+// NormalizeControlPlaneURLPath validates and normalizes the optional control-plane URL prefix.
+func NormalizeControlPlaneURLPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid control-plane.url-path: %w", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("invalid control-plane.url-path: must be a URL path without scheme, host, query, or fragment")
+	}
+	if !strings.HasPrefix(parsed.Path, "/") {
+		return "", errors.New("invalid control-plane.url-path: must start with '/'")
+	}
+	if parsed.Path == "/" {
+		return "", nil
+	}
+
+	return parsed.Path, nil
+}
+
+// ResolveControlPlanePath resolves routePath from the control-plane host root plus urlPath.
+func ResolveControlPlanePath(baseURL *url.URL, urlPath, routePath string) *url.URL {
+	if baseURL == nil {
+		return nil
+	}
+
+	segments := []string{"/"}
+	if normalizedURLPath := strings.Trim(urlPath, "/"); normalizedURLPath != "" {
+		segments = append(segments, normalizedURLPath)
+	}
+	segments = append(segments, strings.TrimPrefix(routePath, "/"))
+
+	return baseURL.ResolveReference(&url.URL{Path: path.Join(segments...)})
 }
 
 // buildControlPlaneExtraHeaders resolves additional headers for the control-plane HTTP client.

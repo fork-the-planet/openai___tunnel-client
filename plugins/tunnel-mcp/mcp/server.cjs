@@ -179,6 +179,10 @@ function runtimeLifecycleSchema({ includeMcpCommand, includeTunnelId, requireRem
       type: "string",
       description: "Optional control-plane base URL override stored in the admin profile.",
     },
+    control_plane_url_path: {
+      type: "string",
+      description: "Optional URL path appended to the control-plane base URL and stored in the admin profile.",
+    },
     name: {
       type: "string",
       description: "Optional remote tunnel display name.",
@@ -366,6 +370,10 @@ function listRuntimeAliasesSchema() {
         type: "string",
         description: "Optional control-plane base URL override stored in the admin profile.",
       },
+      control_plane_url_path: {
+        type: "string",
+        description: "Optional URL path appended to the control-plane base URL and stored in the admin profile.",
+      },
       tunnel_client_bin: {
         type: "string",
         description: "Optional full path to an executable tunnel-client binary.",
@@ -381,6 +389,7 @@ function buildCreateArgs(args) {
   appendRemoteScope(out, args);
   appendOptional(out, "--admin-profile", args.admin_profile);
   appendOptional(out, "--control-plane-base-url", args.control_plane_base_url);
+  appendOptional(out, "--control-plane-url-path", args.control_plane_url_path);
   appendOptional(out, "--name", args.name);
   appendOptional(out, "--description", args.description);
   out.push("--json");
@@ -397,6 +406,7 @@ function buildConnectArgs(args) {
   appendOptional(out, "--runtime-api-key", args.runtime_api_key);
   appendOptional(out, "--admin-profile", args.admin_profile);
   appendOptional(out, "--control-plane-base-url", args.control_plane_base_url);
+  appendOptional(out, "--control-plane-url-path", args.control_plane_url_path);
   appendOptional(out, "--name", args.name);
   appendOptional(out, "--description", args.description);
   out.push("--json");
@@ -410,6 +420,7 @@ function buildListArgs(args) {
   appendOptional(out, "--tenant-id", args.tenant_id);
   appendOptional(out, "--admin-profile", args.admin_profile);
   appendOptional(out, "--control-plane-base-url", args.control_plane_base_url);
+  appendOptional(out, "--control-plane-url-path", args.control_plane_url_path);
   out.push("--json");
   return out;
 }

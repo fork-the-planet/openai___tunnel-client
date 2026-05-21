@@ -165,6 +165,36 @@ func TestAdminTunnelClientSendsIdentityHeadersForAllMethods(t *testing.T) {
 	}
 }
 
+func TestAdminTunnelClientPreservesControlPlaneURLPath(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tunnels":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.AdminConfig{
+		BaseURL:  mustParseURL(t, server.URL+"/"),
+		URLPath:  "/chatgpttunnelgateway/dev/us",
+		AdminKey: "key",
+	}
+	client, err := NewAdminTunnelClient(cfg)
+	if err != nil {
+		t.Fatalf("NewAdminTunnelClient: %v", err)
+	}
+
+	if _, err := client.ListTunnels(context.Background(), "org_1", "", ""); err != nil {
+		t.Fatalf("ListTunnels: %v", err)
+	}
+
+	if gotPath != "/chatgpttunnelgateway/dev/us/v1/tunnels" {
+		t.Fatalf("unexpected request path %q", gotPath)
+	}
+}
+
 func TestAdminTunnelClientErrorIncludesRequestID(t *testing.T) {
 	t.Parallel()
 

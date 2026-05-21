@@ -23,6 +23,7 @@ var embeddedProfileSamples embed.FS
 type sampleProfileRequest struct {
 	TunnelID         string
 	BaseURL          string
+	URLPath          string
 	APIKeyRef        string
 	HealthListenAddr string
 	OpenBrowser      bool
@@ -48,7 +49,7 @@ func profileSamples() []profileSampleDefinition {
 			Summary:       "HTTP or stdio MCP target with DCR-friendly tunnel-client defaults",
 			UseWhen:       "Use this when your MCP server exposes OAuth/PRMD metadata or when you want the full HTTP/OAuth startup contract exercised.",
 			RequiredFlags: []string{"--tunnel-id", "exactly one of --mcp-server-url or --mcp-command"},
-			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
+			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-url-path", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
 			Caveats: []string{
 				"Runtime profiles store secret references such as env:CONTROL_PLANE_API_KEY, not literal keys.",
 				"The main MCP channel is always bound as channel=main.",
@@ -67,7 +68,7 @@ func profileSamples() []profileSampleDefinition {
 			Summary:       "Local stdio MCP server with the shortest first-use tunnel-client path",
 			UseWhen:       "Use this when you already have a local MCP command and want the fastest path to a healthy tunnel daemon without any HTTP or OAuth discovery setup.",
 			RequiredFlags: []string{"--tunnel-id", "--mcp-command"},
-			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
+			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-url-path", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
 			Caveats: []string{
 				"Stdio transports skip HTTP OAuth discovery because there is no PRMD endpoint to fetch.",
 				"The command is always bound to channel=main.",
@@ -86,7 +87,7 @@ func profileSamples() []profileSampleDefinition {
 			Summary:       "Remote HTTP MCP server that does not advertise OAuth/PRMD metadata",
 			UseWhen:       "Use this when your MCP server is already reachable over HTTP(S) and intentionally does not use OAuth/DCR metadata.",
 			RequiredFlags: []string{"--tunnel-id", "--mcp-server-url"},
-			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
+			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-url-path", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
 			Caveats: []string{
 				"Plain MCP servers can still reach ready when protected-resource metadata returns 404 on all candidates.",
 				"Unexpected 5xx or malformed metadata responses still keep readiness degraded.",
@@ -105,7 +106,7 @@ func profileSamples() []profileSampleDefinition {
 			Summary:       "HTTP or stdio MCP target for outbound proxies or private PKI environments",
 			UseWhen:       "Use this when tunnel-client must egress through a corporate HTTP(S) proxy, trust a private CA bundle, or keep runtime and admin credentials clearly separated for operators.",
 			RequiredFlags: []string{"--tunnel-id", "exactly one of --mcp-server-url or --mcp-command"},
-			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
+			OptionalFlags: []string{"--control-plane-base-url", "--control-plane-url-path", "--control-plane-api-key-ref", "--health-listen-addr", "--open-web-ui"},
 			Caveats: []string{
 				"The profile pins a global explicit proxy via env:HTTPS_PROXY so control-plane, MCP HTTP, and Harpoon traffic use the same outbound route.",
 				"The CA bundle is loaded from env:ENTERPRISE_CA_BUNDLE; unset or remove that line if your environment uses public trust only.",
@@ -226,6 +227,12 @@ func normalizeSampleRequest(req sampleProfileRequest) (sampleProfileRequest, err
 	if _, err := url.Parse(req.BaseURL); err != nil {
 		return req, fmt.Errorf("invalid control plane base URL %q: %w", req.BaseURL, err)
 	}
+	req.URLPath = strings.TrimSpace(req.URLPath)
+	if req.URLPath != "" {
+		if err := validateControlPlaneURLPath(req.URLPath); err != nil {
+			return req, fmt.Errorf("invalid control plane URL path %q: %w", req.URLPath, err)
+		}
+	}
 	req.APIKeyRef = strings.TrimSpace(req.APIKeyRef)
 	if req.APIKeyRef == "" {
 		req.APIKeyRef = "env:CONTROL_PLANE_API_KEY"
@@ -241,6 +248,11 @@ func normalizeSampleRequest(req sampleProfileRequest) (sampleProfileRequest, err
 		return req, fmt.Errorf("invalid health listen address %q: %w", req.HealthListenAddr, err)
 	}
 	return req, nil
+}
+
+func validateControlPlaneURLPath(raw string) error {
+	_, err := config.NormalizeControlPlaneURLPath(raw)
+	return err
 }
 
 func renderEmbeddedSampleTemplate(path string, req sampleProfileRequest) ([]byte, error) {

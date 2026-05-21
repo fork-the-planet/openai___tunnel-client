@@ -156,6 +156,7 @@ func WriteRuntimeProfile(
 	profileName string,
 	tunnelID string,
 	baseURL string,
+	urlPath string,
 	apiKey string,
 	target Target,
 	profileDir string,
@@ -201,6 +202,9 @@ func WriteRuntimeProfile(
 			"format": "json",
 		},
 		"mcp": mcpConfig(target),
+	}
+	if strings.TrimSpace(urlPath) != "" {
+		payload["control_plane"].(map[string]any)["url_path"] = strings.TrimSpace(urlPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return "", fmt.Errorf("create profile directory %s: %w", filepath.Dir(configPath), err)

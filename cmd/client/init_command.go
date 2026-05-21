@@ -18,6 +18,7 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 		force               bool
 		tunnelID            string
 		controlPlaneBaseURL string
+		controlPlaneURLPath string
 		controlPlaneAPIKey  string
 		mcpServerURL        string
 		mcpCommand          string
@@ -50,6 +51,7 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 			data, err := generateProfileSample(sample, sampleProfileRequest{
 				TunnelID:         tunnelID,
 				BaseURL:          controlPlaneBaseURL,
+				URLPath:          controlPlaneURLPath,
 				APIKeyRef:        controlPlaneAPIKey,
 				HealthListenAddr: healthListenAddr,
 				OpenBrowser:      openWebUI,
@@ -90,6 +92,7 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 	cmd.Flags().BoolVar(&force, "force", false, "Replace an existing profile")
 	cmd.Flags().StringVar(&tunnelID, "tunnel-id", "", "Tunnel ID to write into the generated profile")
 	cmd.Flags().StringVar(&controlPlaneBaseURL, "control-plane-base-url", "https://api.openai.com", "Control-plane base URL to write into the generated profile")
+	cmd.Flags().StringVar(&controlPlaneURLPath, "control-plane-url-path", "", "Optional control-plane URL path to write into the generated profile")
 	cmd.Flags().StringVar(&controlPlaneAPIKey, "control-plane-api-key-ref", "env:CONTROL_PLANE_API_KEY", "Secret reference for the runtime control-plane API key")
 	cmd.Flags().StringVar(&mcpServerURL, "mcp-server-url", "", "MCP server URL for the generated profile")
 	cmd.Flags().StringVar(&mcpCommand, "mcp-command", "", "MCP command for the generated profile")

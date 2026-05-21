@@ -27,9 +27,27 @@ const (
 	flagTunnelID = "tunnel_fedcba9876543210fedcba9876543210"
 )
 
+func TestResolveControlPlanePathUsesSingleSeparator(t *testing.T) {
+	t.Parallel()
+
+	baseURL, err := url.Parse("https://gateway.example.com/")
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+
+	target := ResolveControlPlanePath(baseURL, "/workspace/dev/us", "/v1/tunnel/tunnel_123/poll")
+	if target == nil {
+		t.Fatal("expected resolved control plane URL")
+	}
+	if got, want := target.String(), "https://gateway.example.com/workspace/dev/us/v1/tunnel/tunnel_123/poll"; got != want {
+		t.Fatalf("unexpected resolved control plane URL: got %q want %q", got, want)
+	}
+}
+
 func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL":              "https://example",
+		"CONTROL_PLANE_URL_PATH":              "/gateway/dev/us",
 		"CONTROL_PLANE_TUNNEL_ID":             envTunnelID,
 		"CONTROL_PLANE_API_KEY":               "control-key",
 		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS": "15",
@@ -58,6 +76,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 
 	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://example" {
 		t.Fatalf("unexpected control plane base url: %v", cfg.ControlPlane.BaseURL)
+	}
+	if cfg.ControlPlane.URLPath != "/gateway/dev/us" {
+		t.Fatalf("unexpected control plane url path: %q", cfg.ControlPlane.URLPath)
 	}
 	if cfg.ControlPlane.TunnelID != envTunnelID {
 		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
@@ -115,6 +136,7 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 func TestLoadFlagsOverrideEnv(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL":              "https://env",
+		"CONTROL_PLANE_URL_PATH":              "/env-path",
 		"CONTROL_PLANE_TUNNEL_ID":             envTunnelID,
 		"CONTROL_PLANE_API_KEY":               "control-env-key",
 		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS": "25",
@@ -136,6 +158,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 
 	args := []string{
 		"--control-plane.base-url", "https://flag",
+		"--control-plane.url-path", "/flag-path",
 		"--control-plane.tunnel-id", flagTunnelID,
 		"--log.level", "info",
 		"--log.format", "struct-text",
@@ -161,6 +184,9 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 
 	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://flag" {
 		t.Fatalf("expected flag control plane base url, got %v", cfg.ControlPlane.BaseURL)
+	}
+	if cfg.ControlPlane.URLPath != "/flag-path" {
+		t.Fatalf("expected flag control plane url path, got %q", cfg.ControlPlane.URLPath)
 	}
 	if cfg.ControlPlane.TunnelID != flagTunnelID {
 		t.Fatalf("expected flag tunnel id, got %s", cfg.ControlPlane.TunnelID)
@@ -222,6 +248,7 @@ func TestLoadUsesYAMLConfigWhenFlagsAndEnvUnset(t *testing.T) {
 config_version: 1
 control_plane:
   base_url: env:YAML_CONTROL_PLANE_BASE_URL
+  url_path: env:YAML_CONTROL_PLANE_URL_PATH
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   api_key: env:YAML_CONTROL_PLANE_API_KEY
   max_inflight_requests: 17
@@ -270,6 +297,7 @@ proxy:
 
 	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
 		"YAML_CONTROL_PLANE_BASE_URL": "https://yaml-control.example",
+		"YAML_CONTROL_PLANE_URL_PATH": "/gateway/dev/us",
 		"YAML_CONTROL_PLANE_API_KEY":  "yaml-control-key",
 		"YAML_MCP_MAIN_URL":           "https://yaml-mcp.example/mcp",
 		"YAML_MCP_STATIC_HEADER":      "yaml-static-from-env",
@@ -286,6 +314,9 @@ proxy:
 	}
 	if cfg.ControlPlane.BaseURL == nil || cfg.ControlPlane.BaseURL.String() != "https://yaml-control.example" {
 		t.Fatalf("unexpected control plane base url: %v", cfg.ControlPlane.BaseURL)
+	}
+	if cfg.ControlPlane.URLPath != "/gateway/dev/us" {
+		t.Fatalf("unexpected control plane url path: %q", cfg.ControlPlane.URLPath)
 	}
 	if cfg.ControlPlane.TunnelID != "tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
@@ -1719,6 +1750,36 @@ func TestLoadValidatesControlPlaneBaseURL(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid control-plane.base-url") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadValidatesControlPlaneURLPath(t *testing.T) {
+	testCases := map[string]string{
+		"must-start-with-slash":  "gateway/dev/us",
+		"must-not-include-host":  "https://gateway.example/dev/us",
+		"must-not-include-query": "/gateway/dev/us?workspace=prod",
+	}
+	for name, urlPath := range testCases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load([]string{"--control-plane.url-path", urlPath}, func(key string) (string, bool) {
+				if key == "OPENAI_API_KEY" {
+					return "key", true
+				}
+				if key == "CONTROL_PLANE_TUNNEL_ID" {
+					return envTunnelID, true
+				}
+				if key == "MCP_SERVER_URL" {
+					return "https://mcp.default", true
+				}
+				return "", false
+			})
+			if err == nil {
+				t.Fatalf("expected error when control plane url path invalid")
+			}
+			if !strings.Contains(err.Error(), "invalid control-plane.url-path") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 

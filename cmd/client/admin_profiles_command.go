@@ -57,6 +57,7 @@ func newAdminProfilesCommandWithRuntime(lookupEnv func(string) (string, bool), s
 	})
 
 	var baseURL string
+	var urlPath string
 	var adminKey string
 	var activate bool
 	setCmd := &cobra.Command{
@@ -64,7 +65,7 @@ func newAdminProfilesCommandWithRuntime(lookupEnv func(string) (string, bool), s
 		Short: "Create or update an admin profile",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			payload, err := manager.SetAdminProfile(args[0], baseURL, adminKey, activate)
+			payload, err := manager.SetAdminProfile(args[0], baseURL, urlPath, adminKey, activate)
 			if err != nil {
 				return err
 			}
@@ -77,6 +78,7 @@ func newAdminProfilesCommandWithRuntime(lookupEnv func(string) (string, bool), s
 		},
 	}
 	setCmd.Flags().StringVar(&baseURL, "control-plane-base-url", "", "Control-plane base URL")
+	setCmd.Flags().StringVar(&urlPath, "control-plane-url-path", "", "Optional URL path appended to the control-plane base URL")
 	setCmd.Flags().StringVar(&adminKey, "admin-key", "", "Admin key reference to store, using env:NAME or file:/path")
 	setCmd.Flags().BoolVar(&activate, "activate", true, "Mark the profile as active after saving")
 	cmd.AddCommand(setCmd)

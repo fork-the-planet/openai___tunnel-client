@@ -30,6 +30,7 @@ func TestWriteRuntimeProfileUsesExistingJSONCompatibleShape(t *testing.T) {
 		"",
 		"tunnel_123",
 		"https://api.openai.com",
+		"/chatgpttunnelgateway/dev/us",
 		"env:CONTROL_PLANE_API_KEY",
 		Target{Kind: "server_url", Value: "http://127.0.0.1:3001/mcp"},
 		filepath.Join(t.TempDir(), "profiles"),
@@ -40,6 +41,7 @@ func TestWriteRuntimeProfileUsesExistingJSONCompatibleShape(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"config_version": 1`)
+	require.Contains(t, string(data), `"url_path": "/chatgpttunnelgateway/dev/us"`)
 	require.Contains(t, string(data), `"server_urls": [`)
 }
 

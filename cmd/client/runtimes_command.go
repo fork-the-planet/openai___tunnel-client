@@ -15,6 +15,7 @@ type runtimesCommonFlags struct {
 	adminProfileName    string
 	adminKeyRef         string
 	controlPlaneBaseURL string
+	controlPlaneURLPath string
 	jsonOutput          bool
 }
 
@@ -35,6 +36,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 	cmd.PersistentFlags().StringVar(&common.adminProfileName, "admin-profile", "", "Admin profile name to use")
 	cmd.PersistentFlags().StringVar(&common.adminKeyRef, "admin-key", "", "Admin key reference to store/use, using env:NAME or file:/path")
 	cmd.PersistentFlags().StringVar(&common.controlPlaneBaseURL, "control-plane-base-url", "", "Control-plane base URL")
+	cmd.PersistentFlags().StringVar(&common.controlPlaneURLPath, "control-plane-url-path", "", "Optional URL path appended to the control-plane base URL")
 	cmd.PersistentFlags().BoolVar(&common.jsonOutput, "json", false, "Emit JSON output")
 
 	var createName string
@@ -56,6 +58,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 				AdminProfileName:    common.adminProfileName,
 				AdminKeyRef:         common.adminKeyRef,
 				ControlPlaneBaseURL: common.controlPlaneBaseURL,
+				ControlPlaneURLPath: common.controlPlaneURLPath,
 				OrganizationIDs:     createOrgIDs,
 				WorkspaceIDs:        createWorkspaceIDs,
 			})
@@ -105,6 +108,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 					AdminProfileName:    common.adminProfileName,
 					AdminKeyRef:         common.adminKeyRef,
 					ControlPlaneBaseURL: common.controlPlaneBaseURL,
+					ControlPlaneURLPath: common.controlPlaneURLPath,
 					OrganizationIDs:     connectOrgIDs,
 					WorkspaceIDs:        connectWorkspaceIDs,
 				},
@@ -155,6 +159,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 				AdminProfileName:    common.adminProfileName,
 				AdminKeyRef:         common.adminKeyRef,
 				ControlPlaneBaseURL: common.controlPlaneBaseURL,
+				ControlPlaneURLPath: common.controlPlaneURLPath,
 				OrganizationIDs:     listOrgIDs,
 				WorkspaceIDs:        listWorkspaceIDs,
 				TenantID:            listTenantID,
@@ -224,6 +229,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 				AdminProfileName:    common.adminProfileName,
 				AdminKeyRef:         common.adminKeyRef,
 				ControlPlaneBaseURL: common.controlPlaneBaseURL,
+				ControlPlaneURLPath: common.controlPlaneURLPath,
 			})
 			if err != nil {
 				return maybeWritePayloadError(cmd, common.jsonOutput, payload, err)
@@ -248,6 +254,7 @@ func newRuntimesCommandWithRuntime(lookupEnv func(string) (string, bool), stdout
 				AdminProfileName:    common.adminProfileName,
 				AdminKeyRef:         common.adminKeyRef,
 				ControlPlaneBaseURL: common.controlPlaneBaseURL,
+				ControlPlaneURLPath: common.controlPlaneURLPath,
 			})
 			if err != nil {
 				return maybeWritePayloadError(cmd, common.jsonOutput, payload, err)

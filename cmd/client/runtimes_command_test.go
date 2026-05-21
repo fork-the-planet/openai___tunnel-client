@@ -24,9 +24,10 @@ func TestAdminProfilesSetAndListJSON(t *testing.T) {
 
 	var stdout bytes.Buffer
 	cmd := newAdminProfilesCommandWithRuntime(lookupEnvMap(env), &stdout, &bytes.Buffer{}, session.DefaultRuntime())
-	cmd.SetArgs([]string{"set", "sandbox", "--admin-key", "env:OPENAI_ADMIN_KEY", "--control-plane-base-url", "https://api.openai.com", "--json"})
+	cmd.SetArgs([]string{"set", "sandbox", "--admin-key", "env:OPENAI_ADMIN_KEY", "--control-plane-base-url", "https://api.openai.com", "--control-plane-url-path", "/chatgpttunnelgateway/dev/us", "--json"})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, stdout.String(), `"name": "sandbox"`)
+	require.Contains(t, stdout.String(), `"control_plane_url_path": "/chatgpttunnelgateway/dev/us"`)
 
 	stdout.Reset()
 	cmd = newAdminProfilesCommandWithRuntime(lookupEnvMap(env), &stdout, &bytes.Buffer{}, session.DefaultRuntime())
@@ -51,7 +52,7 @@ func TestRuntimesCreateConnectStatusStopJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/tunnels":
+		case r.Method == http.MethodPost && r.URL.Path == "/chatgpttunnelgateway/dev/us/v1/tunnels":
 			payload := map[string]any{}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 			tunnel := map[string]any{
@@ -64,9 +65,9 @@ func TestRuntimesCreateConnectStatusStopJSON(t *testing.T) {
 			}
 			tunnels[tunnel["id"].(string)] = tunnel
 			require.NoError(t, json.NewEncoder(w).Encode(tunnel))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/tunnels":
+		case r.Method == http.MethodGet && r.URL.Path == "/chatgpttunnelgateway/dev/us/v1/tunnels":
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"tunnels": []map[string]any{}}))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/tunnels/tunnel_0123456789abcdef0123456789abcd":
+		case r.Method == http.MethodGet && r.URL.Path == "/chatgpttunnelgateway/dev/us/v1/tunnels/tunnel_0123456789abcdef0123456789abcd":
 			require.NoError(t, json.NewEncoder(w).Encode(tunnels["tunnel_0123456789abcdef0123456789abcd"]))
 		default:
 			http.NotFound(w, r)
@@ -91,6 +92,7 @@ func TestRuntimesCreateConnectStatusStopJSON(t *testing.T) {
 		"OPENAI_ADMIN_KEY":        "admin-key",
 		"CONTROL_PLANE_API_KEY":   "runtime-key",
 		"CONTROL_PLANE_BASE_URL":  server.URL,
+		"CONTROL_PLANE_URL_PATH":  "/chatgpttunnelgateway/dev/us",
 	}
 	activeTmuxSessions := map[string]bool{}
 	runtime := session.Runtime{
@@ -145,6 +147,10 @@ func TestRuntimesCreateConnectStatusStopJSON(t *testing.T) {
 	require.Equal(t, true, connectPayload["process_running"])
 	_, hasPID := connectPayload["pid"]
 	require.False(t, hasPID)
+	profilePath := connectPayload["profile_path"].(string)
+	profileContents, err := os.ReadFile(profilePath)
+	require.NoError(t, err)
+	require.Contains(t, string(profileContents), `"url_path": "/chatgpttunnelgateway/dev/us"`)
 
 	stdout.Reset()
 	stderr.Reset()

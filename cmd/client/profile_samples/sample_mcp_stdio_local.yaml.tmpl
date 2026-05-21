@@ -1,6 +1,9 @@
 config_version: 1
 control_plane:
   base_url: {{ printf "%q" .BaseURL }}
+{{ if .URLPath }}
+  url_path: {{ printf "%q" .URLPath }}
+{{ end }}
   tunnel_id: {{ printf "%q" .TunnelID }}
   api_key: {{ printf "%q" .APIKeyRef }}
 health:

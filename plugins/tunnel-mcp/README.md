@@ -230,6 +230,10 @@ Main environment knobs:
 - `TUNNEL_CLIENT_BIN`: selected `tunnel-client` binary path.
 - `CONTROL_PLANE_BASE_URL`: tunnel control-plane host root; default
   `https://api.openai.com`.
+- `CONTROL_PLANE_URL_PATH`: optional path appended to the control-plane host
+  root before tunnel-client adds its `/v1/...` routes.
+- `control_plane_url_path`: optional tunnel-mcp tool argument that stores the
+  same path on the native admin profile for create/list/connect flows.
 - `TUNNEL_MCP_ADMIN_PROFILE`: admin profile name; default `default`.
 - `TUNNEL_CLIENT_PROFILE_DIR`: generated native profile directory.
 - `TUNNEL_CLIENT_STATE_DIR`: native local runtime/admin-profile state root.

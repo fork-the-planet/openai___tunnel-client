@@ -124,6 +124,7 @@ func TestInitWritesValidatedProfile(t *testing.T) {
 		"--profile", "demo",
 		"--profile-dir", profileDir,
 		"--tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--control-plane-url-path", "/chatgpttunnelgateway/dev/us",
 		"--mcp-server-url", "http://127.0.0.1:3001/mcp",
 		"--open-web-ui",
 	)
@@ -133,6 +134,7 @@ func TestInitWritesValidatedProfile(t *testing.T) {
 	data, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	require.NoError(t, config.ValidateProfileBytes(path, data))
+	require.Contains(t, string(data), `url_path: "/chatgpttunnelgateway/dev/us"`)
 	require.Contains(t, stdout, "Created profile demo")
 	require.Contains(t, stdout, "tunnel-client doctor --profile demo")
 	require.Contains(t, stdout, "tunnel-client run --profile demo")
