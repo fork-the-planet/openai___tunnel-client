@@ -24,7 +24,11 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/testsupport/mockmcpserver"
 	"go.openai.org/api/tunnel-client/testsupport/mocktunnelservice"
+	"go.openai.org/api/tunnel-client/testsupport/testctx"
 )
+
+// Leave room for failure state dumps and cleanup before the outer runner stops the test.
+const testDeadlineReserve = 5 * time.Second
 
 type harnessConfig struct {
 	apiKey              string
@@ -262,7 +266,7 @@ func (h *Harness) ExecuteScenarious(t testing.TB) {
 	if h.afterStart != nil {
 		h.afterStart(h)
 	}
-	ctx, cancel := h.scenarioContext()
+	ctx, cancel := h.scenarioContext(t)
 	defer cancel()
 	if err := h.ControlPlane.WaitUntilIdle(ctx); err != nil {
 		h.dumpFailureState(t, err)
@@ -289,7 +293,7 @@ func (h *Harness) ExecuteScenario(t testing.TB) error {
 	if h.afterStart != nil {
 		h.afterStart(h)
 	}
-	ctx, cancel := h.scenarioContext()
+	ctx, cancel := h.scenarioContext(t)
 	defer cancel()
 	if err := h.ControlPlane.WaitUntilIdle(ctx); err != nil {
 		return fmt.Errorf("scenario did not complete: %w", err)
@@ -308,11 +312,16 @@ func (h *Harness) WaitForMCPProbe(ctx context.Context) error {
 	return h.MCPProbeState.WaitUntilDone(ctx)
 }
 
-func (h *Harness) scenarioContext() (context.Context, context.CancelFunc) {
+func (h *Harness) scenarioContext(t testing.TB) (context.Context, context.CancelFunc) {
+	ctx, cancel := testctx.WithDeadline(t, testDeadlineReserve)
 	if h.waitTimeout <= 0 {
-		return context.Background(), func() {}
+		return ctx, cancel
 	}
-	return context.WithTimeout(context.Background(), h.waitTimeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, h.waitTimeout)
+	return timeoutCtx, func() {
+		timeoutCancel()
+		cancel()
+	}
 }
 
 func (h *Harness) dumpFailureState(t testing.TB, cause error) {
