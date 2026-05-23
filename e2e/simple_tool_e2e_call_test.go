@@ -49,7 +49,7 @@ func runSimpleToolScenarioWithHarnessOptions(
 	harnessOptions []harnesspkg.HarnessOption,
 	controlPlaneOptions []mocktunnelservice.Option,
 	mcpOptions ...mockmcpserver.Option,
-) {
+) *harnesspkg.Harness {
 	t.Helper()
 
 	const (
@@ -185,4 +185,6 @@ func runSimpleToolScenarioWithHarnessOptions(
 	if args["name"] != userName {
 		t.Fatalf("unexpected tool arguments: %v", args)
 	}
+
+	return h
 }

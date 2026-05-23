@@ -88,9 +88,10 @@ type ReceivedResponse struct {
 
 // IncomingHTTPRequest captures an HTTP request received by the mock tunnel service.
 type IncomingHTTPRequest struct {
-	Method  string
-	Path    string
-	Headers http.Header
+	Method   string
+	Path     string
+	RawQuery string
+	Headers  http.Header
 }
 
 // CommandMutator can modify a command payload before it is delivered to the client.
@@ -571,9 +572,10 @@ func (m *MockTunnelService) ReceivedHTTPRequests() []IncomingHTTPRequest {
 	out := make([]IncomingHTTPRequest, len(m.httpSeen))
 	for i, req := range m.httpSeen {
 		out[i] = IncomingHTTPRequest{
-			Method:  req.Method,
-			Path:    req.Path,
-			Headers: cloneHeader(req.Headers),
+			Method:   req.Method,
+			Path:     req.Path,
+			RawQuery: req.RawQuery,
+			Headers:  cloneHeader(req.Headers),
 		}
 	}
 	return out
@@ -584,15 +586,18 @@ func (m *MockTunnelService) recordHTTPRequest(req *http.Request) {
 		return
 	}
 	path := ""
+	rawQuery := ""
 	if req.URL != nil {
 		path = req.URL.Path
+		rawQuery = req.URL.RawQuery
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.httpSeen = append(m.httpSeen, IncomingHTTPRequest{
-		Method:  req.Method,
-		Path:    path,
-		Headers: req.Header.Clone(),
+		Method:   req.Method,
+		Path:     path,
+		RawQuery: rawQuery,
+		Headers:  req.Header.Clone(),
 	})
 }
 

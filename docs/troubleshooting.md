@@ -132,5 +132,7 @@ channel routing model, and environment-variable checklist.
 
 - Increase `--control-plane.max-inflight` /
   `CONTROL_PLANE_MAX_INFLIGHT_REQUESTS` to buffer more commands.
+- Poll requests are sent to tunnel-service in batches of at most `25`
+  commands even when the local buffer is larger.
 - Increase `--mcp.max-concurrent-requests` / `MCP_MAX_CONCURRENT_REQUESTS` if
   your MCP server can handle parallelism.

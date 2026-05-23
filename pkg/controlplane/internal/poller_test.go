@@ -154,6 +154,18 @@ func TestPollerWritesAtMostQueueCapacity(t *testing.T) {
 	assertGaugeValue(t, rm, metricNameQueueLength, int64(len(queue)))
 }
 
+func TestPollLimitCapsControlPlaneBatchSize(t *testing.T) {
+	t.Parallel()
+
+	if got := pollLimit(100); got != maxPollBatchSize {
+		t.Fatalf("pollLimit(100) = %d, want %d", got, maxPollBatchSize)
+	}
+
+	if got := pollLimit(20); got != 20 {
+		t.Fatalf("pollLimit(20) = %d, want 20", got)
+	}
+}
+
 func TestPollerRecordsQueueDropsAndCommandAge(t *testing.T) {
 	queue := &failingQueue{}
 	fetcher := &recordingFetcher{

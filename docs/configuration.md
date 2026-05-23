@@ -288,6 +288,8 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - Flag: `--control-plane.max-inflight`
   - Env: `CONTROL_PLANE_MAX_INFLIGHT_REQUESTS`
   - Default: `20` (max `10000`)
+  - The local buffer may exceed `25`, but each control-plane poll requests at
+    most `25` commands to match the tunnel-service API contract.
 - **Extra headers (optional)**
   - Flag (repeatable): `--control-plane.extra-headers "Key: Value"`
   - Env: `CONTROL_PLANE_EXTRA_HEADERS="Key: Value, Key2: Value2"`

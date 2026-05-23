@@ -21,6 +21,7 @@ const (
 	defaultBackoffMin     = 200 * time.Millisecond
 	defaultBackoffMax     = 10 * time.Second
 	defaultPollerTimeout  = 30 * time.Second
+	maxPollBatchSize      = 25
 
 	dropReasonInvalidCommandType = "invalid_command_type"
 )
@@ -125,12 +126,13 @@ func (p *poller) Run(ctx context.Context) {
 			continue
 		}
 
-		p.logger.DebugContext(ctx, "poll cycle started", slog.Int("limit", available))
+		limit := pollLimit(available)
+		p.logger.DebugContext(ctx, "poll cycle started", slog.Int("limit", limit))
 		p.metrics.totalCyclesStarted.Add(ctx, 1)
 
 		pollStart := time.Now()
 		pollCtx, cancel := context.WithTimeout(ctx, p.pollTimeout)
-		commands, tunnelServiceRequestID, err := p.fetcher.Poll(pollCtx, available)
+		commands, tunnelServiceRequestID, err := p.fetcher.Poll(pollCtx, limit)
 		cancel()
 		p.metrics.pollLatency.Record(ctx, time.Since(pollStart).Seconds(), metric.WithAttributes(attribute.Bool("error", err != nil)))
 		if err != nil {
@@ -272,6 +274,13 @@ func (p *poller) availableSlots() int {
 	available := capacity - p.queue.Length()
 	if available < 0 {
 		return 0
+	}
+	return available
+}
+
+func pollLimit(available int) int {
+	if available > maxPollBatchSize {
+		return maxPollBatchSize
 	}
 	return available
 }

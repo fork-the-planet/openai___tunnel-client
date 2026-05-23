@@ -2513,6 +2513,58 @@ func TestProcessorHandlesSessionTerminationCommand(t *testing.T) {
 	require.Equal(t, cmd.headers, transport.terminationHeaders)
 }
 
+func TestProcessorClonesSessionTerminationHeadersBeforeTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := &sessionTerminatingForwardingTransport{
+		statusCode:      http.StatusNoContent,
+		responseHeaders: http.Header{"Mcp-Protocol-Version": {"2025-06-18"}},
+		mutateHeaders: func(headers http.Header) {
+			headers.Set("Authorization", "Bearer mutated-by-transport")
+			headers.Set(mcpclient.HeaderProtocolVersion, "mutated-protocol")
+			headers.Set("X-Transport-Only", "set-by-transport")
+		},
+	}
+	responder := newRecordingResponder()
+	processor, err := NewProcessor(processorParams{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   newTestMeterProvider(t),
+	})
+	require.NoError(t, err)
+
+	sessionID := "session-terminate-clone"
+	originalHeaders := http.Header{
+		"Authorization":                 {"Bearer connector-token"},
+		mcpclient.HeaderSessionID:       {sessionID},
+		mcpclient.HeaderProtocolVersion: {"2025-06-18"},
+	}
+	cmd := &fakeSessionTerminationCommand{
+		id:         types.RequestID("session-terminate-clone"),
+		enqueuedAt: time.Now().Add(-time.Second),
+		polledAt:   time.Now(),
+		headers:    originalHeaders,
+		sessionID:  &sessionID,
+		shardToken: "shard-session-terminate-clone",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeSessionTermination, got.response.Type())
+	require.Equal(t, http.StatusNoContent, got.response.ResponseCode())
+	require.Equal(t, []string{"Bearer connector-token"}, transport.terminationHeaders["Authorization"])
+	require.Equal(t, []string{"2025-06-18"}, transport.terminationHeaders[mcpclient.HeaderProtocolVersion])
+	require.Equal(t, []string{"Bearer connector-token"}, originalHeaders["Authorization"])
+	require.Equal(t, []string{"2025-06-18"}, originalHeaders[mcpclient.HeaderProtocolVersion])
+	require.Empty(t, originalHeaders.Values("X-Transport-Only"))
+}
+
 func TestProcessorRejectsSessionTerminationForUnsupportedTransport(t *testing.T) {
 	t.Parallel()
 
@@ -2981,10 +3033,14 @@ type sessionTerminatingForwardingTransport struct {
 	responseHeaders    http.Header
 	err                error
 	terminationHeaders http.Header
+	mutateHeaders      func(http.Header)
 }
 
 func (s *sessionTerminatingForwardingTransport) TerminateSession(_ context.Context, headers http.Header) (int, http.Header, error) {
 	s.terminationHeaders = headers.Clone()
+	if s.mutateHeaders != nil {
+		s.mutateHeaders(headers)
+	}
 	return s.statusCode, s.responseHeaders, s.err
 }
 

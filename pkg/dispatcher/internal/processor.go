@@ -550,7 +550,7 @@ func (p *mcpProcessor) processSessionTerminationCommand(ctx context.Context, log
 		return fmt.Errorf("dispatcher processor: MCP transport does not support session termination")
 	}
 
-	statusCode, respHeader, err := terminator.TerminateSession(ctx, cmd.Headers())
+	statusCode, respHeader, err := terminator.TerminateSession(ctx, cloneHeaders(cmd.Headers()))
 	statusCode = normalizeTransportStatusCode(statusCode, err)
 	if respHeader == nil {
 		respHeader = http.Header{}
@@ -1005,14 +1005,18 @@ func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error
 }
 
 func ensureDefaultAcceptHeader(headers http.Header) http.Header {
-	clone := http.Header{}
-	if headers != nil {
-		clone = headers.Clone()
-	}
+	clone := cloneHeaders(headers)
 	if clone.Get("Accept") == "" {
 		clone.Set("Accept", defaultAcceptHeaderValue)
 	}
 	return clone
+}
+
+func cloneHeaders(headers http.Header) http.Header {
+	if headers == nil {
+		return http.Header{}
+	}
+	return headers.Clone()
 }
 
 func normalizeTransportStatusCode(statusCode int, err error) int {
