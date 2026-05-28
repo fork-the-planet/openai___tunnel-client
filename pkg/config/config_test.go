@@ -1564,6 +1564,52 @@ mcp:
 	}
 }
 
+func TestLoadParsesMCPUnixSocketYAMLReference(t *testing.T) {
+	configPath := writeTempConfigFile(t, `
+control_plane:
+  tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  api_key: env:YAML_CONTROL_PLANE_API_KEY
+mcp:
+  server_urls:
+    - channel: main
+      url: http://localhost/mcp
+      unix_socket: env:YAML_MCP_SOCKET
+`)
+	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
+		"YAML_CONTROL_PLANE_API_KEY": "yaml-control-key",
+		"YAML_MCP_SOCKET":            "/tmp/yaml-mcp.sock",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	binding := cfg.MCP.MainChannelBinding()
+	if binding == nil {
+		t.Fatal("expected main MCP binding")
+		return
+	}
+	if binding.UnixSocketPath != "/tmp/yaml-mcp.sock" {
+		t.Fatalf("expected unix socket path /tmp/yaml-mcp.sock, got %q", binding.UnixSocketPath)
+	}
+	if cfg.MCP.UnixSocketPath != "/tmp/yaml-mcp.sock" {
+		t.Fatalf("expected main unix socket path /tmp/yaml-mcp.sock, got %q", cfg.MCP.UnixSocketPath)
+	}
+}
+
+func TestLoadRejectsMCPUnixSocketProxyCombination(t *testing.T) {
+	_, err := Load([]string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=http://localhost/mcp,unix-socket=/tmp/mcp.sock,http-proxy=http://proxy.example:8080",
+	}, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatal("expected unix socket proxy combination to fail")
+	}
+	if !strings.Contains(err.Error(), "unix-socket cannot be combined with http-proxy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadPreservesExplicitNonDefaultControlPlaneBaseURLWithMTLS(t *testing.T) {
 	certPath, keyPath := writeTempClientCertPair(t)
 	cfg, err := Load([]string{

@@ -595,6 +595,7 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 		},
 		"mcp": map[string]any{
 			"server_url":              urlForSnapshot(cfg.MCP.ServerURL),
+			"unix_socket_path":        redactString(cfg.MCP.UnixSocketPath),
 			"command":                 redactString(cfg.MCP.Command),
 			"command_args":            redactStringSlice(cfg.MCP.CommandArgs),
 			"transport":               string(cfg.MCP.TransportKind),
@@ -698,6 +699,7 @@ func mcpBindingSnapshots(bindings []config.MCPChannelBinding) []map[string]any {
 			"channel":            binding.Channel.String(),
 			"transport":          string(binding.TransportKind),
 			"server_url":         urlForSnapshot(binding.ServerURL),
+			"unix_socket_path":   redactString(binding.UnixSocketPath),
 			"command":            redactString(binding.Command),
 			"command_args":       redactStringSlice(binding.CommandArgs),
 			"client_certificate": clientCertificateSnapshot(binding.ClientCertificate),

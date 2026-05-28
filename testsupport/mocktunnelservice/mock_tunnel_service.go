@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,6 +66,13 @@ func WithSessionHeaderPropagation() Option {
 func WithAllowPendingCommands() Option {
 	return func(mock *MockTunnelService) {
 		mock.allowPending = true
+	}
+}
+
+// WithUnixSocketPath makes the mock serve HTTP over the provided Unix-domain socket.
+func WithUnixSocketPath(path string) Option {
+	return func(mock *MockTunnelService) {
+		mock.unixSocketPath = path
 	}
 }
 
@@ -218,6 +226,7 @@ type MockTunnelService struct {
 	pollWaitLimit       time.Duration
 	server              *httptest.Server
 	baseURL             *url.URL
+	unixSocketPath      string
 	closeOnce           sync.Once
 	storage             *sharedStorage
 	autoSessionMutators bool
@@ -403,7 +412,13 @@ func (m *MockTunnelService) Start(t testing.TB) {
 	}
 	handler := http.NewServeMux()
 	handler.HandleFunc("/v1/tunnel/", m.handleTunnel)
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	network := "tcp4"
+	address := "127.0.0.1:0"
+	if m.unixSocketPath != "" {
+		network = "unix"
+		address = m.unixSocketPath
+	}
+	listener, err := net.Listen(network, address)
 	if err != nil {
 		m.mu.Unlock()
 		t.Skipf("mock tunnel-service listener unavailable: %v", err)
@@ -414,7 +429,11 @@ func (m *MockTunnelService) Start(t testing.TB) {
 		Config:   &http.Server{Handler: handler},
 	}
 	server.Start()
-	parsed, err := url.Parse(server.URL)
+	baseURL := server.URL
+	if m.unixSocketPath != "" {
+		baseURL = "http://tunnel-service"
+	}
+	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		m.mu.Unlock()
 		server.Close()
@@ -433,11 +452,13 @@ func (m *MockTunnelService) Close() {
 	m.closeOnce.Do(func() {
 		var (
 			server       *httptest.Server
+			socketPath   string
 			remainingCmd int
 			remainingExp int
 		)
 		m.mu.Lock()
 		server = m.server
+		socketPath = m.unixSocketPath
 		m.server = nil
 		if server != nil {
 			m.baseURL = nil
@@ -454,6 +475,9 @@ func (m *MockTunnelService) Close() {
 		m.mu.Unlock()
 		if server != nil {
 			server.Close()
+		}
+		if socketPath != "" {
+			_ = os.Remove(socketPath)
 		}
 		if remainingCmd != 0 && !m.allowPending {
 			m.failf("mock tunnel-service stopped with %d pending command(s)", remainingCmd)

@@ -315,6 +315,9 @@ func validateFileConfigSyntax(c fileConfig) error {
 		if err := validateConfigValueReferenceSyntax("mcp.server_urls.url", stringPtr(entry.URL)); err != nil {
 			return err
 		}
+		if err := validateConfigValueReferenceSyntax("mcp.server_urls.unix_socket", entry.UnixSocket); err != nil {
+			return err
+		}
 	}
 	if _, err := formatMCPServerURLEntries(c.MCP.ServerURLs); err != nil {
 		return err

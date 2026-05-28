@@ -70,7 +70,9 @@ an empty channel is normalized to `main`.
 Supported customer MCP transports are:
 
 - **Streamable HTTP**: `MCP_SERVER_URL` or `--mcp.server-url`. Use this for MCP
-  servers reachable over HTTP(S) from the tunnel-client host.
+  servers reachable over HTTP(S) from the tunnel-client host. Local deployments
+  can keep the logical HTTP URL while dialing it over a Unix-domain socket with
+  channel-qualified `unix-socket=<path|env:VAR>`.
 - **stdio**: `MCP_COMMAND` or `--mcp.command`. Use this for local MCP servers
   launched as child processes. Stdio bindings do not have an HTTP session id and
   ignore proxy, CA, and mTLS settings.

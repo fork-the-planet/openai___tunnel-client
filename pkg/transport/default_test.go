@@ -2,7 +2,11 @@ package transport
 
 import (
 	"crypto/tls"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,4 +38,38 @@ func TestApplyClientCertificateConfiguresExplicitClientCertificateCallback(t *te
 	selected, err := transport.TLSClientConfig.GetClientCertificate(&tls.CertificateRequestInfo{})
 	require.NoError(t, err)
 	require.Equal(t, certificate.Certificate, selected.Certificate)
+}
+
+func TestApplyUnixSocketPathDialsUnixListener(t *testing.T) {
+	t.Parallel()
+
+	socketFile, err := os.CreateTemp("/tmp", "transport-*.sock")
+	require.NoError(t, err)
+	socketPath := socketFile.Name()
+	require.NoError(t, socketFile.Close())
+	require.NoError(t, os.Remove(socketPath))
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/healthz", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	roundTripper, err := ApplyUnixSocketPath(http.DefaultTransport.(*http.Transport).Clone(), socketPath)
+	require.NoError(t, err)
+
+	client := &http.Client{Transport: roundTripper}
+	response, err := client.Get("http://tunnel-service/healthz")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, response.Body.Close())
+	}()
+	_, err = io.Copy(io.Discard, response.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, response.StatusCode)
 }

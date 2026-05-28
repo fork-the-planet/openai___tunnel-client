@@ -159,6 +159,13 @@ func WithTLSServer() Option {
 	}
 }
 
+// WithUnixSocketPath makes the mock serve HTTP over the provided Unix-domain socket.
+func WithUnixSocketPath(path string) Option {
+	return func(m *MockMCPServer) {
+		m.unixSocketPath = path
+	}
+}
+
 type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
@@ -187,7 +194,8 @@ type MockMCPServer struct {
 	serverOptions   *mcp.ServerOptions
 	requiredHeaders []requiredHeader
 
-	useTLS bool
+	useTLS         bool
+	unixSocketPath string
 
 	closing atomic.Bool
 	tb      atomic.Value // testing.TB
@@ -222,7 +230,26 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		return
 	}
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if m.useTLS && m.unixSocketPath != "" {
+		m.mu.Unlock()
+		t.Fatalf("mock MCP server unix socket does not support TLS")
+		return
+	}
+
+	var listener net.Listener
+	var err error
+	baseURL := ""
+	if m.unixSocketPath != "" {
+		if err := os.Remove(m.unixSocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.mu.Unlock()
+			t.Fatalf("remove stale mock MCP socket: %v", err)
+			return
+		}
+		listener, err = net.Listen("unix", m.unixSocketPath)
+		baseURL = "http://localhost"
+	} else {
+		listener, err = net.Listen("tcp4", "127.0.0.1:0")
+	}
 	if err != nil {
 		m.mu.Unlock()
 		t.Skipf("mock MCP server listener unavailable: %v", err)
@@ -238,7 +265,12 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		scheme = "https"
 	}
 	listenerHost := listener.Addr().String()
-	metadataURL := fmt.Sprintf("%s://%s%s", scheme, listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
+	serverOrigin := fmt.Sprintf("%s://%s", scheme, listenerHost)
+	if baseURL != "" {
+		listenerHost = "localhost"
+		serverOrigin = baseURL
+	}
+	metadataURL := serverOrigin + wellKnownOAuthProtectedResourcePath
 	if m.protectOAuth {
 		protectedHandler = auth.RequireBearerToken(m.tokenVerifier(), &auth.RequireBearerTokenOptions{
 			Scopes:              []string{"read", "write"},
@@ -315,7 +347,10 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		httpServer.Start()
 	}
 
-	parsed, err := url.Parse(httpServer.URL)
+	if baseURL == "" {
+		baseURL = httpServer.URL
+	}
+	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		m.mu.Unlock()
 		httpServer.Close()
@@ -372,6 +407,9 @@ func (m *MockMCPServer) Close() {
 		}
 		if cleanup != nil {
 			cleanup()
+		}
+		if m.unixSocketPath != "" {
+			_ = os.Remove(m.unixSocketPath)
 		}
 		if remaining != 0 {
 			m.failf("mock MCP server stopped with %d pending call(s)", remaining)

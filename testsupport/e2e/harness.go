@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +33,8 @@ import (
 // Leave room for failure state dumps and cleanup before the outer runner stops the test.
 const testDeadlineReserve = 5 * time.Second
 
+const tunnelIntegrationSocketEnv = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH"
+
 type harnessConfig struct {
 	apiKey              string
 	tunnelID            types.TunnelID
@@ -42,6 +47,8 @@ type harnessConfig struct {
 	mcpCommandArgs      []string
 	useHarpoonTransport bool
 	preserveClientURLs  bool
+	useUnixControlPlane bool
+	useUnixMCP          bool
 	beforeClientStart   func(*Harness)
 	afterClientStart    func(*Harness)
 	beforeClientStop    func(*Harness)
@@ -89,6 +96,20 @@ func WithClientConfig(fn func(*config.Config)) HarnessOption {
 func WithPreserveClientURLs() HarnessOption {
 	return func(cfg *harnessConfig) {
 		cfg.preserveClientURLs = true
+	}
+}
+
+// WithUnixControlPlane routes tunnel-client control-plane HTTP over a Unix-domain socket.
+func WithUnixControlPlane() HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.useUnixControlPlane = true
+	}
+}
+
+// WithUnixMCP routes tunnel-client MCP HTTP over a Unix-domain socket.
+func WithUnixMCP() HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.useUnixMCP = true
 	}
 }
 
@@ -191,10 +212,21 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		mocktunnelservice.WithAPIKey(cfg.apiKey),
 		mocktunnelservice.WithTunnelID(string(cfg.tunnelID)),
 	)
+	if cfg.useUnixControlPlane {
+		socketPath := newUnixSocketPath(t, "control-plane.sock")
+		t.Setenv(tunnelIntegrationSocketEnv, socketPath)
+		controlPlaneOpts = append(controlPlaneOpts, mocktunnelservice.WithUnixSocketPath(socketPath))
+	}
 	controlPlaneOpts = append(controlPlaneOpts, cfg.controlPlaneOptions...)
 	controlPlane := mocktunnelservice.NewMockTunnelService(controlPlaneOpts...)
 
-	mcpServer := mockmcpserver.NewMockMCPServer(cfg.mcpOptions...)
+	mcpOpts := append([]mockmcpserver.Option{}, cfg.mcpOptions...)
+	mcpSocketPath := ""
+	if cfg.useUnixMCP {
+		mcpSocketPath = newUnixSocketPath(t, "mcp.sock")
+		mcpOpts = append(mcpOpts, mockmcpserver.WithUnixSocketPath(mcpSocketPath))
+	}
+	mcpServer := mockmcpserver.NewMockMCPServer(mcpOpts...)
 
 	clientCfg := &config.Config{
 		ControlPlane: config.ControlPlaneConfig{
@@ -214,6 +246,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		},
 		MCP: config.MCPConfig{
 			ServerURL:             nil,
+			UnixSocketPath:        mcpSocketPath,
 			TransportKind:         cfg.mcpTransportKind,
 			ConnectionMaxTTL:      time.Minute,
 			MaxConcurrentRequests: 1,
@@ -247,6 +280,21 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		logWriter:    logWriter,
 		logBuffer:    &logBuf,
 	}
+}
+
+func newUnixSocketPath(t testing.TB, socketName string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix control-plane E2E is not supported on Windows")
+	}
+	dir, err := os.MkdirTemp("/tmp", "tunnel-client-e2e-")
+	if err != nil {
+		t.Fatalf("create unix socket temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return filepath.Join(dir, socketName)
 }
 
 // ExecuteScenarious orchestrates the tunnel lifecycle, waits for the control
@@ -433,11 +481,12 @@ func (h *Harness) startClient(t testing.TB) {
 	}
 	if len(cfg.MCP.ChannelBindings) == 0 {
 		cfg.MCP.ChannelBindings = []config.MCPChannelBinding{{
-			Channel:       types.DefaultChannel,
-			TransportKind: cfg.MCP.TransportKind,
-			ServerURL:     cfg.MCP.ServerURL,
-			Command:       cfg.MCP.Command,
-			CommandArgs:   cfg.MCP.CommandArgs,
+			Channel:        types.DefaultChannel,
+			TransportKind:  cfg.MCP.TransportKind,
+			ServerURL:      cfg.MCP.ServerURL,
+			UnixSocketPath: cfg.MCP.UnixSocketPath,
+			Command:        cfg.MCP.Command,
+			CommandArgs:    cfg.MCP.CommandArgs,
 		}}
 	}
 	logWriter := h.logWriter

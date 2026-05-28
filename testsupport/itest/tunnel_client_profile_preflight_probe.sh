@@ -17,6 +17,7 @@ disconnect_timeout_seconds="${DISCONNECT_TIMEOUT_SECONDS:-30.0}"
 client_pid=""
 tmpdir=""
 health_url_file=""
+control_plane_socket_path="${TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH:-}"
 
 stop_client() {
   if [[ -n "$client_pid" ]] && kill -0 "$client_pid" 2>/dev/null; then
@@ -64,6 +65,9 @@ request_ok() {
     --write-out '%{http_code}'
     --max-time "$timeout_seconds"
   )
+  if [[ -n "$control_plane_socket_path" ]]; then
+    curl_args+=(--unix-socket "$control_plane_socket_path")
+  fi
   while (($# > 0)); do
     curl_args+=(-H "$1")
     shift
@@ -89,6 +93,9 @@ request_json() {
     --header "Content-Type: application/json"
     --data "$payload"
   )
+  if [[ -n "$control_plane_socket_path" ]]; then
+    curl_args+=(--unix-socket "$control_plane_socket_path")
+  fi
   while (($# > 0)); do
     curl_args+=(-H "$1")
     shift
@@ -109,6 +116,9 @@ emit_http_snapshot() {
     --include
     --max-time "$timeout_seconds"
   )
+  if [[ -n "$control_plane_socket_path" ]]; then
+    curl_args+=(--unix-socket "$control_plane_socket_path")
+  fi
   while (($# > 0)); do
     curl_args+=(-H "$1")
     shift

@@ -15,7 +15,28 @@ import (
 )
 
 func TestHarnessExecuteScenariousWithInitializationAndTool(t *testing.T) {
-	runSimpleToolScenario(t)
+	for _, tc := range []struct {
+		name           string
+		harnessOptions []harnesspkg.HarnessOption
+	}{
+		{name: "http"},
+		{
+			name: "unix_socket",
+			harnessOptions: []harnesspkg.HarnessOption{
+				harnesspkg.WithUnixControlPlane(),
+			},
+		},
+		{
+			name: "mcp_unix_socket",
+			harnessOptions: []harnesspkg.HarnessOption{
+				harnesspkg.WithUnixMCP(),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runSimpleToolScenarioWithHarnessOptions(t, tc.harnessOptions, nil)
+		})
+	}
 }
 
 func TestHarnessExecuteScenarioWithInMemoryTransport(t *testing.T) {
@@ -38,10 +59,6 @@ func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 		nil,
 		mockmcpserver.WithKeepalivePings(),
 	)
-}
-
-func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
-	runSimpleToolScenarioWithHarnessOptions(t, nil, nil, mcpOptions...)
 }
 
 func runSimpleToolScenarioWithHarnessOptions(

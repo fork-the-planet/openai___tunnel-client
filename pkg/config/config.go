@@ -191,6 +191,7 @@ type ProcessConfig struct {
 // compatibility.
 type MCPConfig struct {
 	ServerURL             *url.URL
+	UnixSocketPath        string
 	Command               string
 	CommandArgs           []string
 	TransportKind         MCPTransportKind
@@ -241,6 +242,7 @@ type MCPChannelBinding struct {
 	Channel           types.Channel
 	TransportKind     MCPTransportKind
 	ServerURL         *url.URL
+	UnixSocketPath    string
 	Command           string
 	CommandArgs       []string
 	ClientCertificate *tlsconfig.ClientCertificate
@@ -411,7 +413,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
 	fs.String("http-proxy", "", "Global outbound HTTP proxy (applies to control-plane, MCP, and Harpoon) (format <url|env:VAR>)")
 	fs.Duration("proxy.check-interval", defaultProxyCheckInterval, "Interval between proxy connectivity checks (env.PROXY_CHECK_INTERVAL)")
-	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...,http-proxy=...,client-cert=...,client-key=...) (env.MCP_SERVER_URL)")
+	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...,unix-socket=...,http-proxy=...,client-cert=...,client-key=...) (env.MCP_SERVER_URL)")
 	fs.StringArray("mcp.command", nil, "Command to launch an MCP server over stdio (repeatable; format command=...,channel=...) (env.MCP_COMMAND)")
 	fs.String("mcp.http-proxy", "", "Outbound HTTP proxy for MCP (format <url|env:VAR>)")
 	fs.String("mcp.client-cert", "", "Path to PEM client certificate for MCP mTLS (format <path|env:VAR>) (env.MCP_CLIENT_CERT)")
@@ -1445,6 +1447,9 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 			if bindings[i].HTTPProxy != nil {
 				return MCPConfig{}, fmt.Errorf("mcp config: http-proxy not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
 			}
+			if bindings[i].UnixSocketPath != "" {
+				return MCPConfig{}, fmt.Errorf("mcp config: unix-socket not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
+			}
 			if bindings[i].ClientCertificate != nil {
 				return MCPConfig{}, fmt.Errorf("mcp config: client certificates are not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
 			}
@@ -1454,6 +1459,13 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		boundHTTPTransportCount++
 		if bindings[i].ClientCertificate == nil {
 			bindings[i].ClientCertificate = defaultClientCertificate
+		}
+		if bindings[i].UnixSocketPath != "" && bindings[i].HTTPProxy != nil {
+			return MCPConfig{}, fmt.Errorf("mcp config: unix-socket cannot be combined with http-proxy for channel %q", bindings[i].Channel.Canonical())
+		}
+		if bindings[i].UnixSocketPath != "" {
+			bindings[i].HTTPProxySource = ProxySourceIgnored
+			continue
 		}
 		if bindings[i].HTTPProxy != nil {
 			if bindings[i].HTTPProxySource == "" {
@@ -1489,6 +1501,7 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 	}
 	if mainBinding := cfg.MainChannelBinding(); mainBinding != nil {
 		cfg.ServerURL = mainBinding.ServerURL
+		cfg.UnixSocketPath = mainBinding.UnixSocketPath
 		cfg.Command = mainBinding.Command
 		cfg.CommandArgs = mainBinding.CommandArgs
 		cfg.TransportKind = mainBinding.TransportKind
@@ -1622,6 +1635,7 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 	switch kind {
 	case MCPTransportHTTPStreamable:
 		allowedKeys["url"] = true
+		allowedKeys["unix-socket"] = true
 		allowedKeys["http-proxy"] = true
 		allowedKeys["client-cert"] = true
 		allowedKeys["client-key"] = true
@@ -1657,6 +1671,13 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 			}
 			binding.HTTPProxy = parsed
 			binding.HTTPProxySource = source
+		}
+		if rawUnixSocket, ok := values["unix-socket"]; ok {
+			socketPath, err := resolvePathReference("mcp.server-url unix-socket", rawUnixSocket, lookupEnv)
+			if err != nil {
+				return MCPChannelBinding{}, err
+			}
+			binding.UnixSocketPath = socketPath
 		}
 		if rawClientCert, ok := values["client-cert"]; ok {
 			certPath, err := resolvePathReference("mcp.server-url client-cert", rawClientCert, lookupEnv)
@@ -1739,7 +1760,7 @@ func parseQualifiedStdioMCPBindingEntry(entry string) (MCPChannelBinding, error)
 }
 
 func rejectUnsupportedQualifiedStdioSegments(rawCommand, entry string) error {
-	for _, key := range []string{"http-proxy", "url", "client-cert", "client-key"} {
+	for _, key := range []string{"http-proxy", "url", "unix-socket", "client-cert", "client-key"} {
 		if strings.Contains(strings.ToLower(rawCommand), ","+key+"=") {
 			return fmt.Errorf("mcp config: unsupported key %q in entry %q", key, entry)
 		}
@@ -1779,6 +1800,7 @@ func isQualifiedMCPEntry(entry string) bool {
 	return strings.HasPrefix(trimmed, "url=") ||
 		strings.HasPrefix(trimmed, "command=") ||
 		strings.HasPrefix(trimmed, "channel=") ||
+		strings.HasPrefix(trimmed, "unix-socket=") ||
 		strings.HasPrefix(trimmed, "http-proxy=") ||
 		strings.HasPrefix(trimmed, "client-cert=") ||
 		strings.HasPrefix(trimmed, "client-key=")

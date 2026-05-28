@@ -87,6 +87,7 @@ type fileMCPConfig struct {
 type fileMCPServerURL struct {
 	Channel    *string `yaml:"channel"`
 	URL        string  `yaml:"url"`
+	UnixSocket *string `yaml:"unix_socket"`
 	HTTPProxy  *string `yaml:"http_proxy"`
 	ClientCert *string `yaml:"client_cert"`
 	ClientKey  *string `yaml:"client_key"`
@@ -379,6 +380,9 @@ func formatMCPServerURLEntries(entries []fileMCPServerURL) ([]string, error) {
 			parts = append(parts, "channel="+*entry.Channel)
 		}
 		parts = append(parts, "url="+entry.URL)
+		if entry.UnixSocket != nil && *entry.UnixSocket != "" {
+			parts = append(parts, "unix-socket="+*entry.UnixSocket)
+		}
 		if entry.HTTPProxy != nil && *entry.HTTPProxy != "" {
 			parts = append(parts, "http-proxy="+*entry.HTTPProxy)
 		}
@@ -408,6 +412,13 @@ func formatResolvedMCPServerURLEntries(entries []fileMCPServerURL, lookupEnv fun
 			parts = append(parts, "channel="+*entry.Channel)
 		}
 		parts = append(parts, "url="+urlValue)
+		if entry.UnixSocket != nil && *entry.UnixSocket != "" {
+			socketPath, err := resolvePathReference("mcp.server_urls.unix_socket", *entry.UnixSocket, lookupEnv)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, "unix-socket="+socketPath)
+		}
 		if entry.HTTPProxy != nil && *entry.HTTPProxy != "" {
 			parts = append(parts, "http-proxy="+*entry.HTTPProxy)
 		}

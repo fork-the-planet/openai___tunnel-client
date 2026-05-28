@@ -88,11 +88,12 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 	mainBinding := p.Config.MainChannelBinding()
 	if mainBinding == nil {
 		legacyBinding := config.MCPChannelBinding{
-			Channel:       types.DefaultChannel,
-			TransportKind: p.Config.TransportKind,
-			ServerURL:     p.Config.ServerURL,
-			Command:       p.Config.Command,
-			CommandArgs:   p.Config.CommandArgs,
+			Channel:        types.DefaultChannel,
+			TransportKind:  p.Config.TransportKind,
+			ServerURL:      p.Config.ServerURL,
+			UnixSocketPath: p.Config.UnixSocketPath,
+			Command:        p.Config.Command,
+			CommandArgs:    p.Config.CommandArgs,
 		}
 		mainBinding = &legacyBinding
 	}
@@ -260,7 +261,7 @@ func (w slogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, clientCertificate *tlsconfig.ClientCertificate, proxyURL *url.URL, serverURL *url.URL, extraHeaders map[string]string, discoveryExtraHeaders map[string]string) (http.RoundTripper, error) {
+func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, clientCertificate *tlsconfig.ClientCertificate, unixSocketPath string, proxyURL *url.URL, serverURL *url.URL, extraHeaders map[string]string, discoveryExtraHeaders map[string]string) (http.RoundTripper, error) {
 	// Order matters (outermost to innermost):
 	//   1. Static headers apply operator headers to the configured MCP origin.
 	//   2. Forwarding injects per-request connector headers last so they win conflicts.
@@ -275,6 +276,10 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 		return nil, fmt.Errorf("mcpclient: %w", err)
 	}
 	base, err = tctransport.ApplyProxy(base, proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("mcpclient: %w", err)
+	}
+	base, err = tctransport.ApplyUnixSocketPath(base, unixSocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
 	}

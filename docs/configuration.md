@@ -135,6 +135,8 @@ mcp:
   server_urls:
     - channel: main
       url: https://mcp.example.com/mcp
+      # Optional. Dial the logical HTTP URL over a local Unix socket instead of TCP.
+      unix_socket: env:MCP_UNIX_SOCKET_PATH
   commands:
     - channel: tools
       command: python -m tools_mcp
@@ -378,7 +380,12 @@ routing, streaming, OAuth discovery, and common setup pitfalls, see
   - Required: yes for the `main` channel (unless `--mcp.command` supplies `main`)
   - Legacy form: `--mcp.server-url=https://main.example.com/mcp` (defaults to `main`)
   - Channel-qualified form:
-    `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp,http-proxy=<url|env:VAR>,client-cert=<path|env:VAR>,client-key=<path|env:VAR>"`
+    `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp,unix-socket=<path|env:VAR>,http-proxy=<url|env:VAR>,client-cert=<path|env:VAR>,client-key=<path|env:VAR>"`
+  - Unix socket dial (optional): set `unix-socket=<path|env:VAR>` on a
+    channel-qualified entry, or `unix_socket:` in YAML, to dial the logical
+    HTTP(S) MCP URL over a local Unix-domain socket instead of TCP.
+  - Note: per-channel `unix-socket` cannot be combined with per-channel
+    `http-proxy`; MCP/global proxy defaults are ignored for that binding.
 - **Command (stdio transport)**
   - Flag (repeatable): `--mcp.command`
   - Env: `MCP_COMMAND`

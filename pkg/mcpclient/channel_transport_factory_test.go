@@ -90,6 +90,70 @@ func TestChannelTransportFactoryAppliesProxy(t *testing.T) {
 	}
 }
 
+func TestChannelTransportFactoryDialsUnixSocket(t *testing.T) {
+	t.Parallel()
+
+	socketFile, err := os.CreateTemp("/tmp", "mcp-client-*.sock")
+	if err != nil {
+		t.Fatalf("create unix socket temp file: %v", err)
+	}
+	socketPath := socketFile.Name()
+	if err := socketFile.Close(); err != nil {
+		t.Fatalf("close unix socket temp file: %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil {
+		t.Fatalf("remove unix socket temp file: %v", err)
+	}
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen on unix socket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(socketPath)
+	})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mcp" {
+			t.Fatalf("unexpected unix socket request path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	binding := config.MCPChannelBinding{
+		Channel:        types.DefaultChannel,
+		TransportKind:  config.MCPTransportHTTPStreamable,
+		ServerURL:      mustParseURLFactoryTest(t, "http://localhost/mcp"),
+		UnixSocketPath: socketPath,
+	}
+	cfg := &config.MCPConfig{ChannelBindings: []config.MCPChannelBinding{binding}}
+
+	factory, err := newChannelTransportFactory(channelTransportFactoryParams{
+		Config:        cfg,
+		Logging:       &config.LoggingConfig{},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MeterProvider: sdkmetric.NewMeterProvider(),
+	})
+	if err != nil {
+		t.Fatalf("newChannelTransportFactory failed: %v", err)
+	}
+
+	client, err := factory.HTTPClientForBinding(binding)
+	if err != nil {
+		t.Fatalf("HTTPClientForBinding failed: %v", err)
+	}
+	resp, err := client.Get(binding.ServerURL.String())
+	if err != nil {
+		t.Fatalf("unix socket request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unexpected unix socket status %d", resp.StatusCode)
+	}
+}
+
 func TestChannelTransportFactoryScopesStaticAuthorizationPerBinding(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ const (
 	responsePathFormat           = "/v1/tunnel/%s/response"
 	metadataPathFormat           = "/v1/tunnels/%s"
 	maxControlPlaneErrorBodySize = 64 * 1024
+	tunnelIntegrationSocketEnv   = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH"
 )
 
 var errMissingConfig = errors.New("controlplane client: config is required")
@@ -301,6 +303,10 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}
 	base, err = tctransport.ApplyProxy(base, cfg.HTTPProxy)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane client: %w", err)
+	}
+	base, err = tctransport.ApplyUnixSocketPath(base, os.Getenv(tunnelIntegrationSocketEnv))
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}

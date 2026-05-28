@@ -1,8 +1,10 @@
 package transport
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
@@ -74,5 +76,27 @@ func ApplyClientCertificate(base http.RoundTripper, clientCertificate *tlsconfig
 		return &certificate, nil
 	}
 	cloned.TLSClientConfig = tlsConfig
+	return cloned, nil
+}
+
+// ApplyUnixSocketPath makes HTTP requests dial the provided Unix-domain socket.
+func ApplyUnixSocketPath(base http.RoundTripper, socketPath string) (http.RoundTripper, error) {
+	if socketPath == "" {
+		return base, nil
+	}
+	if base == nil {
+		return nil, fmt.Errorf("base transport is nil")
+	}
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("unsupported transport type %T", base)
+	}
+
+	cloned := transport.Clone()
+	dialer := &net.Dialer{}
+	cloned.Proxy = nil
+	cloned.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "unix", socketPath)
+	}
 	return cloned, nil
 }
