@@ -104,7 +104,88 @@ func TestHealthCommandPIDFileCrossCheckFailsCleanly(t *testing.T) {
 	require.Contains(t, stdout, "Result: FAIL")
 }
 
+func TestHealthCommandRequiresControlPlanePoll(t *testing.T) {
+	t.Parallel()
+
+	server := healthTestServerWithMetrics(
+		t,
+		http.StatusOK,
+		"live",
+		http.StatusOK,
+		"ready",
+		http.StatusOK,
+		"commands_poll_cycles_total 1\n",
+	)
+	t.Cleanup(server.Close)
+
+	stdout, stderr, err := executeCommand(
+		t,
+		map[string]string{},
+		"health",
+		"--url",
+		server.URL,
+		"--require-control-plane-poll",
+	)
+
+	require.NoError(t, err, stderr)
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Control-plane poll: PASS")
+	require.Contains(t, stdout, "poll_cycles=1")
+	require.Contains(t, stdout, "Result: OK")
+}
+
+func TestHealthCommandRequiresControlPlanePollFailsBeforeFirstPoll(t *testing.T) {
+	t.Parallel()
+
+	server := healthTestServerWithMetrics(
+		t,
+		http.StatusOK,
+		"live",
+		http.StatusOK,
+		"ready",
+		http.StatusOK,
+		"commands_poll_cycles_total 0\n",
+	)
+	t.Cleanup(server.Close)
+
+	stdout, stderr, err := executeCommand(
+		t,
+		map[string]string{},
+		"health",
+		"--url",
+		server.URL,
+		"--require-control-plane-poll",
+	)
+
+	require.Error(t, err)
+	require.Equal(t, 2, exitCode(err))
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Control-plane poll: FAIL")
+	require.Contains(t, stdout, "no control-plane poll attempt observed")
+	require.Contains(t, stdout, "Result: FAIL")
+}
+
 func healthTestServer(t *testing.T, healthStatus int, healthBody string, readyStatus int, readyBody string) *httptest.Server {
+	return healthTestServerWithMetrics(
+		t,
+		healthStatus,
+		healthBody,
+		readyStatus,
+		readyBody,
+		http.StatusNotFound,
+		"",
+	)
+}
+
+func healthTestServerWithMetrics(
+	t *testing.T,
+	healthStatus int,
+	healthBody string,
+	readyStatus int,
+	readyBody string,
+	metricsStatus int,
+	metricsBody string,
+) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +196,9 @@ func healthTestServer(t *testing.T, healthStatus int, healthBody string, readySt
 		case "/readyz":
 			w.WriteHeader(readyStatus)
 			_, _ = w.Write([]byte(readyBody))
+		case "/metrics":
+			w.WriteHeader(metricsStatus)
+			_, _ = w.Write([]byte(metricsBody))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

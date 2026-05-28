@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -29,13 +31,21 @@ type healthProcessReport struct {
 }
 
 type healthReport struct {
-	Locator healthLocatorReport   `json:"locator"`
-	Process *healthProcessReport  `json:"process,omitempty"`
-	BaseURL string                `json:"base_url,omitempty"`
-	UIURL   string                `json:"ui_url,omitempty"`
-	Healthz session.EndpointProbe `json:"healthz"`
-	Readyz  session.EndpointProbe `json:"readyz"`
-	Result  string                `json:"result"`
+	Locator          healthLocatorReport   `json:"locator"`
+	Process          *healthProcessReport  `json:"process,omitempty"`
+	BaseURL          string                `json:"base_url,omitempty"`
+	UIURL            string                `json:"ui_url,omitempty"`
+	Healthz          session.EndpointProbe `json:"healthz"`
+	Readyz           session.EndpointProbe `json:"readyz"`
+	ControlPlanePoll *healthMetricProbe    `json:"control_plane_poll,omitempty"`
+	Result           string                `json:"result"`
+}
+
+type healthMetricProbe struct {
+	URL   string  `json:"url,omitempty"`
+	Value float64 `json:"value,omitempty"`
+	OK    bool    `json:"ok"`
+	Error string  `json:"error,omitempty"`
 }
 
 func newHealthCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
@@ -45,6 +55,7 @@ func newHealthCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var port int
 	var pid int
 	var pidFile string
+	var requireControlPlanePoll bool
 
 	cmd := &cobra.Command{
 		Use:   "health",
@@ -55,7 +66,14 @@ or a loopback port. Optional PID cross-checks let scripts verify that the expect
 process is still running while the health endpoints are being probed.
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			report, err := inspectHealth(urlValue, urlFile, port, pid, pidFile)
+			report, err := inspectHealth(
+				urlValue,
+				urlFile,
+				port,
+				pid,
+				pidFile,
+				requireControlPlanePoll,
+			)
 			if err != nil {
 				return err
 			}
@@ -80,10 +98,23 @@ process is still running while the health endpoints are being probed.
 	cmd.Flags().IntVar(&port, "port", 0, "Loopback port for the tunnel-client admin server")
 	cmd.Flags().IntVar(&pid, "pid", 0, "Optional PID cross-check for the expected tunnel-client process")
 	cmd.Flags().StringVar(&pidFile, "pid-file", "", "Optional file containing the expected tunnel-client PID")
+	cmd.Flags().BoolVar(
+		&requireControlPlanePoll,
+		"require-control-plane-poll",
+		false,
+		"Require one control-plane poll attempt before reporting ready",
+	)
 	return cmd
 }
 
-func inspectHealth(urlValue string, urlFile string, port int, pid int, pidFile string) (healthReport, error) {
+func inspectHealth(
+	urlValue string,
+	urlFile string,
+	port int,
+	pid int,
+	pidFile string,
+	requireControlPlanePoll bool,
+) (healthReport, error) {
 	if err := validateHealthInputs(urlValue, urlFile, port, pid, pidFile); err != nil {
 		return healthReport{}, err
 	}
@@ -101,6 +132,10 @@ func inspectHealth(urlValue string, urlFile string, port int, pid int, pidFile s
 		}
 		report.Healthz = probe.Healthz
 		report.Readyz = probe.Readyz
+		if requireControlPlanePoll {
+			controlPlanePoll := probeControlPlanePoll(report.Locator.ResolvedBaseURL)
+			report.ControlPlanePoll = &controlPlanePoll
+		}
 	}
 
 	if pid > 0 || pidFile != "" {
@@ -211,6 +246,9 @@ func healthReportOK(report healthReport) bool {
 	if report.Process != nil && (report.Process.Error != "" || !report.Process.Running) {
 		return false
 	}
+	if report.ControlPlanePoll != nil && !report.ControlPlanePoll.OK {
+		return false
+	}
 	return true
 }
 
@@ -227,6 +265,9 @@ func printHealthReport(w io.Writer, report healthReport) {
 	}
 	printEndpointReport(w, "Healthz", report.Healthz)
 	printEndpointReport(w, "Readyz", report.Readyz)
+	if report.ControlPlanePoll != nil {
+		printMetricProbe(w, "Control-plane poll", *report.ControlPlanePoll)
+	}
 	if report.Process != nil {
 		_, _ = fmt.Fprintf(w, "Process: %s\n", processSummary(*report.Process))
 	}
@@ -280,6 +321,88 @@ func printEndpointReport(w io.Writer, label string, endpoint session.EndpointPro
 		parts = append(parts, endpoint.Error)
 	} else if endpoint.Body != "" {
 		parts = append(parts, endpoint.Body)
+	}
+	_, _ = fmt.Fprintf(w, "%s: %s\n", label, strings.Join(parts, " | "))
+}
+
+func probeControlPlanePoll(baseURL string) healthMetricProbe {
+	metricsURL := strings.TrimRight(baseURL, "/") + "/metrics"
+	probe := healthMetricProbe{URL: metricsURL}
+
+	client := http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(metricsURL)
+	if err != nil {
+		probe.Error = err.Error()
+		return probe
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	if response.StatusCode != http.StatusOK {
+		probe.Error = response.Status
+		return probe
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		probe.Error = err.Error()
+		return probe
+	}
+
+	value, ok := parseMetricValue(string(body), "commands_poll_cycles_total")
+	if !ok {
+		probe.Error = "missing commands_poll_cycles_total metric"
+		return probe
+	}
+
+	probe.Value = value
+	probe.OK = value > 0
+	if !probe.OK {
+		probe.Error = "no control-plane poll attempt observed"
+	}
+	return probe
+}
+
+func parseMetricValue(metrics string, metricName string) (float64, bool) {
+	for _, line := range strings.Split(metrics, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line != metricName &&
+			!strings.HasPrefix(line, metricName+" ") &&
+			!strings.HasPrefix(line, metricName+"{") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		return value, true
+	}
+	return 0, false
+}
+
+func printMetricProbe(w io.Writer, label string, probe healthMetricProbe) {
+	parts := []string{}
+	status := "FAIL"
+	if probe.OK {
+		status = "PASS"
+	}
+	parts = append(parts, status)
+	if probe.URL != "" {
+		parts = append(parts, probe.URL)
+	}
+	if probe.OK {
+		parts = append(parts, fmt.Sprintf("poll_cycles=%.0f", probe.Value))
+	} else if probe.Error != "" {
+		parts = append(parts, probe.Error)
 	}
 	_, _ = fmt.Fprintf(w, "%s: %s\n", label, strings.Join(parts, " | "))
 }
