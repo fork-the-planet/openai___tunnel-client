@@ -70,6 +70,16 @@ type IncomingHTTPRequest struct {
 // MockMCPServer hosts a Streamable HTTP MCP server backed by scripted tool handlers.
 type Option func(*MockMCPServer)
 
+// WithHostHandler serves requests for host with handler before the default MCP routes.
+func WithHostHandler(host string, handler http.Handler) Option {
+	return func(m *MockMCPServer) {
+		if m.hostHandlers == nil {
+			m.hostHandlers = make(map[string]http.Handler)
+		}
+		m.hostHandlers[requestHostname(host)] = handler
+	}
+}
+
 // WithCalls seeds the mock with scripted tool invocations.
 func WithCalls(calls ...Call) Option {
 	return func(m *MockMCPServer) {
@@ -193,6 +203,7 @@ type MockMCPServer struct {
 	oauthMetadata   *oauthex.ProtectedResourceMetadata
 	serverOptions   *mcp.ServerOptions
 	requiredHeaders []requiredHeader
+	hostHandlers    map[string]http.Handler
 
 	useTLS         bool
 	unixSocketPath string
@@ -282,6 +293,11 @@ func (m *MockMCPServer) Start(t testing.TB) {
 	}
 
 	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if handler := m.hostHandler(req); handler != nil {
+			m.recordHTTPRequest(req, nil)
+			handler.ServeHTTP(w, req)
+			return
+		}
 		if req.Method != http.MethodPost {
 			m.recordHTTPRequest(req, nil)
 			if !m.checkRequiredHeaders(w, req) {
@@ -523,6 +539,26 @@ func isLoopbackHost(hostport string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func requestHostname(hostport string) string {
+	host := hostport
+	if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsedHost
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	}
+	return strings.ToLower(host)
+}
+
+func (m *MockMCPServer) hostHandler(req *http.Request) http.Handler {
+	if m == nil || req == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hostHandlers[requestHostname(req.Host)]
 }
 
 // ReceivedRequests returns the recorded tool requests in order.
