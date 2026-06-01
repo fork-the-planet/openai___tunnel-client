@@ -103,7 +103,7 @@ process is still running while the health endpoints are being probed.
 		&requireControlPlanePoll,
 		"require-control-plane-poll",
 		false,
-		"Require one control-plane poll attempt before reporting ready",
+		"Require one successful control-plane poll before reporting ready",
 	)
 	return cmd
 }
@@ -359,16 +359,16 @@ func probeControlPlanePoll(baseURL string) healthMetricProbe {
 		return probe
 	}
 
-	value, ok := parseMetricValue(string(body), "commands_poll_cycles_total")
+	value, ok := parseMetricValue(string(body), "commands_poll_last_successful_timestamp_seconds")
 	if !ok {
-		probe.Error = "missing commands_poll_cycles_total metric"
+		probe.Error = "missing commands_poll_last_successful_timestamp_seconds metric"
 		return probe
 	}
 
 	probe.Value = value
 	probe.OK = value > 0
 	if !probe.OK {
-		probe.Error = "no control-plane poll attempt observed"
+		probe.Error = "no successful control-plane poll observed"
 	}
 	return probe
 }
@@ -409,7 +409,7 @@ func printMetricProbe(w io.Writer, label string, probe healthMetricProbe) {
 		parts = append(parts, probe.URL)
 	}
 	if probe.OK {
-		parts = append(parts, fmt.Sprintf("poll_cycles=%.0f", probe.Value))
+		parts = append(parts, fmt.Sprintf("last_success_unix_seconds=%.0f", probe.Value))
 	} else if probe.Error != "" {
 		parts = append(parts, probe.Error)
 	}
