@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -12,7 +14,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
+	"go.openai.org/api/tunnel-client/pkg/mcpclient/internal"
 	"go.openai.org/api/tunnel-client/pkg/types"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
@@ -159,6 +163,79 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 	}
 }
 
+func TestChannelHTTPClientScopesStaticAndForwardedAuthorizationHeaders(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	serverURL := mustParseURL(t, server.URL+"/mcp")
+	factory := newTestChannelTransportFactory(t, serverURL, &config.LoggingConfig{HTTPRawUnsafe: false}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	factory.config.ExtraHeaders = map[string]string{
+		"Authorization": "Bearer static-runtime",
+		"X-Static":      "runtime",
+		"X-Discovery":   "runtime",
+	}
+	factory.config.DiscoveryExtraHeaders = map[string]string{
+		"X-Discovery": "discovery",
+	}
+
+	binding := config.MCPChannelBinding{
+		Channel:       types.DefaultChannel,
+		TransportKind: config.MCPTransportHTTPStreamable,
+		ServerURL:     serverURL,
+	}
+	client, err := factory.HTTPClientForBinding(binding)
+	if err != nil {
+		t.Fatalf("HTTPClientForBinding returned error: %v", err)
+	}
+
+	runtimeCtx, _, err := internal.ContextWithHeaders(context.Background(), http.Header{
+		"Authorization": {"Bearer connector-request"},
+		"X-Connector":   {"forwarded"},
+	})
+	if err != nil {
+		t.Fatalf("ContextWithHeaders returned error: %v", err)
+	}
+	mustDoRequest(t, client, http.MethodPost, server.URL+"/mcp", runtimeCtx)
+	runtimeHeaders := mustReceiveHeaders(t, seen)
+	if got := runtimeHeaders.Get("Authorization"); got != "Bearer connector-request" {
+		t.Fatalf("runtime Authorization = %q, want connector request value", got)
+	}
+	if got := runtimeHeaders.Get("X-Static"); got != "runtime" {
+		t.Fatalf("runtime X-Static = %q, want runtime", got)
+	}
+	if got := runtimeHeaders.Get("X-Connector"); got != "forwarded" {
+		t.Fatalf("runtime X-Connector = %q, want forwarded", got)
+	}
+	if got := runtimeHeaders.Get("X-Discovery"); got != "runtime" {
+		t.Fatalf("runtime X-Discovery = %q, want runtime", got)
+	}
+
+	discoveryCtx := headerscope.WithMCPDiscovery(context.Background())
+	mustDoRequest(t, client, http.MethodGet, server.URL+"/.well-known/oauth-protected-resource/mcp", discoveryCtx)
+	discoveryHeaders := mustReceiveHeaders(t, seen)
+	if got := discoveryHeaders.Get("Authorization"); got != "Bearer static-runtime" {
+		t.Fatalf("discovery Authorization = %q, want static runtime value", got)
+	}
+	if got := discoveryHeaders.Get("X-Discovery"); got != "discovery" {
+		t.Fatalf("discovery X-Discovery = %q, want discovery", got)
+	}
+
+	mustDoRequest(t, client, http.MethodGet, server.URL+"/unrelated", context.Background())
+	unrelatedHeaders := mustReceiveHeaders(t, seen)
+	if got := unrelatedHeaders.Get("Authorization"); got != "" {
+		t.Fatalf("unrelated Authorization = %q, want empty", got)
+	}
+	if got := unrelatedHeaders.Get("X-Static"); got != "" {
+		t.Fatalf("unrelated X-Static = %q, want empty", got)
+	}
+}
+
 func TestRunStartupProbeMarksSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -269,6 +346,37 @@ func newTestChannelTransportFactory(t *testing.T, serverURL *url.URL, logging *c
 		t.Fatalf("newChannelTransportFactory returned error: %v", err)
 	}
 	return factory
+}
+
+func mustDoRequest(t *testing.T, client *http.Client, method string, rawURL string, ctx context.Context) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext(%q): %v", rawURL, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do(%q): %v", rawURL, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("closing response body: %v", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("client.Do(%q) status = %d, want %d", rawURL, resp.StatusCode, http.StatusNoContent)
+	}
+}
+
+func mustReceiveHeaders(t *testing.T, ch <-chan http.Header) http.Header {
+	t.Helper()
+	select {
+	case headers := <-ch:
+		return headers
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test server request")
+		return nil
+	}
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
