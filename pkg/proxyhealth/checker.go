@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -386,7 +387,14 @@ func (c *Checker) HealthSummaries() []RouteHealthSummary {
 		}
 		out = append(out, summary)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return routeSummaryKey(out[i].Route) < routeSummaryKey(out[j].Route)
+	})
 	return out
+}
+
+func routeSummaryKey(summary proxy.RouteSummary) string {
+	return summary.Kind + "\x00" + summary.Name + "\x00" + summary.RouteMode + "\x00" + summary.ProxyURL + "\x00" + summary.Target
 }
 
 func (c *Checker) IdentityMap() []proxy.IdentityRecord {

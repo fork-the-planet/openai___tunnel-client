@@ -42,6 +42,30 @@ func TestRecordResultStateTransitions(t *testing.T) {
 	}
 }
 
+func TestHealthSummariesReturnsDeterministicRouteOrder(t *testing.T) {
+	proxyURL := mustParseURL(t, "http://proxy.example:8080")
+	targetURL := mustParseURL(t, "https://example.com")
+	controlPlaneRoute := proxy.ResolveRoute(proxy.RouteKindControlPlane, "control-plane", targetURL, proxyURL, config.ProxySource("flag"), lookupEnvMap(nil))
+	mcpRoute := proxy.ResolveRoute(proxy.RouteKindMCPChannel, "alpha", targetURL, proxyURL, config.ProxySource("flag"), lookupEnvMap(nil))
+	checker := &Checker{
+		routes: []proxy.Route{mcpRoute, controlPlaneRoute},
+		routeStatus: map[string]*routeStatus{
+			routeKey(mcpRoute):          {route: mcpRoute, healthState: HealthStateHealthy},
+			routeKey(controlPlaneRoute): {route: controlPlaneRoute, healthState: HealthStateUnhealthy},
+		},
+	}
+
+	for i := 0; i < 100; i++ {
+		summaries := checker.HealthSummaries()
+		if len(summaries) != 2 {
+			t.Fatalf("expected 2 summaries, got %d", len(summaries))
+		}
+		if summaries[0].Route.Kind != string(proxy.RouteKindControlPlane) || summaries[1].Route.Kind != string(proxy.RouteKindMCPChannel) {
+			t.Fatalf("HealthSummaries returned nondeterministic order: %#v", summaries)
+		}
+	}
+}
+
 func TestConnectThroughProxyIncludesProxyAuthorization(t *testing.T) {
 	t.Parallel()
 
