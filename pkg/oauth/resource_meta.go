@@ -231,17 +231,9 @@ func tryWWWAuthenticateProbe(
 }
 
 func parseResourceMetadataFromWWWAuthenticate(header string) (*url.URL, error) {
-	match := resourceMetadataParamPattern.FindStringSubmatch(header)
-	if len(match) == 0 {
-		return nil, fmt.Errorf("oauth discovery: resource_metadata missing in WWW-Authenticate")
-	}
-
-	value := match[1]
+	value := bearerResourceMetadataValue(header)
 	if value == "" {
-		value = match[2]
-	}
-	if value == "" {
-		return nil, fmt.Errorf("oauth discovery: resource_metadata empty in WWW-Authenticate")
+		return nil, fmt.Errorf("oauth discovery: resource_metadata missing in WWW-Authenticate Bearer challenge")
 	}
 
 	parsed, err := url.Parse(value)
@@ -252,6 +244,65 @@ func parseResourceMetadataFromWWWAuthenticate(header string) (*url.URL, error) {
 		return nil, fmt.Errorf("oauth discovery: resource_metadata must be absolute")
 	}
 	return parsed, nil
+}
+
+func bearerResourceMetadataValue(header string) string {
+	currentScheme := ""
+	for _, segment := range splitWWWAuthenticateSegments(header) {
+		trimmed := strings.TrimSpace(segment)
+		if trimmed == "" {
+			continue
+		}
+
+		params := trimmed
+		if scheme, rest, ok := splitAuthScheme(trimmed); ok {
+			currentScheme = strings.ToLower(scheme)
+			params = rest
+		}
+		if currentScheme != "bearer" {
+			continue
+		}
+
+		match := resourceMetadataParamPattern.FindStringSubmatch(params)
+		if len(match) == 0 {
+			continue
+		}
+		if match[1] != "" {
+			return match[1]
+		}
+		return match[2]
+	}
+	return ""
+}
+
+func splitWWWAuthenticateSegments(header string) []string {
+	var segments []string
+	start := 0
+	inQuote := false
+	escaped := false
+	for i, r := range header {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && inQuote:
+			escaped = true
+		case r == '"':
+			inQuote = !inQuote
+		case r == ',' && !inQuote:
+			segments = append(segments, header[start:i])
+			start = i + 1
+		}
+	}
+	segments = append(segments, header[start:])
+	return segments
+}
+
+func splitAuthScheme(segment string) (string, string, bool) {
+	fields := strings.Fields(segment)
+	if len(fields) < 2 || strings.Contains(fields[0], "=") {
+		return "", segment, false
+	}
+	return fields[0], strings.TrimSpace(strings.TrimPrefix(segment, fields[0])), true
 }
 
 func dedupeCandidates(candidates []DiscoveryCandidate) []DiscoveryCandidate {

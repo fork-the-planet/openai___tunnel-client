@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 )
 
 func TestBuildResourceMetadataURLs(t *testing.T) {
@@ -112,6 +115,16 @@ func TestParseResourceMetadataFromWWWAuthenticate(t *testing.T) {
 			want:   "https://example.com/pr",
 		},
 		{
+			name:   "multiple challenges picks bearer",
+			header: `Basic realm="legacy", Bearer realm="demo", resource_metadata="https://example.com/pr"`,
+			want:   "https://example.com/pr",
+		},
+		{
+			name:      "ignores non bearer resource metadata",
+			header:    `Basic realm="legacy", resource_metadata="https://evil.example/pr"`,
+			expectErr: true,
+		},
+		{
 			name:      "missing",
 			header:    `Bearer realm="demo"`,
 			expectErr: true,
@@ -132,6 +145,50 @@ func TestParseResourceMetadataFromWWWAuthenticate(t *testing.T) {
 			require.Equal(t, tc.want, parsed.String())
 		})
 	}
+}
+
+func TestBuildOAuthDiscoveryCandidatesProbeUsesDiscoveryContext(t *testing.T) {
+	t.Parallel()
+
+	probeURL := "https://mcp.example.test/.well-known/oauth-protected-resource/context"
+	var methods []string
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			methods = append(methods, req.Method)
+			require.True(t, headerscope.IsMCPDiscovery(req.Context()), "probe should mark requests as MCP discovery")
+			require.Equal(t, "application/json", req.Header.Get("Accept"))
+			require.NotEmpty(t, req.Header.Get("User-Agent"))
+
+			statusCode := http.StatusUnauthorized
+			header := make(http.Header)
+			header.Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, probeURL))
+			if req.Method == http.MethodPost {
+				statusCode = http.StatusNotFound
+				header = make(http.Header)
+			}
+			return &http.Response{
+				StatusCode: statusCode,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}, nil
+		}),
+	}
+	serverEndpoint, err := url.Parse("https://mcp.example.test/public/mcp")
+	require.NoError(t, err)
+
+	candidates, probe, err := BuildOAuthDiscoveryCandidates(
+		context.Background(),
+		client,
+		serverEndpoint,
+		testLogger(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, probe)
+	require.True(t, probe.Attempted)
+	require.Equal(t, probeURL, probe.URL)
+	require.Equal(t, []string{http.MethodPost, http.MethodGet}, methods)
+	require.Equal(t, DiscoverySourceWWWAuthenticate, candidates[0].Source)
 }
 
 func TestBuildOAuthDiscoveryCandidatesRequiresLogger(t *testing.T) {
