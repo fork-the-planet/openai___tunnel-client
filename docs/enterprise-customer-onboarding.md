@@ -500,8 +500,11 @@ If you expect long-running MCP calls, coordinate timeout values with OpenAI.
 
 ## Operations & best practices
 
-- **One tunnel client per tunnel ID**: run a single active `tunnel-client`
-  instance per `tunnel_id` unless OpenAI explicitly advises otherwise.
+- **Redundant stateless tunnel clients**: multiple active `tunnel-client`
+  instances may poll the same `tunnel_id` for operational redundancy when they
+  target equivalent stateless MCP backends. The shared queue drains each
+  `request_id` to one poller. Coordinate with OpenAI before using redundant
+  clients for sessionful MCP behavior.
 - **Secrets hygiene**: treat all API keys/tokens as secrets; store them in a
   secrets manager and rotate them on your standard cadence.
 - **Logging safety**: do not enable raw HTTP logging except in tightly controlled

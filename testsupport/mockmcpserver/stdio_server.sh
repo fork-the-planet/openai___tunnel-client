@@ -22,8 +22,15 @@ while IFS= read -r line; do
       ;;
     *\"tools/call\"*)
       name=""
+      request_id=""
       if [[ $line =~ \"arguments\"[[:space:]]*:[[:space:]]*.*\"name\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
         name="${BASH_REMATCH[1]}"
+      fi
+      if [[ $line =~ \"request_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+        request_id="${BASH_REMATCH[1]}"
+      fi
+      if [[ -n "${MOCK_MCP_INVOCATION_LOG:-}" ]]; then
+        printf '%s\n' "$request_id" >> "$MOCK_MCP_INVOCATION_LOG"
       fi
       message="hello $name"
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}],"structuredContent":{"message":"%s"}}}\n' "$id" "$message" "$message"

@@ -535,6 +535,36 @@ func (m *MockTunnelService) WaitForResponses(ctx context.Context, n int) error {
 	}
 }
 
+// WaitForHTTPRequests blocks until at least n recorded HTTP requests satisfy predicate.
+func (m *MockTunnelService) WaitForHTTPRequests(
+	ctx context.Context,
+	n int,
+	predicate func(IncomingHTTPRequest) bool,
+) error {
+	if n <= 0 {
+		return nil
+	}
+	for {
+		m.mu.Lock()
+		count := 0
+		for _, req := range m.httpSeen {
+			if predicate == nil || predicate(req) {
+				count++
+			}
+		}
+		state := m.stateCh
+		m.mu.Unlock()
+		if count >= n {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-state:
+		}
+	}
+}
+
 // WaitUntilIdle blocks until every scripted command has been delivered and all
 // expected responses have been observed, or until ctx expires.
 func (m *MockTunnelService) WaitUntilIdle(ctx context.Context) error {
@@ -623,6 +653,7 @@ func (m *MockTunnelService) recordHTTPRequest(req *http.Request) {
 		RawQuery: rawQuery,
 		Headers:  req.Header.Clone(),
 	})
+	m.signalStateChangeLocked()
 }
 
 // DeliveredCommands returns a snapshot of all commands that have been issued to clients.

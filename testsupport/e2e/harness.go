@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
@@ -34,6 +36,9 @@ import (
 const testDeadlineReserve = 5 * time.Second
 
 const tunnelIntegrationSocketEnv = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH"
+
+// TestClientInstanceHeader identifies harnessed tunnel-client instances in mock control-plane requests.
+const TestClientInstanceHeader = "X-Test-Tunnel-Client-Instance"
 
 type harnessConfig struct {
 	apiKey              string
@@ -182,6 +187,7 @@ type Harness struct {
 	MCPProbeState   *mcpclient.ProbeState
 	cfg             *config.Config
 	app             *fxtest.App
+	clients         []*TunnelClient
 	waitTimeout     time.Duration
 	tunnelStarted   bool
 	mcpStarted      bool
@@ -193,6 +199,53 @@ type Harness struct {
 	beforeStop      func(*Harness)
 	logWriter       io.Writer
 	logBuffer       *bytes.Buffer
+}
+
+// TunnelClient exposes deterministic poller control for one harnessed tunnel-client instance.
+type TunnelClient struct {
+	name   string
+	app    *fxtest.App
+	poller *pollerControl
+}
+
+// Name returns the deterministic instance label added to control-plane test requests.
+func (c *TunnelClient) Name() string {
+	if c == nil {
+		return ""
+	}
+	return c.name
+}
+
+// PausePoller blocks future polls and cancels any active poll before returning.
+func (c *TunnelClient) PausePoller(ctx context.Context) error {
+	if c == nil || c.poller == nil {
+		return errors.New("tunnel-client poller control not initialized")
+	}
+	return c.poller.Pause(ctx)
+}
+
+// UnpausePoller allows a paused poller to resume polling.
+func (c *TunnelClient) UnpausePoller() {
+	if c == nil || c.poller == nil {
+		return
+	}
+	c.poller.Unpause()
+}
+
+// WaitForPolls blocks until this client has started at least want poll cycles.
+func (c *TunnelClient) WaitForPolls(ctx context.Context, want int) error {
+	if c == nil || c.poller == nil {
+		return errors.New("tunnel-client poller control not initialized")
+	}
+	return c.poller.WaitForPolls(ctx, want)
+}
+
+// PollCount returns the number of poll cycles this client has started.
+func (c *TunnelClient) PollCount() int {
+	if c == nil || c.poller == nil {
+		return 0
+	}
+	return c.poller.PollCount()
 }
 
 // NewHarness configures the mocks and client wiring using the provided options.
@@ -360,6 +413,28 @@ func (h *Harness) WaitForMCPProbe(ctx context.Context) error {
 	return h.MCPProbeState.WaitUntilDone(ctx)
 }
 
+// PrimaryClient returns the first tunnel-client instance started by the harness.
+func (h *Harness) PrimaryClient() *TunnelClient {
+	if h == nil || len(h.clients) == 0 {
+		return nil
+	}
+	return h.clients[0]
+}
+
+// StartAdditionalClient starts another tunnel-client against the harnessed mocks.
+func (h *Harness) StartAdditionalClient(t testing.TB) *TunnelClient {
+	t.Helper()
+	if h == nil || h.ControlPlane == nil || h.MCP == nil || h.cfg == nil {
+		t.Fatalf("harness not initialized")
+		return nil
+	}
+	if !h.tunnelStarted || !h.mcpStarted {
+		t.Fatalf("start harness mocks before starting another tunnel-client")
+		return nil
+	}
+	return h.startTunnelClient(t)
+}
+
 func (h *Harness) scenarioContext(t testing.TB) (context.Context, context.CancelFunc) {
 	ctx, cancel := testctx.WithDeadline(t, testDeadlineReserve)
 	if h.waitTimeout <= 0 {
@@ -439,15 +514,24 @@ func (h *Harness) startClient(t testing.TB) {
 		t.Fatalf("tunnel-client already running")
 		return
 	}
+	client := h.startTunnelClient(t)
+	if client == nil {
+		return
+	}
+	h.app = client.app
+}
+
+func (h *Harness) startTunnelClient(t testing.TB) *TunnelClient {
+	t.Helper()
 	cfg := h.cloneConfig()
 	if cfg == nil {
 		t.Fatalf("missing tunnel-client configuration")
-		return
+		return nil
 	}
 	ctrlURL := h.ControlPlane.BaseURL()
 	if ctrlURL == nil {
 		t.Fatalf("control plane must be started before the client")
-		return
+		return nil
 	}
 	if !h.preserveURLs || cfg.ControlPlane.BaseURL == nil {
 		cfg.ControlPlane.BaseURL = ctrlURL
@@ -462,22 +546,22 @@ func (h *Harness) startClient(t testing.TB) {
 			mcpURL := h.MCP.BaseURL()
 			if mcpURL == nil {
 				t.Fatalf("mock MCP server must be started before the client")
-				return
+				return nil
 			}
 			cfg.MCP.ServerURL = mcpURL
 		}
 	case config.MCPTransportInMemory, config.MCPTransportStdio:
 		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil && !h.useHarpoon {
 			t.Fatalf("mock MCP in-memory transport must be started before the client")
-			return
+			return nil
 		}
 		if transportKind == config.MCPTransportStdio && len(cfg.MCP.CommandArgs) == 0 {
 			t.Fatalf("mcp.command is required for stdio transport")
-			return
+			return nil
 		}
 	default:
 		t.Fatalf("unsupported MCP transport kind: %s", transportKind)
-		return
+		return nil
 	}
 	if len(cfg.MCP.ChannelBindings) == 0 {
 		cfg.MCP.ChannelBindings = []config.MCPChannelBinding{{
@@ -489,14 +573,27 @@ func (h *Harness) startClient(t testing.TB) {
 			CommandArgs:    cfg.MCP.CommandArgs,
 		}}
 	}
+	clientName := fmt.Sprintf("client-%d", len(h.clients)+1)
+	if cfg.ControlPlane.ExtraHeaders == nil {
+		cfg.ControlPlane.ExtraHeaders = make(map[string]string)
+	}
+	cfg.ControlPlane.ExtraHeaders[TestClientInstanceHeader] = clientName
 	logWriter := h.logWriter
 	if logWriter == nil {
 		logWriter = io.Discard
 	}
+	poller := newPollerControl()
+	var (
+		harpoonRegistry *harpoon.Registry
+		mcpProbeState   *mcpclient.ProbeState
+	)
 	options := []fx.Option{
 		fx.Provide(func() io.Writer { return logWriter }),
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
-		fx.Populate(&h.HarpoonRegistry, &h.MCPProbeState),
+		fx.Populate(&harpoonRegistry, &mcpProbeState),
+		fx.Decorate(func(fetcher controlplane.Fetcher) controlplane.Fetcher {
+			return poller.wrap(fetcher)
+		}),
 	}
 	if h.useHarpoon {
 		options = append(options, fx.Provide(fx.Annotate(
@@ -512,15 +609,31 @@ func (h *Harness) startClient(t testing.TB) {
 	}
 	app := fxtest.New(t, app.Options(cfg, options...)...)
 	app.RequireStart()
-	h.app = app
+	client := &TunnelClient{
+		name:   clientName,
+		app:    app,
+		poller: poller,
+	}
+	h.clients = append(h.clients, client)
+	if len(h.clients) == 1 {
+		h.HarpoonRegistry = harpoonRegistry
+		h.MCPProbeState = mcpProbeState
+	}
+	return client
 }
 
 func (h *Harness) shutdown(t testing.TB) {
 	t.Helper()
-	if h.app != nil {
-		h.app.RequireStop()
-		h.app = nil
+	for i := len(h.clients) - 1; i >= 0; i-- {
+		client := h.clients[i]
+		if client == nil || client.app == nil {
+			continue
+		}
+		client.app.RequireStop()
+		client.app = nil
 	}
+	h.clients = nil
+	h.app = nil
 	if h.MCP != nil && h.mcpStarted {
 		h.MCP.Close()
 		h.mcpStarted = false
@@ -529,6 +642,160 @@ func (h *Harness) shutdown(t testing.TB) {
 		h.ControlPlane.Close()
 		h.tunnelStarted = false
 	}
+}
+
+type controlledFetcher struct {
+	delegate controlplane.Fetcher
+	control  *pollerControl
+}
+
+func (f *controlledFetcher) Poll(
+	ctx context.Context,
+	limit int,
+) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
+	pollCtx, done, err := f.control.beginPoll(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	defer done()
+	return f.delegate.Poll(pollCtx, limit)
+}
+
+type pollerControl struct {
+	mu            sync.Mutex
+	paused        bool
+	resumeCh      chan struct{}
+	activeCancels map[int]context.CancelFunc
+	activeStateCh chan struct{}
+	pollCount     int
+	pollStateCh   chan struct{}
+	nextPollID    int
+}
+
+func newPollerControl() *pollerControl {
+	return &pollerControl{
+		activeCancels: make(map[int]context.CancelFunc),
+		activeStateCh: make(chan struct{}),
+		pollStateCh:   make(chan struct{}),
+	}
+}
+
+func (c *pollerControl) wrap(delegate controlplane.Fetcher) controlplane.Fetcher {
+	return &controlledFetcher{delegate: delegate, control: c}
+}
+
+func (c *pollerControl) beginPoll(ctx context.Context) (context.Context, func(), error) {
+	for {
+		c.mu.Lock()
+		if !c.paused {
+			pollCtx, cancel := context.WithCancel(ctx)
+			pollID := c.nextPollID
+			c.nextPollID++
+			c.activeCancels[pollID] = cancel
+			c.pollCount++
+			c.signalPollStateLocked()
+			c.signalActiveStateLocked()
+			c.mu.Unlock()
+			return pollCtx, func() { c.finishPoll(pollID, cancel) }, nil
+		}
+		resumeCh := c.resumeCh
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-resumeCh:
+		}
+	}
+}
+
+func (c *pollerControl) finishPoll(pollID int, cancel context.CancelFunc) {
+	cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.activeCancels, pollID)
+	c.signalActiveStateLocked()
+}
+
+func (c *pollerControl) Pause(ctx context.Context) error {
+	c.mu.Lock()
+	if !c.paused {
+		c.paused = true
+		c.resumeCh = make(chan struct{})
+	}
+	cancels := make([]context.CancelFunc, 0, len(c.activeCancels))
+	for _, cancel := range c.activeCancels {
+		cancels = append(cancels, cancel)
+	}
+	c.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return c.waitUntilIdle(ctx)
+}
+
+func (c *pollerControl) Unpause() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.paused {
+		return
+	}
+	c.paused = false
+	close(c.resumeCh)
+	c.resumeCh = nil
+}
+
+func (c *pollerControl) WaitForPolls(ctx context.Context, want int) error {
+	if want <= 0 {
+		return nil
+	}
+	for {
+		c.mu.Lock()
+		if c.pollCount >= want {
+			c.mu.Unlock()
+			return nil
+		}
+		state := c.pollStateCh
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-state:
+		}
+	}
+}
+
+func (c *pollerControl) PollCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pollCount
+}
+
+func (c *pollerControl) waitUntilIdle(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		if len(c.activeCancels) == 0 {
+			c.mu.Unlock()
+			return nil
+		}
+		state := c.activeStateCh
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-state:
+		}
+	}
+}
+
+func (c *pollerControl) signalActiveStateLocked() {
+	close(c.activeStateCh)
+	c.activeStateCh = make(chan struct{})
+}
+
+func (c *pollerControl) signalPollStateLocked() {
+	close(c.pollStateCh)
+	c.pollStateCh = make(chan struct{})
 }
 
 func (h *Harness) cloneConfig() *config.Config {
