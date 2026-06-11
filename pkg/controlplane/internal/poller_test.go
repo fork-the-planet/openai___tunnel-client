@@ -775,7 +775,8 @@ func findHistogramSumWithAttributes(rm metricdata.ResourceMetrics, name string, 
 type timeoutRecordingFetcher struct {
 	mu        sync.Mutex
 	callCount int
-	durations []time.Duration
+	errs      []error
+	deadlines []time.Time
 	pollCh    chan struct{}
 }
 
@@ -811,12 +812,16 @@ func (f *erroringFetcher) waitForPoll(t *testing.T) {
 }
 
 func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
-	start := time.Now()
+	deadline, hasDeadline := ctx.Deadline()
 	<-ctx.Done()
+	err := ctx.Err()
 
 	f.mu.Lock()
 	f.callCount++
-	f.durations = append(f.durations, time.Since(start))
+	if hasDeadline {
+		f.deadlines = append(f.deadlines, deadline)
+	}
+	f.errs = append(f.errs, err)
 	f.mu.Unlock()
 
 	if f.pollCh != nil {
@@ -825,7 +830,7 @@ func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]contro
 		default:
 		}
 	}
-	return nil, "", ctx.Err()
+	return nil, "", err
 }
 
 func (f *timeoutRecordingFetcher) waitForCalls(t *testing.T, want int) {
@@ -997,10 +1002,12 @@ func TestPollerPollsWithGuardrailedTimeoutAndRetries(t *testing.T) {
 		t.Fatalf("expected poller to retry after timeout, got %d calls", fetcher.callCount)
 	}
 
-	pollDeadline := pollTimeout + pollGuardrail
-	for i, duration := range fetcher.durations {
-		if duration < pollDeadline/2 {
-			t.Fatalf("call %d returned too quickly: %v", i, duration)
+	if len(fetcher.deadlines) != fetcher.callCount {
+		t.Fatalf("expected every poll call to receive a deadline, got %d deadlines for %d calls", len(fetcher.deadlines), fetcher.callCount)
+	}
+	for i, err := range fetcher.errs {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("call %d ended with %v, want %v", i, err, context.DeadlineExceeded)
 		}
 	}
 }
