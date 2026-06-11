@@ -96,7 +96,7 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 `
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wantPath := "/v1/tunnel/" + url.PathEscape(tunnelID) + "/poll"
+		wantPath := "/v1/tunnels/" + url.PathEscape(tunnelID) + "/poll"
 		assert.Equal(t, wantPath, r.URL.Path, "unexpected path")
 		assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"), "unexpected limit")
 		assert.Equal(t, "1000", r.URL.Query().Get("timeout_ms"), "unexpected timeout_ms")
@@ -163,7 +163,7 @@ func TestTunnelServiceClientPollSuccessWithControlPlaneURLPath(t *testing.T) {
 	t.Parallel()
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/chatgpttunnelgateway/dev/us/v1/tunnel/cli-tunnel/poll", r.URL.Path)
+		assert.Equal(t, "/chatgpttunnelgateway/dev/us/v1/tunnels/cli-tunnel/poll", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"commands":[]}`))
 	}))
@@ -185,7 +185,7 @@ func TestTunnelServiceClientPollIgnoresLegacyBaseURLPath(t *testing.T) {
 	t.Parallel()
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/v1/tunnel/cli-tunnel/poll", r.URL.Path)
+		assert.Equal(t, "/v1/tunnels/cli-tunnel/poll", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"commands":[]}`))
 	}))
@@ -322,7 +322,7 @@ func TestTunnelServiceClientPollSurfacesAPIErrorCode(t *testing.T) {
 	)
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll" {
+		if r.URL.Path != "/v1/tunnels/"+url.PathEscape(tunnelID)+"/poll" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
@@ -392,11 +392,11 @@ func TestTunnelServiceClientControlPlaneMTLS(t *testing.T) {
 			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"` + tunnelID + `","name":"mtls-test","description":"fake tunnel-service"}`))
-		case "/v1/tunnel/" + url.PathEscape(tunnelID) + "/poll":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID) + "/poll":
 			assert.Equal(t, http.MethodGet, r.Method)
 			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
 			w.WriteHeader(http.StatusNoContent)
-		case "/v1/tunnel/" + url.PathEscape(tunnelID) + "/response":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID) + "/response":
 			assert.Equal(t, http.MethodPost, r.Method)
 			assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"))
 			assert.Equal(t, "shard-mtls", r.Header.Get("X-Tunnel-Shard-Token"))
@@ -439,8 +439,8 @@ func TestTunnelServiceClientControlPlaneMTLS(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.Equal(t, 1, seenPath["/v1/tunnels/"+url.PathEscape(tunnelID)])
-	require.Equal(t, 1, seenPath["/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll"])
-	require.Equal(t, 1, seenPath["/v1/tunnel/"+url.PathEscape(tunnelID)+"/response"])
+	require.Equal(t, 1, seenPath["/v1/tunnels/"+url.PathEscape(tunnelID)+"/poll"])
+	require.Equal(t, 1, seenPath["/v1/tunnels/"+url.PathEscape(tunnelID)+"/response"])
 }
 
 func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
@@ -515,7 +515,7 @@ func TestTunnelServiceClientPostResponseSuccess(t *testing.T) {
 	}
 
 	assert.Equal(t, http.MethodPost, seenMethod, "unexpected HTTP method")
-	assert.Equal(t, "/v1/tunnel/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
+	assert.Equal(t, "/v1/tunnels/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
 
 	var payload struct {
 		RequestID   string          `json:"request_id"`
@@ -578,7 +578,7 @@ func TestTunnelServiceClientPostResponseOAuthDiscovery(t *testing.T) {
 	require.NoError(t, err, "PostResponse failed")
 
 	require.Equal(t, http.MethodPost, seenMethod, "unexpected HTTP method")
-	require.Equal(t, "/v1/tunnel/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
+	require.Equal(t, "/v1/tunnels/"+url.PathEscape(tunnelID)+"/response", seenPath, "unexpected request path")
 
 	var payload struct {
 		RequestID   string          `json:"request_id"`
@@ -1358,7 +1358,7 @@ func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
 }`
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tunnel/"+url.PathEscape(tunnelID)+"/poll" {
+		if r.URL.Path != "/v1/tunnels/"+url.PathEscape(tunnelID)+"/poll" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")

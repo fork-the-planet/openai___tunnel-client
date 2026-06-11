@@ -17,12 +17,12 @@ At runtime:
 1. The product sends MCP JSON-RPC to the OpenAI tunnel-service MCP endpoint for
    the tunnel.
 2. Tunnel service queues the work for the tunnel id.
-3. `tunnel-client` long-polls `GET /v1/tunnel/{tunnel_id}/poll` with the
+3. `tunnel-client` long-polls `GET /v1/tunnels/{tunnel_id}/poll` with the
    runtime API key.
 4. The dispatcher forwards the command to the configured local MCP binding for
    the command channel.
 5. The client posts the terminal response, and any streamed notifications, to
-   `POST /v1/tunnel/{tunnel_id}/response`.
+   `POST /v1/tunnels/{tunnel_id}/response`.
 
 The connector-facing MCP endpoint is POST-only for JSON-RPC traffic. A GET to
 `/v1/mcp/{tunnel_id}` is not a persistent SSE stream; streaming only happens for
@@ -161,7 +161,7 @@ Common deployment additions:
   running with the same `CONTROL_PLANE_TUNNEL_ID` that the connector selected.
   A stopped local runtime leaves the remote tunnel object behind.
 - **404s or doubled paths in logs**: set `CONTROL_PLANE_BASE_URL` to the host
-  root, not a pre-prefixed `/v1/tunnel/...` URL.
+  root, not a pre-prefixed `/v1/tunnels/...` URL.
 - **`unsupported_channel`**: the product sent a channel that is not configured,
   or Harpoon has no registered targets. Configure the channel explicitly or add
   a Harpoon target.

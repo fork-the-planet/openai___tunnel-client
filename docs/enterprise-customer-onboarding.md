@@ -30,8 +30,8 @@ flowchart LR
 
   ui --> runtime
   runtime -->|"MCP JSON-RPC<br/>POST /v1/mcp/{tunnel_id}"| tunnel
-  client ==>|"Outbound HTTPS long-poll<br/>GET /v1/tunnel/{tunnel_id}/poll"| tunnel
-  client ==>|"Outbound HTTPS response<br/>POST /v1/tunnel/{tunnel_id}/response"| tunnel
+  client ==>|"Outbound HTTPS long-poll<br/>GET /v1/tunnels/{tunnel_id}/poll"| tunnel
+  client ==>|"Outbound HTTPS response<br/>POST /v1/tunnels/{tunnel_id}/response"| tunnel
   client -->|"Private MCP request"| mcp
 
   classDef openaiNode fill:#eef5ff,stroke:#4a6fa5,color:#172033
@@ -51,8 +51,8 @@ For a deeper explanation and more diagrams, see
 - **Tunnel ID (`tunnel_id`)**: The identifier used in:
   - ChatGPT connector setup: selected from the tunnel dropdown or pasted into
     the tunnel ID field
-  - tunnel-client control plane: `/v1/tunnel/{tunnel_id}/poll` and
-    `/v1/tunnel/{tunnel_id}/response`
+  - tunnel-client control plane: `/v1/tunnels/{tunnel_id}/poll` and
+    `/v1/tunnels/{tunnel_id}/response`
   - Format: `tunnel_` followed by 32 lowercase hexadecimal characters.
 - **OpenAI-hosted MCP tunnel endpoint**: The OpenAI-managed virtual MCP server
   endpoint that ChatGPT targets for the selected `tunnel_id`.
@@ -77,8 +77,8 @@ For a deeper explanation and more diagrams, see
   derives:
 
 ```text
-<CONTROL_PLANE_BASE_URL>/v1/tunnel/<tunnel_id>/poll
-<CONTROL_PLANE_BASE_URL>/v1/tunnel/<tunnel_id>/response
+<CONTROL_PLANE_BASE_URL>/v1/tunnels/<tunnel_id>/poll
+<CONTROL_PLANE_BASE_URL>/v1/tunnels/<tunnel_id>/response
 ```
 
 ## What OpenAI provides to you
@@ -464,7 +464,7 @@ On your MCP server, confirm you observe:
   JSON-RPC response closes the stream.
 - `GET /v1/mcp` is not supported; connectors must use POST.
 
-### Tunnel-client control-plane endpoints: `/v1/tunnel/{tunnel_id}/poll` and `/response`
+### Tunnel-client control-plane endpoints: `/v1/tunnels/{tunnel_id}/poll` and `/response`
 
 - The tunnel client long-polls `/poll` for queued work.
   - Response is `204 No Content` when no work is available.

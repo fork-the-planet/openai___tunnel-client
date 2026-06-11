@@ -1,9 +1,9 @@
 // Package controlplane owns the HTTP client surface used to talk to the
 // tunnel control plane.
 //
-// In short, the tunnel-client long-polls `GET /v1/tunnel/{tunnel_id}/poll`
+// In short, the tunnel-client long-polls `GET /v1/tunnels/{tunnel_id}/poll`
 // to retrieve queued MCP commands and posts execution results back through
-// `POST /v1/tunnel/{tunnel_id}/response`. These endpoints live in the control plane
+// `POST /v1/tunnels/{tunnel_id}/response`. These endpoints live in the control plane
 // service at `https://api.openai.com`.
 //
 // This package focuses on:

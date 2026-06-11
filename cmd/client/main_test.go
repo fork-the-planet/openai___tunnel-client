@@ -41,9 +41,9 @@ func TestAppBoots(t *testing.T) {
 		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"` + tunnelID.String() + `","name":"test tunnel","description":"test fixture"}`))
-		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/poll":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()) + "/poll":
 			w.WriteHeader(http.StatusNoContent)
-		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/response":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()) + "/response":
 			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, r)
@@ -225,9 +225,9 @@ func TestAppServesHealthAndAdminOverUnixSocket(t *testing.T) {
 		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"` + tunnelID.String() + `","name":"test tunnel","description":"test fixture"}`))
-		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/poll":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()) + "/poll":
 			w.WriteHeader(http.StatusNoContent)
-		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/response":
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()) + "/response":
 			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, r)

@@ -259,7 +259,7 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - The same path is honored by `tunnel-client admin tunnels ...` via `--control-plane.url-path`, and by native `runtimes` / tunnel-mcp flows via `--control-plane-url-path` or `control_plane_url_path`.
     - Example base URL: `https://gateway.example.com`
     - Example URL path: `/workspace/dev/us`
-    - Effective poll URL: `https://gateway.example.com/workspace/dev/us/v1/tunnel/<tunnel_id>/poll`
+    - Effective poll URL: `https://gateway.example.com/workspace/dev/us/v1/tunnels/<tunnel_id>/poll`
 - **Tunnel ID**
   - Flag: `--control-plane.tunnel-id`
   - Env: `CONTROL_PLANE_TUNNEL_ID`
@@ -474,7 +474,7 @@ routing, streaming, OAuth discovery, and common setup pitfalls, see
 - additional channels: configured via channel-qualified `--mcp.server-url`
   and/or `--mcp.command` entries.
 
-All response payloads posted to `/v1/tunnel/{tunnel_id}/response` include the
+All response payloads posted to `/v1/tunnels/{tunnel_id}/response` include the
 resolved `channel` value.
 
 ## Harpoon MCP (outbound HTTP allowlist)

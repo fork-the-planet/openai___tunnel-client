@@ -28,7 +28,7 @@ const (
 	ResponsePayloadSessionTermination ResponsePayloadType = "session_termination_response"
 )
 
-// TunnelResponsePayload mirrors the body posted to POST /v1/tunnel/{tunnel_id}/response when
+// TunnelResponsePayload mirrors the body posted to POST /v1/tunnels/{tunnel_id}/response when
 // delivering MCP results back to tunnel-service.
 type TunnelResponsePayload struct {
 	RequestID       string              `json:"request_id"`
@@ -59,7 +59,7 @@ type BaseRawPolledCommand struct {
 }
 
 // RawJSONRPCPolledCommand represents a single JSON object returned by
-// GET /v1/tunnel/{tunnel_id}/poll before it is converted into the strongly typed
+// GET /v1/tunnels/{tunnel_id}/poll before it is converted into the strongly typed
 // controlplane.PolledCommand interface.
 type RawJSONRPCPolledCommand struct {
 	BaseRawPolledCommand
@@ -82,7 +82,7 @@ type RawSessionTerminationPolledCommand struct {
 // Rely on default json marshal/unmarshal for time.Time fields.
 
 // PolledCommandEnvelope is the top-level container returned by
-// GET /v1/tunnel/{tunnel_id}/poll that groups pending requests for a tunnel.
+// GET /v1/tunnels/{tunnel_id}/poll that groups pending requests for a tunnel.
 type PolledCommandEnvelope struct {
 	Commands []json.RawMessage `json:"commands"`
 }

@@ -11,7 +11,7 @@ connections to:
 
 - **Host**: `api.openai.com`
 - **Port**: `443/TCP`
-- **Paths**: `/v1/tunnel/*`
+- **Paths**: `/v1/tunnels/*`
 
 No inbound ports are required for the tunnel itself.
 
@@ -29,7 +29,7 @@ flowchart LR
     tunnel["OpenAI tunnel service"]
   end
 
-  client ==>|"Outbound HTTPS<br/>api.openai.com:443<br/>/v1/tunnel/*"| tunnel
+  client ==>|"Outbound HTTPS<br/>api.openai.com:443<br/>/v1/tunnels/*"| tunnel
   client -->|"Private network<br/>MCP_SERVER_URL"| mcp
 
   classDef openaiNode fill:#eef5ff,stroke:#4a6fa5,color:#172033

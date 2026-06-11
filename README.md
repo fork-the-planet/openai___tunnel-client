@@ -175,8 +175,12 @@ Starter prompts for Codex:
 ## What it does
 
 - The client **long-polls** the OpenAI tunnel control plane over HTTPS:
-  - `GET /v1/tunnel/{tunnel_id}/poll`
-  - `POST /v1/tunnel/{tunnel_id}/response`
+  - `GET /v1/tunnels/{tunnel_id}/poll`
+  - `POST /v1/tunnels/{tunnel_id}/response`
+- Older tunnel-client releases may still use the singular `/v1/tunnel/...`
+  aliases. Tunnel-service keeps those aliases during migration; removing them,
+  if ever desired, is a separate later cleanup after telemetry shows no
+  remaining legacy clients.
 - Control-plane requests include `User-Agent: oai-tunnel-client/<version>` for compatibility, plus explicit `X-Tunnel-Client-Name` and `X-Tunnel-Client-Version` headers for service-side logs and metrics.
 - Control-plane HTTPS requests can present a separate client certificate/key
   pair using `--control-plane.client-cert` and `--control-plane.client-key`

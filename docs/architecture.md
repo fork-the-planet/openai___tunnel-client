@@ -34,8 +34,8 @@ flowchart LR
   end
 
   product -->|"MCP JSON-RPC request"| tunnel
-  client ==>|"Outbound HTTPS long-poll<br/>GET /v1/tunnel/{tunnel_id}/poll"| tunnel
-  client ==>|"Outbound HTTPS response<br/>POST /v1/tunnel/{tunnel_id}/response"| tunnel
+  client ==>|"Outbound HTTPS long-poll<br/>GET /v1/tunnels/{tunnel_id}/poll"| tunnel
+  client ==>|"Outbound HTTPS response<br/>POST /v1/tunnels/{tunnel_id}/response"| tunnel
   client -->|"Streamable HTTP, stdio, or in-memory MCP"| mcp
   client -.->|"Loopback or operator network"| ops
 
@@ -71,7 +71,7 @@ sequenceDiagram
   Tunnel-->>Client: Return queued JSON-RPC command
   Client->>MCP: Forward MCP JSON-RPC request
   MCP-->>Client: Return MCP response or notifications
-  Client->>Tunnel: POST /v1/tunnel/{tunnel_id}/response
+  Client->>Tunnel: POST /v1/tunnels/{tunnel_id}/response
   Tunnel-->>Product: Return final response or SSE stream
 ```
 
@@ -86,7 +86,7 @@ stream.
 flowchart TB
   subgraph internet["OpenAI-managed public edge"]
     edge["OpenAI MCP tunnel URL<br/>/v1/mcp/{tunnel_id}"]
-    control["Tunnel control plane<br/>/v1/tunnel/{tunnel_id}/*"]
+    control["Tunnel control plane<br/>/v1/tunnels/{tunnel_id}/*"]
   end
 
   subgraph private["Customer-controlled environment"]

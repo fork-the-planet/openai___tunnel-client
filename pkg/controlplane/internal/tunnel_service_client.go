@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	pollPathFormat               = "/v1/tunnel/%s/poll"
-	responsePathFormat           = "/v1/tunnel/%s/response"
+	pollPathFormat               = "/v1/tunnels/%s/poll"
+	responsePathFormat           = "/v1/tunnels/%s/response"
 	metadataPathFormat           = "/v1/tunnels/%s"
 	maxControlPlaneErrorBodySize = 64 * 1024
 	tunnelIntegrationSocketEnv   = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH"

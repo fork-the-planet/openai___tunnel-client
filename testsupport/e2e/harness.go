@@ -198,7 +198,30 @@ type Harness struct {
 	afterStart      func(*Harness)
 	beforeStop      func(*Harness)
 	logWriter       io.Writer
-	logBuffer       *bytes.Buffer
+	logBuffer       *lockedBuffer
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TunnelClient exposes deterministic poller control for one harnessed tunnel-client instance.
@@ -314,7 +337,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		cfg.clientCustomizer(clientCfg)
 	}
 
-	var logBuf bytes.Buffer
+	var logBuf lockedBuffer
 	var logWriter io.Writer = &logBuf
 	if cfg.logWriter != nil {
 		logWriter = io.MultiWriter(cfg.logWriter, &logBuf)

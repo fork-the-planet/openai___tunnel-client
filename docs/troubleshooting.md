@@ -94,7 +94,7 @@ done
   - Connector MCP traffic is POST-based JSON-RPC. GET requests to `/v1/mcp/...`
     are not a diagnostic SSE stream.
   - If client logs show doubled paths, set `CONTROL_PLANE_BASE_URL` to the host
-    root, for example `https://api.openai.com`, not a `/v1/tunnel/...` URL. <!-- citadel-ignore: public endpoint example for external tunnel-client config -->
+    root, for example `https://api.openai.com`, not a `/v1/tunnels/...` URL. <!-- citadel-ignore: public endpoint example for external tunnel-client config -->
 
 - **`unsupported_channel` from the connector path**
   - The incoming command named a channel that is not configured. Add a

@@ -76,7 +76,7 @@ func WithUnixSocketPath(path string) Option {
 	}
 }
 
-// ExpectedResponse defines one expected POST /v1/tunnel/{tunnel_id}/response payload.
+// ExpectedResponse defines one expected POST /v1/tunnels/{tunnel_id}/response payload.
 type ExpectedResponse struct {
 	RequestID   string
 	Headers     http.Header
@@ -411,7 +411,7 @@ func (m *MockTunnelService) Start(t testing.TB) {
 		return
 	}
 	handler := http.NewServeMux()
-	handler.HandleFunc("/v1/tunnel/", m.handleTunnel)
+	handler.HandleFunc("/v1/tunnels/", m.handleTunnel)
 	network := "tcp4"
 	address := "127.0.0.1:0"
 	if m.unixSocketPath != "" {
@@ -1121,7 +1121,7 @@ func (m *MockTunnelService) assertAuthHeaders(r *http.Request) {
 }
 
 func (m *MockTunnelService) extractTunnelID(path, suffix string) string {
-	const prefix = "/v1/tunnel/"
+	const prefix = "/v1/tunnels/"
 	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
 		m.failf("unexpected path %q", path)
 	}

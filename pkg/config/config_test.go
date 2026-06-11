@@ -35,11 +35,11 @@ func TestResolveControlPlanePathUsesSingleSeparator(t *testing.T) {
 		t.Fatalf("url.Parse: %v", err)
 	}
 
-	target := ResolveControlPlanePath(baseURL, "/workspace/dev/us", "/v1/tunnel/tunnel_123/poll")
+	target := ResolveControlPlanePath(baseURL, "/workspace/dev/us", "/v1/tunnels/tunnel_123/poll")
 	if target == nil {
 		t.Fatal("expected resolved control plane URL")
 	}
-	if got, want := target.String(), "https://gateway.example.com/workspace/dev/us/v1/tunnel/tunnel_123/poll"; got != want {
+	if got, want := target.String(), "https://gateway.example.com/workspace/dev/us/v1/tunnels/tunnel_123/poll"; got != want {
 		t.Fatalf("unexpected resolved control plane URL: got %q want %q", got, want)
 	}
 }

@@ -77,7 +77,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 
 	client := &http.Client{}
 
-	pollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll", RawQuery: "limit=1"}, mock, nil)
+	pollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll", RawQuery: "limit=1"}, mock, nil)
 
 	pollResp, err := client.Do(pollReq)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 		t.Fatalf("marshal response payload: %v", err)
 	}
 
-	responseReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(body))
+	responseReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(body))
 
 	response, err := client.Do(responseReq)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 		t.Fatalf("unexpected response status %d", response.StatusCode)
 	}
 
-	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	secondPollResp, err := client.Do(secondPollReq)
 	if err != nil {
 		t.Fatalf("execute second poll: %v", err)
@@ -182,7 +182,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal notification payload: %v", err)
 	}
-	notificationReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(notificationBody))
+	notificationReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(notificationBody))
 	notificationResp, err := client.Do(notificationReq)
 	if err != nil {
 		t.Fatalf("post notification response: %v", err)
@@ -207,7 +207,7 @@ func TestMockTunnelServiceUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal unmatched payload: %v", err)
 	}
-	unmatchedReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(unmatchedBody))
+	unmatchedReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(unmatchedBody))
 	unmatchedResp, err := client.Do(unmatchedReq)
 	if err != nil {
 		t.Fatalf("post unmatched response: %v", err)
@@ -269,7 +269,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 
 	client := &http.Client{}
 
-	firstPoll := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	firstPoll := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	firstResp, err := client.Do(firstPoll)
 	if err != nil {
 		t.Fatalf("execute first poll: %v", err)
@@ -327,7 +327,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal initialize response: %v", err)
 	}
-	initRespReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(initBody))
+	initRespReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(initBody))
 	initResp, err := client.Do(initRespReq)
 	if err != nil {
 		t.Fatalf("post initialize response: %v", err)
@@ -337,7 +337,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 		t.Fatalf("unexpected initialize response status %d", initResp.StatusCode)
 	}
 
-	secondPoll := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPoll := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	secondResp, err := client.Do(secondPoll)
 	if err != nil {
 		t.Fatalf("execute second poll: %v", err)
@@ -376,7 +376,7 @@ func TestWithInitializationPhaseCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal initialized ack: %v", err)
 	}
-	ackReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(ackBody))
+	ackReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(ackBody))
 	ackResp, err := client.Do(ackReq)
 	if err != nil {
 		t.Fatalf("post initialized ack: %v", err)
@@ -449,7 +449,7 @@ func TestMockTunnelServicePollTimeoutReturnsEmptyCommands(t *testing.T) {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	req := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	req := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -504,7 +504,7 @@ func TestMockTunnelServiceWaitsForCommandDeliveryGate(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	firstPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	firstPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	firstPollResp, err := client.Do(firstPollReq)
 	if err != nil {
 		t.Fatalf("execute first poll: %v", err)
@@ -521,7 +521,7 @@ func TestMockTunnelServiceWaitsForCommandDeliveryGate(t *testing.T) {
 
 	close(ready)
 
-	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	secondPollResp, err := client.Do(secondPollReq)
 	if err != nil {
 		t.Fatalf("execute second poll: %v", err)
@@ -568,7 +568,7 @@ func TestMockTunnelServiceBlocksUntilResponseBeforeDeliveringNextCommand(t *test
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	firstPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	firstPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 
 	firstPollResp, err := client.Do(firstPollReq)
 	if err != nil {
@@ -591,7 +591,7 @@ func TestMockTunnelServiceBlocksUntilResponseBeforeDeliveringNextCommand(t *test
 		t.Fatalf("expected single command from first poll, got %d", len(firstEnvelope.Commands))
 	}
 
-	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 
 	secondPollRespCh := make(chan *http.Response, 1)
 	secondPollErrCh := make(chan error, 1)
@@ -631,7 +631,7 @@ func TestMockTunnelServiceBlocksUntilResponseBeforeDeliveringNextCommand(t *test
 		if err != nil {
 			t.Fatalf("marshal response payload: %v", err)
 		}
-		req := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(raw))
+		req := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(raw))
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("post response for %s: %v", requestID, err)
@@ -716,7 +716,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 
 	client := &http.Client{}
 
-	pollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	pollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	firstPollResp, err := client.Do(pollReq)
 	if err != nil {
 		t.Fatalf("execute first poll: %v", err)
@@ -746,7 +746,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal first response payload: %v", err)
 	}
-	firstResponseReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(firstResponseBody))
+	firstResponseReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(firstResponseBody))
 	firstResponseResp, err := client.Do(firstResponseReq)
 	if err != nil {
 		t.Fatalf("post first response: %v", err)
@@ -763,7 +763,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 		t.Fatalf("expected shared storage to include session id, snapshot=%v", storageSnapshot)
 	}
 
-	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/poll"}, mock, nil)
 	secondPollResp, err := client.Do(secondPollReq)
 	if err != nil {
 		t.Fatalf("execute second poll: %v", err)
@@ -804,7 +804,7 @@ func TestMockTunnelServiceSharedStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal final response payload: %v", err)
 	}
-	finalReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/response"}, mock, bytes.NewReader(finalBody))
+	finalReq := newTunnelRequest(t, http.MethodPost, baseURL, &url.URL{Path: "/v1/tunnels/cli-tunnel/response"}, mock, bytes.NewReader(finalBody))
 	finalResp, err := client.Do(finalReq)
 	if err != nil {
 		t.Fatalf("post final response: %v", err)
