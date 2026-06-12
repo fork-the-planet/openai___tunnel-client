@@ -11,6 +11,7 @@ func TestLoadAcceptsCommonKebabCaseAliases(t *testing.T) {
 
 	cfg, err := Load([]string{
 		"--control-plane-tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--control-plane-organization-id", "org-alias",
 		"--mcp-server-url", "channel=main,url=https://mcp.example/mcp",
 		"--mcp-extra-headers", "X-Internal-Auth: alias-static",
 		"--mcp-discovery-extra-headers", "X-Discovery-Auth: alias-discovery",
@@ -22,6 +23,9 @@ func TestLoadAcceptsCommonKebabCaseAliases(t *testing.T) {
 	}
 	if cfg.ControlPlane.TunnelID.String() != "tunnel_0123456789abcdef0123456789abcdef" {
 		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.OrganizationID != "org-alias" {
+		t.Fatalf("unexpected organization id: %s", cfg.ControlPlane.OrganizationID)
 	}
 	if binding := cfg.MCP.MainChannelBinding(); binding == nil || binding.ServerURL == nil || binding.ServerURL.String() != "https://mcp.example/mcp" {
 		t.Fatalf("unexpected main MCP binding: %#v", binding)

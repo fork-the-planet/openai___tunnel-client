@@ -30,7 +30,7 @@ func TestControlPlaneRoundTripperAddsDefaultHeaders(t *testing.T) {
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		seen = req.Header.Clone()
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), apiKey, userAgent, map[string]string{"extra-header": "true"}, newDiscardLogger())
+	}), apiKey, userAgent, "", map[string]string{"extra-header": "true"}, newDiscardLogger())
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if !assert.NoError(t, err, "build request") {
@@ -50,6 +50,27 @@ func TestControlPlaneRoundTripperAddsDefaultHeaders(t *testing.T) {
 	assert.Equal(t, "true", seen.Get("extra-header"), "expected extra header to be forwarded")
 }
 
+func TestControlPlaneRoundTripperAddsOrganizationHeader(t *testing.T) {
+	t.Parallel()
+
+	const organizationID = "org-WBHny2fx55kAfLt1W8tnt5Aw"
+
+	var seen http.Header
+	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		seen = req.Header.Clone()
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	}), "api-key", "ua", organizationID, map[string]string{"openai-organization": "org-extra"}, newDiscardLogger())
+
+	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	if !assert.NoError(t, err, "build request") {
+		return
+	}
+
+	_, err = rt.RoundTrip(req)
+	assert.NoError(t, err, "round trip failed")
+	assert.Equal(t, organizationID, seen.Get(headerOpenAIOrganization), "expected configured organization header to override extra header")
+}
+
 func TestControlPlaneRoundTripperWarnsOnOverride(t *testing.T) {
 	t.Parallel()
 
@@ -58,7 +79,7 @@ func TestControlPlaneRoundTripperWarnsOnOverride(t *testing.T) {
 
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), "api-key", "ua", map[string]string{"X-Debug": "new"}, logger)
+	}), "api-key", "ua", "", map[string]string{"X-Debug": "new"}, logger)
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if !assert.NoError(t, err, "build request") {
@@ -81,7 +102,7 @@ func TestControlPlaneRoundTripperPreservesProtectedHeaders(t *testing.T) {
 
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), "api-key", "ua", map[string]string{
+	}), "api-key", "ua", "", map[string]string{
 		"authorization":           "Bearer attacker",
 		"User-Agent":              "custom-agent",
 		headerTunnelClientVersion: "dev",
@@ -108,7 +129,7 @@ func TestControlPlaneRoundTripperNoWarningWhenValueMatches(t *testing.T) {
 
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), "api-key", "ua", map[string]string{"X-Same": "same"}, logger)
+	}), "api-key", "ua", "", map[string]string{"X-Same": "same"}, logger)
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if !assert.NoError(t, err, "build request") {
@@ -130,7 +151,7 @@ func TestNewControlPlaneRoundTripperPanicsOnNilLogger(t *testing.T) {
 		func() {
 			_ = newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-			}), "api-key", "ua", nil, nil)
+			}), "api-key", "ua", "", nil, nil)
 		},
 	)
 }

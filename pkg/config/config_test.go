@@ -49,6 +49,7 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 		"CONTROL_PLANE_BASE_URL":                "https://example",
 		"CONTROL_PLANE_URL_PATH":                "/gateway/dev/us",
 		"CONTROL_PLANE_TUNNEL_ID":               envTunnelID,
+		"CONTROL_PLANE_ORGANIZATION_ID":         "org-env",
 		"CONTROL_PLANE_API_KEY":                 "control-key",
 		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS":   "15",
 		"CONTROL_PLANE_POLL_TIMEOUT":            "45s",
@@ -84,6 +85,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	}
 	if cfg.ControlPlane.TunnelID != envTunnelID {
 		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.OrganizationID != "org-env" {
+		t.Fatalf("unexpected organization id: %s", cfg.ControlPlane.OrganizationID)
 	}
 	if cfg.ControlPlane.MaxInFlightRequests != 15 {
 		t.Fatalf("unexpected max in-flight requests: %d", cfg.ControlPlane.MaxInFlightRequests)
@@ -203,11 +207,30 @@ func TestControlPlanePollDeadlineCapsAtExplicitDeadline(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsControlPlaneOrganizationIDWithLineBreaks(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load(
+		[]string{"--control-plane.organization-id", "org-good\nOpenAI-Project: injected"},
+		lookupEnvMap(map[string]string{
+			"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+			"CONTROL_PLANE_API_KEY":   "control-key",
+		}),
+	)
+	if err == nil {
+		t.Fatal("expected invalid organization id error")
+	}
+	if !strings.Contains(err.Error(), "control-plane.organization-id cannot contain header line breaks") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadFlagsOverrideEnv(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL":              "https://env",
 		"CONTROL_PLANE_URL_PATH":              "/env-path",
 		"CONTROL_PLANE_TUNNEL_ID":             envTunnelID,
+		"CONTROL_PLANE_ORGANIZATION_ID":       "org-env",
 		"CONTROL_PLANE_API_KEY":               "control-env-key",
 		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS": "25",
 		"CONTROL_PLANE_POLL_TIMEOUT":          "1m",
@@ -231,6 +254,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"--control-plane.base-url", "https://flag",
 		"--control-plane.url-path", "/flag-path",
 		"--control-plane.tunnel-id", flagTunnelID,
+		"--control-plane.organization-id", "org-flag",
 		"--log.level", "info",
 		"--log.format", "struct-text",
 		"--log.file", "/tmp/flag",
@@ -263,6 +287,9 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.ControlPlane.TunnelID != flagTunnelID {
 		t.Fatalf("expected flag tunnel id, got %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.OrganizationID != "org-flag" {
+		t.Fatalf("expected flag organization id, got %s", cfg.ControlPlane.OrganizationID)
 	}
 	if cfg.Logging.Level != slog.LevelInfo {
 		t.Fatalf("expected log level info, got %s", cfg.Logging.Level.String())
@@ -330,6 +357,7 @@ control_plane:
   base_url: env:YAML_CONTROL_PLANE_BASE_URL
   url_path: env:YAML_CONTROL_PLANE_URL_PATH
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  organization_id: org-yaml
   api_key: env:YAML_CONTROL_PLANE_API_KEY
   max_inflight_requests: 17
   poll_timeout: 55s
@@ -404,6 +432,9 @@ proxy:
 	}
 	if cfg.ControlPlane.TunnelID != "tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("unexpected tunnel id: %s", cfg.ControlPlane.TunnelID)
+	}
+	if cfg.ControlPlane.OrganizationID != "org-yaml" {
+		t.Fatalf("unexpected organization id: %s", cfg.ControlPlane.OrganizationID)
 	}
 	if cfg.ControlPlane.APIKey != "yaml-control-key" {
 		t.Fatalf("expected resolved YAML control-plane API key, got %q", cfg.ControlPlane.APIKey)

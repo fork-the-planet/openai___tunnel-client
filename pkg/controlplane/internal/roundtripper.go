@@ -13,17 +13,19 @@ import (
 const (
 	headerTunnelClientName    = "X-Tunnel-Client-Name"
 	headerTunnelClientVersion = "X-Tunnel-Client-Version"
+	headerOpenAIOrganization  = "OpenAI-Organization"
 )
 
 type controlPlaneRoundTripper struct {
-	base         http.RoundTripper
-	apiKey       string
-	userAgent    string
-	extraHeaders map[string]string
-	logger       *slog.Logger
+	base           http.RoundTripper
+	apiKey         string
+	userAgent      string
+	organizationID string
+	extraHeaders   map[string]string
+	logger         *slog.Logger
 }
 
-func newControlPlaneRoundTripper(base http.RoundTripper, apiKey, userAgent string, extraHeaders map[string]string, logger *slog.Logger) http.RoundTripper {
+func newControlPlaneRoundTripper(base http.RoundTripper, apiKey, userAgent, organizationID string, extraHeaders map[string]string, logger *slog.Logger) http.RoundTripper {
 	if base == nil {
 		base = tctransport.CloneDefault()
 	}
@@ -31,11 +33,12 @@ func newControlPlaneRoundTripper(base http.RoundTripper, apiKey, userAgent strin
 		panic("control-plane round tripper: logger is required")
 	}
 	return &controlPlaneRoundTripper{
-		base:         base,
-		apiKey:       apiKey,
-		userAgent:    userAgent,
-		extraHeaders: extraHeaders,
-		logger:       logger,
+		base:           base,
+		apiKey:         apiKey,
+		userAgent:      userAgent,
+		organizationID: organizationID,
+		extraHeaders:   extraHeaders,
+		logger:         logger,
 	}
 }
 
@@ -46,6 +49,9 @@ func (c *controlPlaneRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	req.Header.Set(headerTunnelClientName, version.ClientName)
 	req.Header.Set(headerTunnelClientVersion, version.Version)
 	c.applyExtraHeaders(req.Context(), req.Header)
+	if c.organizationID != "" {
+		req.Header.Set(headerOpenAIOrganization, c.organizationID)
+	}
 
 	return c.base.RoundTrip(req)
 }

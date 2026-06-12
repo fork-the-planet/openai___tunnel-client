@@ -321,6 +321,7 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 		base,
 		cfg.APIKey,
 		version.UserAgent,
+		cfg.OrganizationID,
 		cfg.ExtraHeaders,
 		logger,
 	), nil

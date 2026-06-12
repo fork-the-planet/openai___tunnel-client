@@ -19,6 +19,7 @@ func TestLoadUsesProfileFromExplicitDir(t *testing.T) {
 config_version: 1
 control_plane:
   tunnel_id: tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  organization_id: org-profile
   api_key: env:PROFILE_CONTROL_PLANE_API_KEY
   extra_headers:
     X-Control-Profile: env:PROFILE_CONTROL_HEADER
@@ -55,6 +56,9 @@ mcp:
 	}
 	if cfg.ControlPlane.APIKey != "profile-key" {
 		t.Fatalf("expected resolved profile API key, got %q", cfg.ControlPlane.APIKey)
+	}
+	if cfg.ControlPlane.OrganizationID != "org-profile" {
+		t.Fatalf("expected profile organization ID, got %q", cfg.ControlPlane.OrganizationID)
 	}
 	if cfg.ControlPlane.ExtraHeaders["X-Control-Profile"] != "profile-control-secret" {
 		t.Fatalf("unexpected resolved profile control-plane headers: %#v", cfg.ControlPlane.ExtraHeaders)

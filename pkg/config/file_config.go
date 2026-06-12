@@ -40,6 +40,7 @@ type fileControlPlaneConfig struct {
 	BaseURL               *string           `yaml:"base_url"`
 	URLPath               *string           `yaml:"url_path"`
 	TunnelID              *string           `yaml:"tunnel_id"`
+	OrganizationID        *string           `yaml:"organization_id"`
 	APIKey                *string           `yaml:"api_key"`
 	ClientCert            *string           `yaml:"client_cert"`
 	ClientKey             *string           `yaml:"client_key"`
@@ -197,6 +198,7 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 		return nil, err
 	}
 	setString(env, "CONTROL_PLANE_TUNNEL_ID", c.ControlPlane.TunnelID)
+	setString(env, "CONTROL_PLANE_ORGANIZATION_ID", c.ControlPlane.OrganizationID)
 	setString(env, "CONTROL_PLANE_CLIENT_CERT", c.ControlPlane.ClientCert)
 	setString(env, "CONTROL_PLANE_CLIENT_KEY", c.ControlPlane.ClientKey)
 	setString(env, "CONTROL_PLANE_HTTP_PROXY", c.ControlPlane.HTTPProxy)

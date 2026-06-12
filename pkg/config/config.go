@@ -93,6 +93,7 @@ var commonFlagAliases = []flagAlias{
 	{Canonical: "control-plane.base-url", Alias: "control-plane-base-url", Kind: "string"},
 	{Canonical: "control-plane.url-path", Alias: "control-plane-url-path", Kind: "string"},
 	{Canonical: "control-plane.tunnel-id", Alias: "control-plane-tunnel-id", Kind: "string"},
+	{Canonical: "control-plane.organization-id", Alias: "control-plane-organization-id", Kind: "string"},
 	{Canonical: "control-plane.api-key", Alias: "control-plane-api-key", Kind: "string"},
 	{Canonical: "control-plane.client-cert", Alias: "control-plane-client-cert", Kind: "string"},
 	{Canonical: "control-plane.client-key", Alias: "control-plane-client-key", Kind: "string"},
@@ -150,6 +151,7 @@ type ControlPlaneConfig struct {
 	BaseURL               *url.URL
 	URLPath               string
 	TunnelID              types.TunnelID
+	OrganizationID        string
 	APIKey                string
 	MaxInFlightRequests   int
 	PollTimeout           time.Duration
@@ -364,6 +366,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_ORGANIZATION_ID\tOrganization ID sent as OpenAI-Organization on tunnel control-plane requests (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_URL_PATH\tOptional URL path appended to CONTROL_PLANE_BASE_URL before tunnel-client adds its /v1/... routes")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_CERT\tPath to PEM client certificate for control-plane mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_CLIENT_KEY\tPath to PEM client private key for control-plane mTLS (optional)")
@@ -397,6 +400,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
 	fs.String("control-plane.url-path", "", "Optional URL path appended to the control-plane base URL before tunnel-client adds its /v1/... routes (env.CONTROL_PLANE_URL_PATH)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
+	fs.String("control-plane.organization-id", "", "Organization ID to send as OpenAI-Organization on tunnel control-plane requests (env.CONTROL_PLANE_ORGANIZATION_ID)")
 	fs.String("control-plane.api-key", "", "Reference to environment variable or file containing the control-plane API key (format env:VARNAME or file:/path/to/secret)")
 	fs.String("control-plane.client-cert", "", "Path to PEM client certificate for control-plane mTLS (format <path|env:VAR|file:/path>) (env.CONTROL_PLANE_CLIENT_CERT)")
 	fs.String("control-plane.client-key", "", "Path to PEM client private key for control-plane mTLS (format <path|env:VAR|file:/path>) (env.CONTROL_PLANE_CLIENT_KEY)")
@@ -816,6 +820,11 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		return ControlPlaneConfig{}, err
 	}
 
+	organizationID, err := controlPlaneOrganizationID(fs, lookupEnv)
+	if err != nil {
+		return ControlPlaneConfig{}, err
+	}
+
 	maxInFlight := defaultControlPlaneMaxInFlight
 	if flag := fs.Lookup("control-plane.max-inflight"); flag != nil && flag.Changed {
 		val, err := strconv.Atoi(flag.Value.String())
@@ -915,6 +924,7 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		BaseURL:               baseURL,
 		URLPath:               controlPlaneURLPath,
 		TunnelID:              types.TunnelID(tunnelID),
+		OrganizationID:        organizationID,
 		APIKey:                apiKey,
 		MaxInFlightRequests:   maxInFlight,
 		PollTimeout:           pollTimeout,
@@ -955,6 +965,17 @@ func controlPlaneURLPathRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, b
 		getValue(fs, "control-plane.url-path"),
 		envOrDefault(lookupEnv, "CONTROL_PLANE_URL_PATH", ""),
 	)
+}
+
+func controlPlaneOrganizationID(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (string, error) {
+	organizationID := strings.TrimSpace(firstSet(
+		getValue(fs, "control-plane.organization-id"),
+		envOrDefault(lookupEnv, "CONTROL_PLANE_ORGANIZATION_ID", ""),
+	))
+	if strings.ContainsAny(organizationID, "\r\n") {
+		return "", errors.New("control-plane.organization-id cannot contain header line breaks")
+	}
+	return organizationID, nil
 }
 
 // NormalizeControlPlaneURLPath validates and normalizes the optional control-plane URL prefix.
