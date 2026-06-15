@@ -500,11 +500,16 @@ If you expect long-running MCP calls, coordinate timeout values with OpenAI.
 
 ## Operations & best practices
 
-- **Redundant stateless tunnel clients**: multiple active `tunnel-client`
-  instances may poll the same `tunnel_id` for operational redundancy when they
-  target equivalent stateless MCP backends. The shared queue drains each
-  `request_id` to one poller. Coordinate with OpenAI before using redundant
-  clients for sessionful MCP behavior.
+- **Redundant tunnel clients**: multiple active `tunnel-client` instances may
+  poll the same `tunnel_id` when they target equivalent MCP backends that are
+  stateless or provide session affinity/shared session state, such as a single
+  HTTP MCP host or a load balancer that keeps MCP sessions sticky to the right
+  backend. Tunnel service keeps one shared queue per tunnel and does not assign
+  messages to a specific `tunnel-client` replica. Each queued message is
+  delivered to whichever replica polls it first. For `stdio`, `localhost`, or
+  non-sticky per-replica MCP servers, related session messages can land on
+  different clients/backends and fail. In those cases, keep one `tunnel-client`
+  per tunnel or use distinct tunnel IDs per replica.
 - **Secrets hygiene**: treat all API keys/tokens as secrets; store them in a
   secrets manager and rotate them on your standard cadence.
 - **Logging safety**: do not enable raw HTTP logging except in tightly controlled
