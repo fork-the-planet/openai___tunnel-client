@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/apierror"
 	tctransport "go.openai.org/api/tunnel-client/pkg/transport"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
@@ -31,6 +32,10 @@ type RequestError struct {
 	StatusCode   int
 	ResponseBody string
 	RequestID    string
+	Code         string
+	ErrorType    string
+	Message      string
+	Mitigation   string
 }
 
 type requestIDSetter interface {
@@ -41,7 +46,7 @@ func (e *RequestError) Error() string {
 	if e == nil {
 		return ""
 	}
-	errMsg := formatAdminRequestError(e.Method, e.Path, e.StatusCode, e.ResponseBody)
+	errMsg := formatAdminRequestError(e)
 	if e.RequestID != "" {
 		errMsg = fmt.Sprintf("%s (x-request-id: %s)", errMsg, e.RequestID)
 	}
@@ -187,12 +192,17 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		info := apierror.Parse(msg)
 		return &RequestError{
 			Method:       method,
 			Path:         target.Path,
 			StatusCode:   resp.StatusCode,
 			ResponseBody: strings.TrimSpace(string(msg)),
 			RequestID:    requestID,
+			Code:         info.Code,
+			ErrorType:    info.Type,
+			Message:      info.Message,
+			Mitigation:   info.Mitigation,
 		}
 	}
 
@@ -216,18 +226,25 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 	return nil
 }
 
-func formatAdminRequestError(method, path string, statusCode int, body string) string {
-	if method == http.MethodDelete &&
-		statusCode == http.StatusNotFound &&
-		strings.Contains(path, "/v1/tunnels/") &&
-		strings.Contains(body, "Invalid URL") {
+func formatAdminRequestError(err *RequestError) string {
+	if err.Method == http.MethodDelete &&
+		err.StatusCode == http.StatusNotFound &&
+		strings.Contains(err.Path, "/v1/tunnels/") &&
+		strings.Contains(err.ResponseBody, "Invalid URL") {
 		return fmt.Sprintf(
 			"request %s %s failed: %d delete is not exposed on this control-plane base URL yet; get/list/create/update may still work (%s)",
-			method,
-			path,
-			statusCode,
-			body,
+			err.Method,
+			err.Path,
+			err.StatusCode,
+			err.ResponseBody,
 		)
 	}
-	return fmt.Sprintf("request %s %s failed: %d %s", method, path, statusCode, body)
+
+	detail := apierror.Detail(apierror.Info{
+		Code:       err.Code,
+		Message:    err.Message,
+		Body:       err.ResponseBody,
+		Mitigation: err.Mitigation,
+	})
+	return fmt.Sprintf("request %s %s failed: %d %s", err.Method, err.Path, err.StatusCode, detail)
 }

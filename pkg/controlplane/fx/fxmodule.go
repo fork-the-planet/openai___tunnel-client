@@ -135,6 +135,9 @@ func runMetadataFetch(p metadataParams) error {
 						if statusErr.Message() != "" {
 							attrs = append(attrs, slog.String("error_message", statusErr.Message()))
 						}
+						if statusErr.Mitigation() != "" {
+							attrs = append(attrs, slog.String("mitigation", statusErr.Mitigation()))
+						}
 						logger.WarnContext(ctx, "tunnel metadata fetch failed", attrs...)
 						p.MetadataState.Set(nil, err)
 						return

@@ -57,7 +57,7 @@ func TestAdminJSONErrorEnvelopeIncludesRequestID(t *testing.T) {
 		require.Equal(t, "/v1/tunnels/tunnel_missing", r.URL.Path)
 		w.Header().Set("X-Request-Id", "req_test_json_123")
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":{"message":"missing"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"missing organization context","type":"invalid_request_error","code":"tunnel_active_organization_required"}}`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -76,6 +76,9 @@ func TestAdminJSONErrorEnvelopeIncludesRequestID(t *testing.T) {
 			StatusCode int    `json:"status_code"`
 			Method     string `json:"method"`
 			Path       string `json:"path"`
+			Code       string `json:"code"`
+			Type       string `json:"type"`
+			Mitigation string `json:"mitigation"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
@@ -84,4 +87,7 @@ func TestAdminJSONErrorEnvelopeIncludesRequestID(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, payload.Error.StatusCode)
 	require.Equal(t, http.MethodGet, payload.Error.Method)
 	require.Equal(t, "/v1/tunnels/tunnel_missing", payload.Error.Path)
+	require.Equal(t, "tunnel_active_organization_required", payload.Error.Code)
+	require.Equal(t, "invalid_request_error", payload.Error.Type)
+	require.Contains(t, payload.Error.Mitigation, "control_plane.organization_id")
 }

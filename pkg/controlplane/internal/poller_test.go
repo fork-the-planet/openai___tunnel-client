@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/apierror"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
@@ -930,9 +931,11 @@ func TestPollerLogsAPIStatusErrorDetails(t *testing.T) {
 				prefix:     "controlplane client: unexpected status",
 				statusCode: http.StatusUnauthorized,
 				status:     "401 Unauthorized",
-				code:       "certificate_required",
-				errorType:  "invalid_request_error",
-				message:    "missing client certificate",
+				info: apierror.Info{
+					Code:    "certificate_required",
+					Type:    "invalid_request_error",
+					Message: "missing client certificate",
+				},
 			},
 			nil,
 		},

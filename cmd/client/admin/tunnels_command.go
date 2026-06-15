@@ -516,6 +516,15 @@ func maybeWriteAdminJSONError(cmd *cobra.Command, err error) error {
 		if requestErr.RequestID != "" {
 			errorPayload["request_id"] = requestErr.RequestID
 		}
+		if requestErr.Code != "" {
+			errorPayload["code"] = requestErr.Code
+		}
+		if requestErr.ErrorType != "" {
+			errorPayload["type"] = requestErr.ErrorType
+		}
+		if requestErr.Mitigation != "" {
+			errorPayload["mitigation"] = requestErr.Mitigation
+		}
 	}
 
 	enc := json.NewEncoder(cmd.OutOrStdout())

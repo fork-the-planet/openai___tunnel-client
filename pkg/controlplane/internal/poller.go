@@ -172,6 +172,9 @@ func (p *poller) Run(ctx context.Context) {
 				if statusErr.Message() != "" {
 					attrs = append(attrs, slog.String("error_message", statusErr.Message()))
 				}
+				if statusErr.Mitigation() != "" {
+					attrs = append(attrs, slog.String("mitigation", statusErr.Mitigation()))
+				}
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				attrs = append(attrs, slog.Int64("poll_timeout_ms", pollTimeoutMilliseconds(p.pollTimeout)))

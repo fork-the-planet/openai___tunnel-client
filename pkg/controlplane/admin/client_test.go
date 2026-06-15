@@ -230,6 +230,44 @@ func TestAdminTunnelClientErrorIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestAdminTunnelClientErrorIncludesServiceCodeAndMitigation(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"organization context required","type":"invalid_request_error","code":"tunnel_active_organization_required"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.AdminConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		AdminKey: "key",
+	}
+	client, err := NewAdminTunnelClient(cfg)
+	if err != nil {
+		t.Fatalf("NewAdminTunnelClient: %v", err)
+	}
+
+	_, err = client.GetTunnel(context.Background(), "id")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("expected RequestError, got %T", err)
+	}
+	if requestErr.Code != "tunnel_active_organization_required" {
+		t.Fatalf("unexpected code: %q", requestErr.Code)
+	}
+	if !strings.Contains(requestErr.Mitigation, "control_plane.organization_id") {
+		t.Fatalf("expected organization mitigation, got %q", requestErr.Mitigation)
+	}
+	if got := err.Error(); !containsAll(got, "tunnel_active_organization_required", "mitigation:", "CONTROL_PLANE_ORGANIZATION_ID") {
+		t.Fatalf("error missing structured mitigation: %s", got)
+	}
+}
+
 func TestAdminTunnelClientDeleteUnsupportedHostExplainsProblem(t *testing.T) {
 	t.Parallel()
 

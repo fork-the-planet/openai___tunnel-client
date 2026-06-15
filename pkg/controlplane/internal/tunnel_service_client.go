@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -20,6 +19,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/apierror"
 	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	tcmetrics "go.openai.org/api/tunnel-client/pkg/metrics"
@@ -131,10 +131,7 @@ type APIStatusError struct {
 	prefix     string
 	statusCode int
 	status     string
-	code       string
-	errorType  string
-	message    string
-	body       string
+	info       apierror.Info
 }
 
 type MetadataStatusError = APIStatusError
@@ -159,31 +156,29 @@ func (e *APIStatusError) Status() string {
 }
 
 func (e *APIStatusError) Code() string {
-	return e.code
+	return e.info.Code
 }
 
 func (e *APIStatusError) Type() string {
-	return e.errorType
+	return e.info.Type
 }
 
 func (e *APIStatusError) Message() string {
-	return e.message
+	return e.info.Message
 }
 
 func (e *APIStatusError) Detail() string {
 	if e == nil {
 		return ""
 	}
-	parts := make([]string, 0, 2)
-	if e.code != "" {
-		parts = append(parts, e.code)
+	return apierror.Detail(e.info)
+}
+
+func (e *APIStatusError) Mitigation() string {
+	if e == nil {
+		return ""
 	}
-	if e.message != "" {
-		parts = append(parts, e.message)
-	} else if e.body != "" {
-		parts = append(parts, e.body)
-	}
-	return strings.Join(parts, ": ")
+	return e.info.Mitigation
 }
 
 func newAPIStatusError(prefix string, resp *http.Response) *APIStatusError {
@@ -196,7 +191,7 @@ func newAPIStatusError(prefix string, resp *http.Response) *APIStatusError {
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneErrorBodySize))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if readErr != nil {
-		statusErr.message = "read error body: " + readErr.Error()
+		statusErr.info.Message = "read error body: " + readErr.Error()
 		return statusErr
 	}
 	populateAPIStatusError(statusErr, body)
@@ -204,62 +199,7 @@ func newAPIStatusError(prefix string, resp *http.Response) *APIStatusError {
 }
 
 func populateAPIStatusError(statusErr *APIStatusError, body []byte) {
-	body = bytes.TrimSpace(body)
-	if len(body) == 0 {
-		return
-	}
-
-	var payload struct {
-		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-		Message string `json:"message"`
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-		Detail  any    `json:"detail"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		statusErr.body = truncateErrorDetail(string(body))
-		return
-	}
-
-	if payload.Error != nil {
-		statusErr.code = payload.Error.Code
-		statusErr.errorType = payload.Error.Type
-		statusErr.message = payload.Error.Message
-		return
-	}
-
-	statusErr.code = payload.Code
-	statusErr.errorType = payload.Type
-	statusErr.message = payload.Message
-	if statusErr.message == "" && payload.Detail != nil {
-		statusErr.message = stringifyDetail(payload.Detail)
-	}
-}
-
-func stringifyDetail(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return typed
-	default:
-		data, err := json.Marshal(typed)
-		if err != nil {
-			return fmt.Sprint(typed)
-		}
-		return string(data)
-	}
-}
-
-func truncateErrorDetail(value string) string {
-	const maxDetailLength = 1024
-	value = strings.TrimSpace(value)
-	if len(value) <= maxDetailLength {
-		return value
-	}
-	return value[:maxDetailLength] + "..."
+	statusErr.info = apierror.Parse(body)
 }
 
 // FetchTunnelMetadata requests the tunnel metadata record for the configured tunnel.

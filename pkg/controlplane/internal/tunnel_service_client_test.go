@@ -358,6 +358,42 @@ func TestTunnelServiceClientPollSurfacesAPIErrorCode(t *testing.T) {
 	assert.Equal(t, "certificate_required", statusErr.Code())
 }
 
+func TestTunnelServiceClientPollAddsMitigationForTunnelServiceErrorCode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Access denied: this tunnel requires an active organization context.","type":"invalid_request_error","code":"tunnel_active_organization_required"}}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID(tunnelID),
+		APIKey:   apiKey,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	_, _, err = client.Poll(context.Background(), 1)
+	if !assert.Error(t, err, "expected organization-context error") {
+		return
+	}
+	assert.ErrorContains(t, err, "tunnel_active_organization_required")
+	assert.ErrorContains(t, err, "control_plane.organization_id")
+	var statusErr *APIStatusError
+	if !assert.ErrorAs(t, err, &statusErr) {
+		return
+	}
+	assert.Contains(t, statusErr.Mitigation(), "CONTROL_PLANE_ORGANIZATION_ID")
+}
+
 func TestTunnelServiceClientControlPlaneMTLS(t *testing.T) {
 	t.Parallel()
 
