@@ -246,7 +246,11 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}
-	base, err = tctransport.ApplyUnixSocketPath(base, os.Getenv(tunnelIntegrationSocketEnv))
+	socketPath := cfg.UnixSocketPath
+	if socketPath == "" {
+		socketPath = os.Getenv(tunnelIntegrationSocketEnv)
+	}
+	base, err = tctransport.ApplyUnixSocketPath(base, socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}

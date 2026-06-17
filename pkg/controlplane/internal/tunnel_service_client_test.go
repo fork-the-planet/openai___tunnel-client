@@ -181,6 +181,41 @@ func TestTunnelServiceClientPollSuccessWithControlPlaneURLPath(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestTunnelServiceClientPollUsesConfiguredUnixSocketPath(t *testing.T) {
+	t.Parallel()
+
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Skipf("skipping test: unable to bind unix listener: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/tunnels/cli-tunnel/poll", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"commands":[]}`))
+	})}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	})
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:        mustParseURL(t, "http://127.0.0.1:1"),
+		UnixSocketPath: socketPath,
+		TunnelID:       types.TunnelID("cli-tunnel"),
+		APIKey:         "test-api-key",
+		PollTimeout:    time.Second,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	_, _, err = client.Poll(context.Background(), 1)
+	require.NoError(t, err)
+}
+
 func TestTunnelServiceClientPollIgnoresLegacyBaseURLPath(t *testing.T) {
 	t.Parallel()
 

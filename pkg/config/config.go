@@ -149,6 +149,7 @@ type AdminUIConfig struct {
 // ControlPlaneConfig defines how the client reaches the tunnel control plane.
 type ControlPlaneConfig struct {
 	BaseURL               *url.URL
+	UnixSocketPath        string
 	URLPath               string
 	TunnelID              types.TunnelID
 	OrganizationID        string
