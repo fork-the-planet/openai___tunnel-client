@@ -244,6 +244,8 @@ make admin-ui
   exports the embedded Tunnel MCP plugin bundle.
 - `tunnel-client dev mcp-stub` runs an embedded demo MCP + OAuth metadata server
   for one-binary end-to-end validation.
+- `tunnel-client dev proxy` runs a pure-Go in-memory control plane plus
+  tunnel-client and prints a local MCP URL for integration tests.
 - `tunnel-client init` writes a validated first-use profile.
 - `tunnel-client doctor` validates config and explains what is missing before
   startup.

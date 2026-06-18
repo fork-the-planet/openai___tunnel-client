@@ -2,10 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
 	"io"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
+
+	"go.openai.org/api/tunnel-client/pkg/localproxy"
+	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 func newDevCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
@@ -18,6 +28,105 @@ func newDevCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.AddCommand(newDevMCPStubCommand(stdout, stderr))
+	cmd.AddCommand(newDevProxyCommand(stdout, stderr))
+	return cmd
+}
+
+func newDevProxyCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+	var (
+		listenAddr            string
+		tunnelID              types.TunnelID
+		mcpServerURLs         []string
+		mcpCommands           []string
+		profile               string
+		profileFile           string
+		profileDir            string
+		healthListenAddr      string
+		healthURLFile         string
+		urlFile               string
+		printJSON             bool
+		duration              time.Duration
+		readinessTimeout      time.Duration
+		responseTimeout       time.Duration
+		clientLastSeenTimeout time.Duration
+	)
+
+	cmd := &cobra.Command{
+		Use:   "proxy",
+		Short: "Run a local in-memory tunnel control plane plus tunnel-client",
+		Long: `Run a local in-memory tunnel control plane and an in-process tunnel-client runtime.
+
+This mode is for local MCP integration tests that need an MCP URL without a
+hosted tunnel control plane or a separate control-plane process.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			proxy, err := localproxy.Start(ctx, localproxy.Options{
+				ListenAddr:            listenAddr,
+				TunnelID:              tunnelID,
+				MCPServerURLs:         mcpServerURLs,
+				MCPCommands:           mcpCommands,
+				Profile:               profile,
+				ProfileFile:           profileFile,
+				ProfileDir:            profileDir,
+				HealthListenAddr:      healthListenAddr,
+				HealthURLFile:         healthURLFile,
+				URLFile:               urlFile,
+				ResponseTimeout:       responseTimeout,
+				ClientLastSeenTimeout: clientLastSeenTimeout,
+				ReadinessTimeout:      readinessTimeout,
+				Stdout:                cmd.OutOrStdout(),
+				Stderr:                cmd.ErrOrStderr(),
+			})
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = proxy.Stop(context.Background())
+			}()
+
+			if printJSON {
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				if err := encoder.Encode(proxy.Info()); err != nil {
+					return err
+				}
+			} else {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP URL: %s\n", proxy.Info().MCPURL)
+			}
+
+			waitCtx := ctx
+			cancel := func() {}
+			if duration > 0 {
+				waitCtx, cancel = context.WithTimeout(ctx, duration)
+			}
+			defer cancel()
+			if err := proxy.Wait(waitCtx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.Flags().StringVar(&listenAddr, "listen", localproxy.DefaultListenAddr, "Loopback address for local MCP ingress")
+	cmd.Flags().StringVar((*string)(&tunnelID), "tunnel-id", localproxy.DefaultTunnelID, "Tunnel id exposed by the local proxy")
+	cmd.Flags().StringArrayVar(&mcpServerURLs, "mcp-server-url", nil, "Target MCP server URL; repeat for channel bindings using url=...,channel=...")
+	cmd.Flags().StringArrayVar(&mcpCommands, "mcp-command", nil, "Command to launch a stdio MCP server; repeat for channel bindings using command=...,channel=...")
+	cmd.Flags().StringVar(&profile, "profile", "", "Tunnel-client profile name to load")
+	cmd.Flags().StringVar(&profileFile, "profile-file", "", "Path to a tunnel-client profile YAML file")
+	cmd.Flags().StringVar(&profileDir, "profile-dir", "", "Directory containing tunnel-client profiles")
+	cmd.Flags().StringVar(&healthListenAddr, "health-listen-addr", localproxy.DefaultHealthListenAddr, "Optional tunnel-client health/admin listen address; omit to run without a health/admin listener")
+	cmd.Flags().StringVar(&healthURLFile, "health-url-file", "", "Write the tunnel-client health base URL to this file; enables an ephemeral health/admin listener when --health-listen-addr is omitted")
+	cmd.Flags().StringVar(&urlFile, "url-file", "", "Write the local proxy connection JSON to this file")
+	cmd.Flags().BoolVar(&printJSON, "print-json", false, "Print local proxy connection JSON after readiness")
+	cmd.Flags().DurationVar(&duration, "duration", 0, "Run for a bounded duration, then exit")
+	cmd.Flags().DurationVar(&readinessTimeout, "readiness-timeout", localproxy.DefaultReadinessTimeout, "Maximum time to wait for tunnel-client and MCP readiness")
+	cmd.Flags().DurationVar(&responseTimeout, "response-timeout", localproxy.DefaultResponseTimeout, "Maximum time local MCP ingress waits for a tunnel-client response")
+	cmd.Flags().DurationVar(&clientLastSeenTimeout, "client-last-seen-timeout", localproxy.DefaultClientLastSeenTimeout, "How recently tunnel-client must poll to be considered connected")
 	return cmd
 }
 

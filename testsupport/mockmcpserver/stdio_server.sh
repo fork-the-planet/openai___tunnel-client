@@ -23,7 +23,7 @@ while IFS= read -r line; do
     *\"tools/call\"*)
       name=""
       request_id=""
-      if [[ $line =~ \"arguments\"[[:space:]]*:[[:space:]]*.*\"name\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+      if [[ $line =~ \"arguments\"[[:space:]]*:[[:space:]]*\{[^\}]*\"name\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
         name="${BASH_REMATCH[1]}"
       fi
       if [[ $line =~ \"request_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then

@@ -41,6 +41,43 @@ Run:
 go test ./e2e -count=1
 ```
 
+## MCP tunnel proxy test patterns
+
+There are two supported wrapper patterns for tests that start an MCP server and
+need tunnel-client in the path:
+
+- Remote control plane: start your MCP server, then start `tunnel-client run`
+  with `CONTROL_PLANE_API_KEY`, `--control-plane.tunnel-id`, and
+  `--mcp-server-url` or `--mcp-command`. Use this when a test should exercise a
+  hosted control plane.
+- Local control plane: start your MCP server, then start
+  `tunnel-client dev proxy --mcp-server-url <url> --print-json`. This runs a
+  pure-Go in-memory control plane plus tunnel-client in one process and prints
+  an `mcp_url` that tests can POST JSON-RPC requests to.
+
+`dev proxy` runs the local control plane and tunnel-client in one process. It
+prefers a Unix-domain socket for tunnel-client control-plane traffic when the OS
+supports it and falls back to TCP otherwise. It starts no health/admin listener
+by default; pass `--health-listen-addr 127.0.0.1:0` or
+`--health-url-file <path>` only when a test needs `/healthz`, `/readyz`,
+`/metrics`, or `/ui`.
+
+Stable touch points:
+
+- Go tests can import `go.openai.org/api/tunnel-client/pkg/localproxy` and call
+  `localproxy.Start`.
+- Python tests can copy or import
+  `wrappers/mcp-tunnel-client-proxy/python/mcp_tunnel_client_proxy.py`.
+- TypeScript tests can copy or import
+  `wrappers/mcp-tunnel-client-proxy/typescript/mcp_tunnel_client_proxy.ts`.
+- Copyable example subprojects live under `examples/`.
+
+Run the wrapper/example suite with:
+
+```bash
+bazel test //api/tunnel-client:mcp_tunnel_client_proxy_tests
+```
+
 ## Repo structure (high level)
 
 - `cmd/client`: CLI entrypoint
