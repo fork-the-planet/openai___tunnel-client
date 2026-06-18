@@ -28,11 +28,12 @@ import (
 )
 
 const (
-	defaultTimeout      = 30 * time.Second
-	minTimeout          = 100 * time.Millisecond
-	maxTimeout          = 120 * time.Second
-	maxBodyLogFieldName = "response_bytes"
-	headerNamePattern   = "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+	defaultTimeout         = 30 * time.Second
+	minTimeout             = 100 * time.Millisecond
+	maxTimeout             = 120 * time.Second
+	maxBodyLogFieldName    = "response_bytes"
+	maxContentTypeLogBytes = 256
+	headerNamePattern      = "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
 )
 
 var (
@@ -41,19 +42,42 @@ var (
 		http.MethodPost: {},
 		http.MethodPut:  {},
 	}
-	// Tunnel-service is the policy layer for Harpoon-supplied headers; keep
-	// the client-side blocklist to generic HTTP relay safety headers only.
 	blockedOutboundHeaders = map[string]struct{}{
-		"connection":          {},
-		"content-length":      {},
-		"host":                {},
-		"keep-alive":          {},
-		"proxy-authenticate":  {},
-		"proxy-authorization": {},
-		"te":                  {},
-		"trailer":             {},
-		"transfer-encoding":   {},
-		"upgrade":             {},
+		"accept-encoding":                   {},
+		"cf-connecting-ip":                  {},
+		"connection":                        {},
+		"content-length":                    {},
+		"cookie":                            {},
+		"forwarded":                         {},
+		"host":                              {},
+		"keep-alive":                        {},
+		"proxy-authenticate":                {},
+		"proxy-authorization":               {},
+		"proxy-connection":                  {},
+		"te":                                {},
+		"trailer":                           {},
+		"transfer-encoding":                 {},
+		"true-client-ip":                    {},
+		"upgrade":                           {},
+		"user-agent":                        {},
+		"via":                               {},
+		"x-client-ip":                       {},
+		"x-cluster-client-ip":               {},
+		"x-custom-cf-witness-actor":         {},
+		"x-custom-cf-witness-authorization": {},
+		"x-envoy-external-address":          {},
+		"x-forwarded-for":                   {},
+		"x-forwarded-host":                  {},
+		"x-forwarded-port":                  {},
+		"x-forwarded-proto":                 {},
+		"x-openai-actor-authorization":      {},
+		"x-openai-authorization":            {},
+		"x-openai-authorization-error":      {},
+		"x-openai-internal-caller":          {},
+		"x-openai-skip-auth":                {},
+		"x-original-forwarded-for":          {},
+		"x-real-ip":                         {},
+		"x-tunnel-traffic-source":           {},
 	}
 	listTargetsSchema       = buildListTargetsInputSchema()
 	listTargetsOutputSchema = buildListTargetsOutputSchema()
@@ -74,7 +98,7 @@ type Server struct {
 type callTargetRequest struct {
 	Label            string            `json:"label" jsonschema:"minLength=1,maxLength=64,pattern=^[a-z0-9][a-z0-9_-]{0\\,63}$,description=Allowlisted target label"`
 	Method           string            `json:"method" jsonschema:"enum=GET,enum=POST,enum=PUT,description=HTTP method for the outbound request"`
-	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request; transport proxy forwarding and client-managed headers are blocked"`
+	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request; transport proxy forwarding and client-managed identity headers are blocked"`
 	Body             string            `json:"body,omitempty" jsonschema:"description=Request body as a raw string"`
 	TimeoutMS        *int              `json:"timeout_ms,omitempty" jsonschema:"description=Request timeout in milliseconds"`
 	MaxResponseBytes *int              `json:"max_response_bytes,omitempty" jsonschema:"description=Maximum response bytes to read"`
@@ -589,10 +613,8 @@ func isBlockedOutboundHeader(headerName string) bool {
 	if normalized == "" {
 		return true
 	}
-	if _, ok := blockedOutboundHeaders[normalized]; ok {
-		return true
-	}
-	return false
+	_, ok := blockedOutboundHeaders[normalized]
+	return ok
 }
 
 func classifyDroppedHeaderName(headerName string) string {
@@ -644,7 +666,22 @@ func responseContentTypeForLog(contentType string) string {
 	if found {
 		contentType = mediaType
 	}
-	return strings.ToLower(strings.TrimSpace(contentType))
+	return truncateUTF8String(strings.ToLower(strings.TrimSpace(contentType)), maxContentTypeLogBytes)
+}
+
+func truncateUTF8String(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	truncated := value[:maxBytes]
+	for !utf8.ValidString(truncated) {
+		_, size := utf8.DecodeLastRuneInString(truncated)
+		if size <= 0 || size > len(truncated) {
+			return ""
+		}
+		truncated = truncated[:len(truncated)-size]
+	}
+	return truncated
 }
 
 func allowedMethodsList() []string {

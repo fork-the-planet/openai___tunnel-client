@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -898,9 +899,15 @@ func TestCallTargetSanitizesHeadersAndSetsStableUserAgent(t *testing.T) {
 			"Accept":              "application/json",
 			"Authorization":       "Bearer token",
 			"Content-Type":        "application/json",
+			"Cookie":              "session=secret",
+			"Forwarded":           "for=10.0.0.1;proto=https",
+			"True-Client-IP":      "10.0.0.2",
 			"User-Agent":          "malicious-override",
-			"X-Trace-Id":          "trace-123",
 			"X-API-Key":           "secret",
+			"X-LiteLLM-API-Key":   "upstream-secret",
+			"X-OpenAI-Skip-Auth":  "1",
+			"X-Trace-Id":          "trace-123",
+			"X-Forwarded-For":     "10.0.0.1",
 			"Connection":          "keep-alive",
 			"Proxy-Authorization": "Basic secret",
 		},
@@ -911,10 +918,16 @@ func TestCallTargetSanitizesHeadersAndSetsStableUserAgent(t *testing.T) {
 	require.Equal(t, "Bearer token", receivedHeaders.Get("Authorization"))
 	require.Equal(t, "application/json", receivedHeaders.Get("Content-Type"))
 	require.Equal(t, version.UserAgent, receivedHeaders.Get("User-Agent"))
-	require.Equal(t, "trace-123", receivedHeaders.Get("X-Trace-Id"))
-	require.Equal(t, "secret", receivedHeaders.Get("X-API-Key"))
+	require.Equal(t, "", receivedHeaders.Get("Cookie"))
+	require.Equal(t, "", receivedHeaders.Get("Forwarded"))
+	require.Equal(t, "", receivedHeaders.Get("True-Client-IP"))
+	require.Equal(t, "", receivedHeaders.Get("X-Forwarded-For"))
+	require.Equal(t, "", receivedHeaders.Get("X-OpenAI-Skip-Auth"))
 	require.Equal(t, "", receivedHeaders.Get("Connection"))
 	require.Equal(t, "", receivedHeaders.Get("Proxy-Authorization"))
+	require.Equal(t, "secret", receivedHeaders.Get("X-API-Key"))
+	require.Equal(t, "upstream-secret", receivedHeaders.Get("X-LiteLLM-API-Key"))
+	require.Equal(t, "trace-123", receivedHeaders.Get("X-Trace-Id"))
 
 	snapshot := client.callBuffer.Snapshot(1, "svc")
 	require.Len(t, snapshot, 1)
@@ -927,6 +940,12 @@ func TestFilterOutboundHeadersReportsLowCardinalityDrops(t *testing.T) {
 	headers, dropped, classifications := filterOutboundHeaders(map[string]string{
 		"Accept":              "application/json",
 		"Authorization":       "Bearer token",
+		"Content-Type":        "application/json",
+		"Cookie":              "session=secret",
+		"Forwarded":           "for=10.0.0.1;proto=https",
+		"True-Client-IP":      "10.0.0.2",
+		"X-Forwarded-For":     "10.0.0.1",
+		"X-OpenAI-Skip-Auth":  "1",
 		"X-Trace-Id":          "trace",
 		"X-API-Key":           "secret",
 		"Connection":          "keep-alive",
@@ -937,46 +956,60 @@ func TestFilterOutboundHeadersReportsLowCardinalityDrops(t *testing.T) {
 
 	require.Equal(t, "application/json", headers.Get("Accept"))
 	require.Equal(t, "Bearer token", headers.Get("Authorization"))
+	require.Equal(t, "application/json", headers.Get("Content-Type"))
+	require.Equal(t, "", headers.Get("Forwarded"))
+	require.Equal(t, "", headers.Get("X-Forwarded-For"))
+	require.Equal(t, "", headers.Get("X-OpenAI-Skip-Auth"))
 	require.Equal(t, "trace", headers.Get("X-Trace-Id"))
 	require.Equal(t, "secret", headers.Get("X-API-Key"))
-	require.Equal(t, 4, dropped)
-	require.Equal(t, []string{"not-forwardable", "sensitive-name"}, classifications)
+	require.Equal(t, 9, dropped)
+	require.Equal(t, []string{"custom", "not-forwardable", "sensitive-name"}, classifications)
 }
 
-func TestIsBlockedOutboundHeaderOnlyBlocksRelaySafetyHeaders(t *testing.T) {
+func TestIsBlockedOutboundHeaderBlocksSpoofingAndRelayHeaders(t *testing.T) {
 	t.Parallel()
 
 	for _, headerName := range []string{
 		"Connection",
 		"Content-Length",
+		"Cookie",
+		"Forwarded",
 		"Host",
-		"Keep-Alive",
-		"Proxy-Authenticate",
 		"Proxy-Authorization",
-		"TE",
-		"Trailer",
+		"True-Client-IP",
 		"Transfer-Encoding",
-		"Upgrade",
+		"User-Agent",
+		"Via",
+		"X-Forwarded-For",
+		"X-Forwarded-Host",
+		"X-OpenAI-Authorization",
+		"X-OpenAI-Skip-Auth",
+		"X-Real-IP",
 	} {
 		require.True(t, isBlockedOutboundHeader(headerName), headerName)
 	}
 
 	for _, headerName := range []string{
+		"Accept",
 		"Authorization",
-		"Cookie",
-		"Forwarded",
-		"User-Agent",
-		"Via",
+		"Content-Type",
 		"X-API-Key",
 		"X-Discovery-Auth",
-		"X-Forwarded-For",
-		"X-Internal-Auth",
-		"X-Real-IP",
-		"X-Service-Authorization",
+		"X-LiteLLM-API-Key",
 		"X-Trace-Id",
 	} {
 		require.False(t, isBlockedOutboundHeader(headerName), headerName)
 	}
+}
+
+func TestResponseContentTypeForLogTruncatesLongValues(t *testing.T) {
+	t.Parallel()
+
+	got := responseContentTypeForLog("text/" + strings.Repeat("a", maxContentTypeLogBytes*2))
+
+	require.LessOrEqual(t, len(got), maxContentTypeLogBytes)
+	require.True(t, strings.HasPrefix(got, "text/"))
+	require.True(t, utf8.ValidString(got))
 }
 
 func newTestServer(t *testing.T, cfg *config.HarpoonConfig) *Server {
