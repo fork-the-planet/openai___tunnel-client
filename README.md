@@ -244,11 +244,14 @@ make admin-ui
   exports the embedded Tunnel MCP plugin bundle.
 - `tunnel-client dev mcp-stub` runs an embedded demo MCP + OAuth metadata server
   for one-binary end-to-end validation.
-- `tunnel-client dev proxy` runs a local in-memory control plane plus
-  tunnel-client and prints a local MCP URL for integration tests. Its
-  `--backend auto|go|rust` flag defaults to `auto`; ordinary public builds use
-  the Go backend, and `rust` is available only in binaries built with an
-  optional linked Rust adapter.
+- `tunnel-client dev proxy` runs a local control plane plus tunnel-client for
+  integration tests. TCP ingress is the default and prints `mcp_url`; pass
+  `--listen-unix-socket PATH` for external MCP ingress over a Unix socket. Its
+  `--backend auto|go|rust` flag defaults to `auto`, and
+  `--engine-queue-backend inmem|redis` defaults to `inmem`. Ordinary public
+  builds use the Go in-memory backend; `rust` and Redis require a binary with
+  the optional linked Rust adapter. Redis also needs `--engine-redis-url` or
+  `TUNNEL_ENGINE_REDIS_URL`.
 - `tunnel-client init` writes a validated first-use profile.
 - `tunnel-client doctor` validates config and explains what is missing before
   startup.

@@ -52,17 +52,28 @@ need tunnel-client in the path:
   hosted control plane.
 - Local control plane: start your MCP server, then start
   `tunnel-client dev proxy --mcp-server-url <url> --print-json`. This runs a
-  local in-memory control plane plus tunnel-client in one process and prints an
-  `mcp_url` that tests can POST JSON-RPC requests to.
+  local control plane plus tunnel-client in one process and prints connection
+  JSON that tests can use for JSON-RPC requests.
 
 `dev proxy` runs the local control plane and tunnel-client in one process. It
 prefers a Unix-domain socket for tunnel-client control-plane traffic when the OS
 supports it and falls back to TCP otherwise. It starts no health/admin listener
 by default; pass `--health-listen-addr 127.0.0.1:0` or
 `--health-url-file <path>` only when a test needs `/healthz`, `/readyz`,
-`/metrics`, or `/ui`. The `--backend auto|go|rust` flag defaults to `auto`.
-Public builds use the Go backend unless an optional Rust backend adapter is
-linked into the binary; explicit `--backend rust` fails clearly when unavailable.
+`/metrics`, or `/ui`. The `--backend auto|go|rust` flag defaults to `auto`, and
+`--engine-queue-backend inmem|redis` defaults to `inmem`. Public builds use the
+Go backend unless an optional Rust backend adapter is linked into the binary;
+explicit `--backend rust` fails clearly when unavailable. Redis selects the
+linked Rust backend for `auto`, rejects `go`, and requires
+`--engine-redis-url <url>` or `TUNNEL_ENGINE_REDIS_URL`.
+
+External MCP ingress is TCP by default: `--listen` defaults to `127.0.0.1:0`,
+`mcp_transport` is `tcp`, and `mcp_url` remains populated. Pass
+`--listen-unix-socket <path>` instead for Unix ingress; it is mutually
+exclusive with `--listen`, and the JSON contains `mcp_transport: "unix"`,
+`mcp_unix_socket`, and `mcp_url_path`. This external socket is separate from
+the temporary Unix socket used by tunnel-client for internal control-plane
+traffic.
 
 Stable touch points:
 

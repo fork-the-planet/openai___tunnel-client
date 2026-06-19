@@ -35,6 +35,7 @@ func newDevCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 func newDevProxyCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var (
 		listenAddr            string
+		listenUnixSocket      string
 		tunnelID              types.TunnelID
 		mcpServerURLs         []string
 		mcpCommands           []string
@@ -45,6 +46,8 @@ func newDevProxyCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		healthURLFile         string
 		urlFile               string
 		backend               localproxy.BackendName
+		engineQueueBackend    localproxy.QueueBackendName
+		engineRedisURL        string
 		printJSON             bool
 		duration              time.Duration
 		readinessTimeout      time.Duration
@@ -63,10 +66,20 @@ hosted tunnel control plane or a separate control-plane process.`,
 			if len(args) != 0 {
 				return fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 			}
+			if listenUnixSocket != "" {
+				if cmd.Flags().Changed("listen") {
+					return errors.New("--listen and --listen-unix-socket are mutually exclusive")
+				}
+				listenAddr = ""
+			}
+			if engineRedisURL == "" {
+				engineRedisURL = os.Getenv("TUNNEL_ENGINE_REDIS_URL")
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			proxy, err := localproxy.Start(ctx, localproxy.Options{
 				ListenAddr:            listenAddr,
+				ListenUnixSocket:      listenUnixSocket,
 				TunnelID:              tunnelID,
 				MCPServerURLs:         mcpServerURLs,
 				MCPCommands:           mcpCommands,
@@ -77,6 +90,8 @@ hosted tunnel control plane or a separate control-plane process.`,
 				HealthURLFile:         healthURLFile,
 				URLFile:               urlFile,
 				Backend:               backend,
+				EngineQueueBackend:    engineQueueBackend,
+				EngineRedisURL:        engineRedisURL,
 				ResponseTimeout:       responseTimeout,
 				ClientLastSeenTimeout: clientLastSeenTimeout,
 				ReadinessTimeout:      readinessTimeout,
@@ -97,7 +112,12 @@ hosted tunnel control plane or a separate control-plane process.`,
 					return err
 				}
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP URL: %s\n", proxy.Info().MCPURL)
+				if proxy.Info().MCPTransport == "unix" {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP Unix socket: %s\n", proxy.Info().MCPUnixSocket)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP URL path: %s\n", proxy.Info().MCPURLPath)
+				} else {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP URL: %s\n", proxy.Info().MCPURL)
+				}
 			}
 
 			waitCtx := ctx
@@ -115,6 +135,7 @@ hosted tunnel control plane or a separate control-plane process.`,
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.Flags().StringVar(&listenAddr, "listen", localproxy.DefaultListenAddr, "Loopback address for local MCP ingress")
+	cmd.Flags().StringVar(&listenUnixSocket, "listen-unix-socket", "", "Unix socket path for local MCP ingress")
 	cmd.Flags().StringVar((*string)(&tunnelID), "tunnel-id", localproxy.DefaultTunnelID, "Tunnel id exposed by the local proxy")
 	cmd.Flags().StringArrayVar(&mcpServerURLs, "mcp-server-url", nil, "Target MCP server URL; repeat for channel bindings using url=...,channel=...")
 	cmd.Flags().StringArrayVar(&mcpCommands, "mcp-command", nil, "Command to launch a stdio MCP server; repeat for channel bindings using command=...,channel=...")
@@ -125,6 +146,8 @@ hosted tunnel control plane or a separate control-plane process.`,
 	cmd.Flags().StringVar(&healthURLFile, "health-url-file", "", "Write the tunnel-client health base URL to this file; enables an ephemeral health/admin listener when --health-listen-addr is omitted")
 	cmd.Flags().StringVar(&urlFile, "url-file", "", "Write the local proxy connection JSON to this file")
 	cmd.Flags().StringVar((*string)(&backend), "backend", string(localproxy.DefaultBackend), "Local proxy backend: auto, go, or rust")
+	cmd.Flags().StringVar((*string)(&engineQueueBackend), "engine-queue-backend", string(localproxy.DefaultQueueBackend), "Local proxy queue backend: inmem or redis")
+	cmd.Flags().StringVar(&engineRedisURL, "engine-redis-url", "", "Redis URL for --engine-queue-backend redis; defaults to TUNNEL_ENGINE_REDIS_URL")
 	cmd.Flags().BoolVar(&printJSON, "print-json", false, "Print local proxy connection JSON after readiness")
 	cmd.Flags().DurationVar(&duration, "duration", 0, "Run for a bounded duration, then exit")
 	cmd.Flags().DurationVar(&readinessTimeout, "readiness-timeout", localproxy.DefaultReadinessTimeout, "Maximum time to wait for tunnel-client and MCP readiness")

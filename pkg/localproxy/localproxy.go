@@ -37,12 +37,21 @@ const (
 	BackendGo   BackendName = "go"
 )
 
+// QueueBackendName selects the queue implementation used by a local proxy backend.
+type QueueBackendName string
+
+const (
+	QueueBackendInMemory QueueBackendName = "inmem"
+	QueueBackendRedis    QueueBackendName = "redis"
+)
+
 const (
 	DefaultListenAddr                = "127.0.0.1:0"
 	DefaultHealthListenAddr          = ""
 	DefaultEnabledHealthListenAddr   = "127.0.0.1:0"
 	DefaultTunnelID                  = "tunnel_22222222222222222222222222222222"
 	DefaultBackend                   = BackendAuto
+	DefaultQueueBackend              = QueueBackendInMemory
 	DefaultReadinessTimeout          = 10 * time.Second
 	DefaultResponseTimeout           = 30 * time.Second
 	DefaultClientLastSeenTimeout     = 20 * time.Second
@@ -84,13 +93,14 @@ var blockedRequestMCPHeaders = map[string]struct{}{
 
 // Options configures a local control plane plus in-process tunnel-client runtime.
 type Options struct {
-	ListenAddr    string
-	TunnelID      types.TunnelID
-	MCPServerURLs []string
-	MCPCommands   []string
-	Profile       string
-	ProfileFile   string
-	ProfileDir    string
+	ListenAddr       string
+	ListenUnixSocket string
+	TunnelID         types.TunnelID
+	MCPServerURLs    []string
+	MCPCommands      []string
+	Profile          string
+	ProfileFile      string
+	ProfileDir       string
 	// HealthListenAddr optionally starts the embedded tunnel-client health/admin
 	// listener. Empty means no health/admin listener.
 	HealthListenAddr string
@@ -100,6 +110,12 @@ type Options struct {
 	URLFile       string
 	// Backend selects the local proxy backend. Empty defaults to auto.
 	Backend BackendName
+	// EngineQueueBackend selects the queue implementation used by the backend.
+	// Empty defaults to inmem. Redis is supported only by linked Rust backends.
+	EngineQueueBackend QueueBackendName
+	// EngineRedisURL configures the Rust Redis queue backend. The CLI fills this
+	// from --engine-redis-url or TUNNEL_ENGINE_REDIS_URL.
+	EngineRedisURL string
 	// BackendFactories registers optional per-call backends linked into this
 	// binary. Process-wide linked backends can also be registered with
 	// RegisterBackendFactory.
@@ -120,6 +136,9 @@ type Options struct {
 type Info struct {
 	TunnelID               string `json:"tunnel_id"`
 	MCPURL                 string `json:"mcp_url"`
+	MCPTransport           string `json:"mcp_transport"`
+	MCPUnixSocket          string `json:"mcp_unix_socket,omitempty"`
+	MCPURLPath             string `json:"mcp_url_path,omitempty"`
 	ControlPlaneBaseURL    string `json:"control_plane_base_url"`
 	ControlPlaneTransport  string `json:"control_plane_transport"`
 	ControlPlaneUnixSocket string `json:"control_plane_unix_socket,omitempty"`
@@ -139,9 +158,12 @@ type Proxy struct {
 // BackendOptions configures a local proxy backend.
 type BackendOptions struct {
 	ListenAddr             string
+	ListenUnixSocket       string
 	ControlPlaneUnixSocket string
 	TunnelID               types.TunnelID
 	APIKey                 string
+	EngineQueueBackend     QueueBackendName
+	EngineRedisURL         string
 	ResponseTimeout        time.Duration
 	ClientLastSeenTimeout  time.Duration
 	ReadinessTimeout       time.Duration
@@ -175,6 +197,7 @@ type Backend interface {
 	Name() BackendName
 	InfoBackend() string
 	IngressBaseURL() *url.URL
+	IngressUnixSocket() string
 	ControlPlaneBaseURL() *url.URL
 	ControlPlaneUnixSocket() string
 	WaitForTunnelClient(context.Context, time.Duration, types.TunnelID) error
@@ -192,7 +215,7 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 		return nil, err
 	}
 
-	backendFactory, err := resolveBackendFactory(opts.Backend, linkedBackendFactories(opts.BackendFactories))
+	backendFactory, err := resolveBackendFactory(opts.Backend, opts.EngineQueueBackend, linkedBackendFactories(opts.BackendFactories))
 	if err != nil {
 		return nil, err
 	}
@@ -200,9 +223,12 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 	controlPlaneUnixSocket, cleanupControlPlane := prepareControlPlaneUnixSocket()
 	backend, err := backendFactory.StartBackend(ctx, BackendOptions{
 		ListenAddr:             opts.ListenAddr,
+		ListenUnixSocket:       opts.ListenUnixSocket,
 		ControlPlaneUnixSocket: controlPlaneUnixSocket,
 		TunnelID:               opts.TunnelID,
 		APIKey:                 localControlPlaneAPIKey,
+		EngineQueueBackend:     opts.EngineQueueBackend,
+		EngineRedisURL:         opts.EngineRedisURL,
 		ResponseTimeout:        opts.ResponseTimeout,
 		ClientLastSeenTimeout:  opts.ClientLastSeenTimeout,
 		ReadinessTimeout:       opts.ReadinessTimeout,
@@ -216,8 +242,11 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 		_, _ = fmt.Fprintf(opts.Stderr, "warning: local proxy %s backend unix control-plane listener unavailable; falling back to TCP: %v\n", backendFactory.Name(), err)
 		backend, err = backendFactory.StartBackend(ctx, BackendOptions{
 			ListenAddr:            opts.ListenAddr,
+			ListenUnixSocket:      opts.ListenUnixSocket,
 			TunnelID:              opts.TunnelID,
 			APIKey:                localControlPlaneAPIKey,
+			EngineQueueBackend:    opts.EngineQueueBackend,
+			EngineRedisURL:        opts.EngineRedisURL,
 			ResponseTimeout:       opts.ResponseTimeout,
 			ClientLastSeenTimeout: opts.ClientLastSeenTimeout,
 			ReadinessTimeout:      opts.ReadinessTimeout,
@@ -279,9 +308,22 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 	if backend.ControlPlaneUnixSocket() != "" {
 		controlPlaneTransport = "unix"
 	}
+	mcpPath := "/v1/mcp/" + opts.TunnelID.String()
+	mcpTransport := "tcp"
+	mcpURL := ""
+	mcpUnixSocket := backend.IngressUnixSocket()
+	if mcpUnixSocket != "" {
+		mcpTransport = "unix"
+	} else {
+		mcpURL = backend.IngressBaseURL().JoinPath("v1", "mcp", opts.TunnelID.String()).String()
+		mcpPath = ""
+	}
 	proxy.info = Info{
 		TunnelID:               opts.TunnelID.String(),
-		MCPURL:                 backend.IngressBaseURL().JoinPath("v1", "mcp", opts.TunnelID.String()).String(),
+		MCPURL:                 mcpURL,
+		MCPTransport:           mcpTransport,
+		MCPUnixSocket:          mcpUnixSocket,
+		MCPURLPath:             mcpPath,
 		ControlPlaneBaseURL:    backend.ControlPlaneBaseURL().String(),
 		ControlPlaneTransport:  controlPlaneTransport,
 		ControlPlaneUnixSocket: backend.ControlPlaneUnixSocket(),
@@ -353,11 +395,14 @@ func (p *Proxy) Wait(ctx context.Context) error {
 }
 
 func applyDefaults(opts Options) Options {
-	if opts.ListenAddr == "" {
+	if opts.ListenAddr == "" && opts.ListenUnixSocket == "" {
 		opts.ListenAddr = DefaultListenAddr
 	}
 	if opts.Backend == "" {
 		opts.Backend = DefaultBackend
+	}
+	if opts.EngineQueueBackend == "" {
+		opts.EngineQueueBackend = DefaultQueueBackend
 	}
 	if opts.TunnelID == "" {
 		opts.TunnelID = DefaultTunnelID
@@ -393,6 +438,9 @@ func applyDefaults(opts Options) Options {
 }
 
 func validateOptions(opts Options) error {
+	if opts.ListenAddr != "" && opts.ListenUnixSocket != "" {
+		return errors.New("--listen and --listen-unix-socket are mutually exclusive")
+	}
 	if err := config.ValidateTunnelID(opts.TunnelID.String()); err != nil {
 		return err
 	}
@@ -413,11 +461,29 @@ func validateOptions(opts Options) error {
 	if opts.ReadinessTimeout <= 0 {
 		return errors.New("readiness timeout must be positive")
 	}
+	switch opts.EngineQueueBackend {
+	case QueueBackendInMemory, QueueBackendRedis:
+	default:
+		return fmt.Errorf("unknown engine queue backend %q (supported: inmem, redis)", opts.EngineQueueBackend)
+	}
 	return nil
 }
 
-func resolveBackendFactory(backend BackendName, factories []BackendFactory) (BackendFactory, error) {
+func resolveBackendFactory(backend BackendName, queueBackend QueueBackendName, factories []BackendFactory) (BackendFactory, error) {
 	allFactories := append([]BackendFactory{goBackendFactory{}}, factories...)
+	if queueBackend == QueueBackendRedis {
+		switch backend {
+		case BackendAuto, BackendRust:
+			if factory := findBackendFactory(allFactories, BackendRust); factory != nil {
+				return factory, nil
+			}
+			return nil, errors.New("redis engine queue backend requires the rust local proxy backend, but rust is unavailable in this build")
+		case BackendGo:
+			return nil, errors.New("go local proxy backend does not support redis engine queue backend")
+		default:
+			return nil, fmt.Errorf("unknown local proxy backend %q (supported: auto, rust, go)", backend)
+		}
+	}
 	switch backend {
 	case BackendAuto:
 		if factory := findBackendFactory(allFactories, BackendRust); factory != nil {
@@ -551,11 +617,13 @@ func waitForMCPProbe(ctx context.Context, timeout time.Duration, probeState *mcp
 	if err := probeState.WaitUntilDone(waitCtx); err != nil {
 		return fmt.Errorf("wait for MCP probe: %w", err)
 	}
-	if _, err, ok := probeState.Wait(time.Millisecond); !ok {
+	if _, _, ok := probeState.Wait(time.Millisecond); !ok {
 		return errors.New("MCP probe did not publish status")
-	} else if err != nil {
-		return fmt.Errorf("MCP probe failed: %w", err)
 	}
+	// OAuth-protected MCP servers reject the anonymous startup initialize
+	// request. The proxy can still front them once a caller supplies OAuth
+	// credentials, so completion of the probe attempt is the readiness gate;
+	// its application-level result remains visible through runtime status.
 	return nil
 }
 
@@ -581,8 +649,12 @@ func (goBackendFactory) Name() BackendName {
 }
 
 func (goBackendFactory) StartBackend(_ context.Context, opts BackendOptions) (Backend, error) {
+	if opts.EngineQueueBackend != QueueBackendInMemory {
+		return nil, fmt.Errorf("go local proxy backend does not support %s engine queue backend", opts.EngineQueueBackend)
+	}
 	server, err := startLocalServer(localServerOptions{
 		ListenAddr:             opts.ListenAddr,
+		ListenUnixSocket:       opts.ListenUnixSocket,
 		ControlPlaneUnixSocket: opts.ControlPlaneUnixSocket,
 		TunnelID:               opts.TunnelID,
 		APIKey:                 opts.APIKey,
@@ -616,6 +688,13 @@ func (b *goBackend) IngressBaseURL() *url.URL {
 		return nil
 	}
 	return b.server.IngressBaseURL()
+}
+
+func (b *goBackend) IngressUnixSocket() string {
+	if b == nil || b.server == nil {
+		return ""
+	}
+	return b.server.IngressUnixSocket()
 }
 
 func (b *goBackend) ControlPlaneBaseURL() *url.URL {
@@ -655,6 +734,7 @@ func (b *goBackend) Stop(ctx context.Context) error {
 
 type localServerOptions struct {
 	ListenAddr             string
+	ListenUnixSocket       string
 	ControlPlaneUnixSocket string
 	TunnelID               types.TunnelID
 	APIKey                 string
@@ -668,9 +748,11 @@ type localServer struct {
 	responseTimeout       time.Duration
 	clientLastSeenTimeout time.Duration
 	ingressBaseURL        *url.URL
+	ingressUnixSocket     string
 	controlPlaneBaseURL   *url.URL
 	ingressServer         *http.Server
 	controlPlaneServer    *http.Server
+	tcpFallbackServer     *http.Server
 	ingressListener       net.Listener
 	controlPlaneListener  net.Listener
 	errCh                 chan error
@@ -696,8 +778,11 @@ type localResponse struct {
 }
 
 func startLocalServer(opts localServerOptions) (*localServer, error) {
-	if opts.ListenAddr == "" {
+	if opts.ListenAddr == "" && opts.ListenUnixSocket == "" {
 		opts.ListenAddr = DefaultListenAddr
+	}
+	if opts.ListenAddr != "" && opts.ListenUnixSocket != "" {
+		return nil, errors.New("--listen and --listen-unix-socket are mutually exclusive")
 	}
 	if opts.ResponseTimeout <= 0 {
 		opts.ResponseTimeout = DefaultResponseTimeout
@@ -705,24 +790,43 @@ func startLocalServer(opts localServerOptions) (*localServer, error) {
 	if opts.ClientLastSeenTimeout <= 0 {
 		opts.ClientLastSeenTimeout = DefaultClientLastSeenTimeout
 	}
-	listener, err := net.Listen("tcp", opts.ListenAddr)
+	tcpListenAddr := opts.ListenAddr
+	if tcpListenAddr == "" {
+		tcpListenAddr = DefaultListenAddr
+	}
+	tcpListener, err := net.Listen("tcp", tcpListenAddr)
 	if err != nil {
 		return nil, err
 	}
-	ingressURL := &url.URL{
+	tcpURL := &url.URL{
 		Scheme: "http",
-		Host:   listener.Addr().String(),
+		Host:   tcpListener.Addr().String(),
 	}
-	controlPlaneURL := ingressURL
+	ingressListener := net.Listener(tcpListener)
+	ingressURL := tcpURL
+	controlPlaneURL := tcpURL
+	if opts.ListenUnixSocket != "" {
+		if err := ensureUnixSocketParent(opts.ListenUnixSocket); err != nil {
+			_ = tcpListener.Close()
+			return nil, err
+		}
+		ingressListener, err = net.Listen("unix", opts.ListenUnixSocket)
+		if err != nil {
+			_ = tcpListener.Close()
+			return nil, fmt.Errorf("listen on external MCP unix socket %s: %w", opts.ListenUnixSocket, err)
+		}
+		ingressURL = &url.URL{Scheme: "http", Host: "tunnel-client-local-proxy"}
+	}
 	server := &localServer{
 		tunnelID:              opts.TunnelID,
 		apiKey:                opts.APIKey,
 		responseTimeout:       opts.ResponseTimeout,
 		clientLastSeenTimeout: opts.ClientLastSeenTimeout,
 		ingressBaseURL:        ingressURL,
+		ingressUnixSocket:     opts.ListenUnixSocket,
 		controlPlaneBaseURL:   controlPlaneURL,
-		ingressListener:       listener,
-		errCh:                 make(chan error, 2),
+		ingressListener:       ingressListener,
+		errCh:                 make(chan error, 3),
 		stateCh:               make(chan struct{}),
 		inFlight:              make(map[string]*localRequest),
 	}
@@ -732,11 +836,21 @@ func startLocalServer(opts localServerOptions) (*localServer, error) {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if opts.ListenUnixSocket != "" {
+		server.tcpFallbackServer = &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+	}
 
 	if opts.ControlPlaneUnixSocket != "" {
 		controlPlaneListener, err := net.Listen("unix", opts.ControlPlaneUnixSocket)
 		if err != nil {
-			_ = listener.Close()
+			_ = ingressListener.Close()
+			_ = tcpListener.Close()
+			if opts.ListenUnixSocket != "" {
+				_ = os.Remove(opts.ListenUnixSocket)
+			}
 			return nil, err
 		}
 		server.controlPlaneListener = controlPlaneListener
@@ -747,11 +861,25 @@ func startLocalServer(opts localServerOptions) (*localServer, error) {
 		}
 	}
 
-	server.serve(server.ingressServer, listener)
+	server.serve(server.ingressServer, ingressListener)
+	if server.tcpFallbackServer != nil {
+		server.serve(server.tcpFallbackServer, tcpListener)
+	}
 	if server.controlPlaneServer != nil && server.controlPlaneListener != nil {
 		server.serve(server.controlPlaneServer, server.controlPlaneListener)
 	}
 	return server, nil
+}
+
+func ensureUnixSocketParent(path string) error {
+	parent := filepath.Dir(path)
+	if parent == "." || parent == "" {
+		return nil
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create unix socket parent %s: %w", parent, err)
+	}
+	return nil
 }
 
 func (s *localServer) handler() http.Handler {
@@ -760,6 +888,7 @@ func (s *localServer) handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource/v1/mcp/", s.handleOAuthProtectedResource)
 	mux.HandleFunc("/v1/tunnels/", s.handleTunnel)
 	mux.HandleFunc("/v1/mcp/", s.handleMCP)
 	return mux
@@ -782,6 +911,13 @@ func (s *localServer) IngressBaseURL() *url.URL {
 	}
 	copyURL := *s.ingressBaseURL
 	return &copyURL
+}
+
+func (s *localServer) IngressUnixSocket() string {
+	if s == nil {
+		return ""
+	}
+	return s.ingressUnixSocket
 }
 
 func (s *localServer) ControlPlaneBaseURL() *url.URL {
@@ -809,6 +945,16 @@ func (s *localServer) Stop(ctx context.Context) error {
 		if s.controlPlaneServer != nil {
 			if err := s.controlPlaneServer.Shutdown(ctx); err != nil {
 				stopErr = errors.Join(stopErr, err)
+			}
+		}
+		if s.tcpFallbackServer != nil {
+			if err := s.tcpFallbackServer.Shutdown(ctx); err != nil {
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+		if s.ingressUnixSocket != "" {
+			if err := os.Remove(s.ingressUnixSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+				stopErr = errors.Join(stopErr, fmt.Errorf("remove external MCP unix socket: %w", err))
 			}
 		}
 	})
@@ -946,7 +1092,7 @@ func (s *localServer) handleResponse(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	request := s.inFlight[payload.RequestID]
-	if request != nil {
+	if request != nil && isFinalLocalResponse(payload) {
 		delete(s.inFlight, payload.RequestID)
 	}
 	s.signalStateChangeLocked()
@@ -956,9 +1102,27 @@ func (s *localServer) handleResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	select {
-	case request.responseCh <- localResponse{payload: payload}:
-	default:
+	response := localResponse{payload: payload}
+	if isFinalLocalResponse(payload) {
+		select {
+		case request.responseCh <- response:
+		default:
+			// Progress notifications are best-effort; preserve the terminal
+			// response by evicting one buffered notification if necessary.
+			select {
+			case <-request.responseCh:
+			default:
+			}
+			select {
+			case request.responseCh <- response:
+			default:
+			}
+		}
+	} else {
+		select {
+		case request.responseCh <- response:
+		default:
+		}
 	}
 	w.Header().Set("X-Request-Id", "local-response-"+payload.RequestID)
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -988,13 +1152,93 @@ func (s *localServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	timer := time.NewTimer(s.responseTimeout)
 	defer timer.Stop()
-	select {
-	case response := <-request.responseCh:
-		renderMCPResponse(w, response.payload)
-	case <-r.Context().Done():
+	for {
+		select {
+		case response := <-request.responseCh:
+			if acceptsEventStream(r.Header) &&
+				(!isFinalLocalResponse(response.payload) || responseUsesEventStream(response.payload.ResponseHeaders)) {
+				s.renderMCPEventStream(w, r, request, response.payload, timer.C)
+				return
+			}
+			if !isFinalLocalResponse(response.payload) {
+				continue
+			}
+			renderMCPResponse(w, response.payload, s.publicMCPURL(r))
+			return
+		case <-r.Context().Done():
+			return
+		case <-timer.C:
+			http.Error(w, "timed out waiting for tunnel-client response", http.StatusGatewayTimeout)
+			return
+		}
+	}
+}
+
+func (s *localServer) handleOAuthProtectedResource(w http.ResponseWriter, r *http.Request) {
+	tunnelID := strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource/v1/mcp/")
+	if r.Method != http.MethodGet || tunnelID == "" || strings.Contains(tunnelID, "/") || tunnelID != s.tunnelID.String() {
+		http.NotFound(w, r)
 		return
-	case <-timer.C:
-		http.Error(w, "timed out waiting for tunnel-client response", http.StatusGatewayTimeout)
+	}
+	request, err := s.enqueueOAuthDiscoveryRequest()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer s.cancelRequest(request.id)
+
+	timer := time.NewTimer(s.responseTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case response := <-request.responseCh:
+			if !isFinalLocalResponse(response.payload) {
+				continue
+			}
+			renderOAuthDiscoveryResponse(w, response.payload, s.publicMCPURL(r))
+			return
+		case <-r.Context().Done():
+			return
+		case <-timer.C:
+			http.Error(w, "timed out waiting for tunnel-client OAuth discovery response", http.StatusGatewayTimeout)
+			return
+		}
+	}
+}
+
+func (s *localServer) renderMCPEventStream(w http.ResponseWriter, r *http.Request, request *localRequest, first wiretypes.TunnelResponsePayload, timeout <-chan time.Time) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming is unavailable", http.StatusInternalServerError)
+		return
+	}
+	appendMCPResponseHeaders(w.Header(), first.ResponseHeaders, s.publicMCPURL(r))
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	if len(first.JSONResponse) > 0 {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", first.JSONResponse)
+	}
+	flusher.Flush()
+	if isFinalLocalResponse(first) {
+		return
+	}
+	for {
+		select {
+		case response := <-request.responseCh:
+			payload := response.payload
+			if len(payload.JSONResponse) > 0 {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", payload.JSONResponse)
+				flusher.Flush()
+			}
+			if isFinalLocalResponse(payload) {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		case <-timeout:
+			return
+		}
 	}
 }
 
@@ -1022,7 +1266,36 @@ func (s *localServer) enqueueMCPRequest(channel types.Channel, payload []byte, h
 		id:         requestID,
 		channel:    channel,
 		command:    command,
-		responseCh: make(chan localResponse, 1),
+		responseCh: make(chan localResponse, 16),
+	}
+	s.mu.Lock()
+	s.pending = append(s.pending, request)
+	s.signalStateChangeLocked()
+	s.mu.Unlock()
+	return request, nil
+}
+
+func (s *localServer) enqueueOAuthDiscoveryRequest() (*localRequest, error) {
+	requestID := "local-oauth-" + strconv.FormatUint(s.nextID.Add(1), 10)
+	raw := wiretypes.RawOauthDiscoveryPolledCommand{
+		BaseRawPolledCommand: wiretypes.BaseRawPolledCommand{
+			RequestID:   requestID,
+			ShardToken:  requestID,
+			CommandType: wiretypes.CommandTypeOAuthDiscovery,
+			Channel:     types.DefaultChannel.String(),
+			CreatedAt:   time.Now().UTC(),
+			Headers:     make(http.Header),
+		},
+	}
+	command, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	request := &localRequest{
+		id:         requestID,
+		channel:    types.DefaultChannel,
+		command:    command,
+		responseCh: make(chan localResponse, 16),
 	}
 	s.mu.Lock()
 	s.pending = append(s.pending, request)
@@ -1092,7 +1365,36 @@ func (s *localServer) signalStateChangeLocked() {
 	s.stateCh = make(chan struct{})
 }
 
-func renderMCPResponse(w http.ResponseWriter, payload wiretypes.TunnelResponsePayload) {
+func renderMCPResponse(w http.ResponseWriter, payload wiretypes.TunnelResponsePayload, publicMCPURL string) {
+	appendMCPResponseHeaders(w.Header(), payload.ResponseHeaders, publicMCPURL)
+	statusCode := payload.ResponseCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	if len(payload.JSONResponse) > 0 && w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(statusCode)
+	if len(payload.JSONResponse) > 0 {
+		_, _ = w.Write(payload.JSONResponse)
+	}
+}
+
+func appendMCPResponseHeaders(headers http.Header, responseHeaders http.Header, publicMCPURL string) {
+	for name, values := range responseHeaders {
+		if shouldSkipResponseHeader(name) {
+			continue
+		}
+		for _, value := range values {
+			if strings.EqualFold(name, "WWW-Authenticate") {
+				value = rewriteResourceMetadata(value, publicMCPURL)
+			}
+			headers.Add(name, value)
+		}
+	}
+}
+
+func renderOAuthDiscoveryResponse(w http.ResponseWriter, payload wiretypes.TunnelResponsePayload, publicMCPURL string) {
 	for name, values := range payload.ResponseHeaders {
 		if shouldSkipResponseHeader(name) {
 			continue
@@ -1105,13 +1407,97 @@ func renderMCPResponse(w http.ResponseWriter, payload wiretypes.TunnelResponsePa
 	if statusCode == 0 {
 		statusCode = http.StatusOK
 	}
-	if len(payload.JSONResponse) > 0 && w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", "application/json")
-	}
-	w.WriteHeader(statusCode)
+	var body map[string]any
 	if len(payload.JSONResponse) > 0 {
-		_, _ = w.Write(payload.JSONResponse)
+		if err := json.Unmarshal(payload.JSONResponse, &body); err != nil {
+			http.Error(w, "invalid OAuth discovery response", http.StatusBadGateway)
+			return
+		}
 	}
+	if body == nil {
+		body = make(map[string]any)
+	}
+	body["resource"] = publicMCPURL
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func (s *localServer) publicMCPURL(r *http.Request) string {
+	host := r.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return (&url.URL{
+		Scheme: "http",
+		Host:   host,
+		Path:   "/v1/mcp/" + s.tunnelID.String(),
+	}).String()
+}
+
+func rewriteResourceMetadata(value string, publicMCPURL string) string {
+	parsed, err := url.Parse(publicMCPURL)
+	if err != nil {
+		return value
+	}
+	tunnelID := strings.TrimPrefix(parsed.Path, "/v1/mcp/")
+	if tunnelID == "" || strings.Contains(tunnelID, "/") {
+		return value
+	}
+	parsed.Path = "/.well-known/oauth-protected-resource/v1/mcp/" + tunnelID
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	resourceMetadataURL := parsed.String()
+	for _, quote := range []string{"\"", ""} {
+		prefix := "resource_metadata=" + quote
+		start := strings.Index(value, prefix)
+		if start == -1 {
+			continue
+		}
+		valueStart := start + len(prefix)
+		valueEnd := len(value)
+		if quote != "" {
+			if end := strings.Index(value[valueStart:], quote); end >= 0 {
+				valueEnd = valueStart + end
+			}
+		} else {
+			if end := strings.IndexAny(value[valueStart:], ", "); end >= 0 {
+				valueEnd = valueStart + end
+			}
+		}
+		return value[:valueStart] + resourceMetadataURL + value[valueEnd:]
+	}
+	return value
+}
+
+func acceptsEventStream(headers http.Header) bool {
+	for _, value := range headers.Values("Accept") {
+		for _, mediaType := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(strings.SplitN(mediaType, ";", 2)[0]), "text/event-stream") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func responseUsesEventStream(headers http.Header) bool {
+	for name, values := range headers {
+		if !strings.EqualFold(name, "Content-Type") {
+			continue
+		}
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]), "text/event-stream") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isFinalLocalResponse(payload wiretypes.TunnelResponsePayload) bool {
+	return payload.ResponseType != wiretypes.ResponsePayloadJSONRPCNotify
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {

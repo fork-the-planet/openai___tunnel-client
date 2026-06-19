@@ -4,6 +4,13 @@ set -euo pipefail
 
 client_path=""
 profile_file=""
+dev_proxy=false
+dev_proxy_backend=""
+dev_proxy_queue_backend=""
+dev_proxy_listen=""
+dev_proxy_listen_unix_socket=""
+dev_proxy_url_file=""
+dev_proxy_health_url_file=""
 declare -a client_args=()
 declare -a runfile_env=()
 
@@ -50,6 +57,34 @@ while (($# > 0)); do
       runfile_env+=("$2")
       shift 2
       ;;
+    --dev-proxy)
+      dev_proxy=true
+      shift
+      ;;
+    --dev-proxy-backend)
+      dev_proxy_backend="$2"
+      shift 2
+      ;;
+    --dev-proxy-queue-backend)
+      dev_proxy_queue_backend="$2"
+      shift 2
+      ;;
+    --dev-proxy-listen-unix-socket)
+      dev_proxy_listen_unix_socket="$2"
+      shift 2
+      ;;
+    --dev-proxy-listen)
+      dev_proxy_listen="$2"
+      shift 2
+      ;;
+    --dev-proxy-url-file)
+      dev_proxy_url_file="$2"
+      shift 2
+      ;;
+    --dev-proxy-health-url-file)
+      dev_proxy_health_url_file="$2"
+      shift 2
+      ;;
     --)
       shift
       client_args=("$@")
@@ -82,11 +117,40 @@ fi
 resolved_client_path="$(resolve_runfile_path "$client_path")"
 resolved_profile_path="$(resolve_runfile_path "$profile_file")"
 
-command=(
-  "$resolved_client_path"
-  run
-  "--profile-file=$resolved_profile_path"
-)
+if [[ "$dev_proxy" == "true" ]]; then
+  if [[ -z "$dev_proxy_backend" || -z "$dev_proxy_queue_backend" || -z "$dev_proxy_url_file" ]]; then
+    printf 'Dev proxy mode requires backend, queue backend, and URL file\n' >&2
+    exit 1
+  fi
+  if [[ -n "$dev_proxy_listen" && -n "$dev_proxy_listen_unix_socket" ]] || [[ -z "$dev_proxy_listen" && -z "$dev_proxy_listen_unix_socket" ]]; then
+    printf 'Dev proxy mode requires exactly one of TCP listen address or Unix listen socket\n' >&2
+    exit 1
+  fi
+  command=(
+    "$resolved_client_path"
+    dev
+    proxy
+    "--profile-file=$resolved_profile_path"
+    "--backend=$dev_proxy_backend"
+    "--engine-queue-backend=$dev_proxy_queue_backend"
+    "--url-file=$dev_proxy_url_file"
+    "--print-json"
+  )
+  if [[ -n "$dev_proxy_listen" ]]; then
+    command+=("--listen=$dev_proxy_listen")
+  else
+    command+=("--listen-unix-socket=$dev_proxy_listen_unix_socket")
+  fi
+  if [[ -n "$dev_proxy_health_url_file" ]]; then
+    command+=("--health-url-file=$dev_proxy_health_url_file")
+  fi
+else
+  command=(
+    "$resolved_client_path"
+    run
+    "--profile-file=$resolved_profile_path"
+  )
+fi
 
 if ((${#client_args[@]} > 0)); then
   command+=("${client_args[@]}")

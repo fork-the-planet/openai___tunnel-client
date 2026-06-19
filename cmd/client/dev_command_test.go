@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,35 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDevProxyFlagsExposeQueueBackendAndUnixIngress(t *testing.T) {
+	cmd := newDevProxyCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	require.Equal(t, "127.0.0.1:0", cmd.Flags().Lookup("listen").DefValue)
+	require.Equal(t, "", cmd.Flags().Lookup("listen-unix-socket").DefValue)
+	require.Equal(t, "inmem", cmd.Flags().Lookup("engine-queue-backend").DefValue)
+	require.NotNil(t, cmd.Flags().Lookup("engine-redis-url"))
+}
+
+func TestDevProxyRejectsMutuallyExclusiveIngressFlags(t *testing.T) {
+	cmd := newDevProxyCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--listen", "127.0.0.1:0",
+		"--listen-unix-socket", t.TempDir() + "/mcp.sock",
+		"--mcp-server-url", "http://127.0.0.1:1/mcp",
+	})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, "--listen and --listen-unix-socket are mutually exclusive")
+}
+
+func TestDevProxyRejectsUnknownQueueBackend(t *testing.T) {
+	cmd := newDevProxyCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--engine-queue-backend", "disk",
+		"--mcp-server-url", "http://127.0.0.1:1/mcp",
+	})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, `unknown engine queue backend "disk"`)
+}
 
 func TestDevMCPStubMetadataEndpoints(t *testing.T) {
 	t.Parallel()

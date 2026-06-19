@@ -158,6 +158,15 @@ def _post_jsonrpc(
             raise RuntimeError(f"JSON-RPC request failed with HTTP {response.status}: {body!r}")
         if not body:
             return {}, response.headers
+        if response.headers.get_content_type() == "text/event-stream":
+            event_data = [
+                line.removeprefix(b"data:").strip()
+                for line in body.splitlines()
+                if line.startswith(b"data:")
+            ]
+            if not event_data:
+                raise RuntimeError(f"SSE JSON-RPC response missing data event: {body!r}")
+            body = event_data[-1]
         decoded = json.loads(body)
         if not isinstance(decoded, Mapping):
             raise RuntimeError(f"JSON-RPC response must be an object: {decoded!r}")

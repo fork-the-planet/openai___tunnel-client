@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -16,6 +18,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
+	"go.openai.org/api/tunnel-client/pkg/mcpclient"
+	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/testsupport/mockmcpserver"
 )
 
@@ -47,6 +52,10 @@ func TestStartFrontsHTTPMCPServerWithoutHealthListener(t *testing.T) {
 	info := proxy.Info()
 	require.Empty(t, info.HealthURL)
 	require.Equal(t, "go-in-memory", info.Backend)
+	require.Equal(t, "tcp", info.MCPTransport)
+	require.NotEmpty(t, info.MCPURL)
+	require.Empty(t, info.MCPUnixSocket)
+	require.Empty(t, info.MCPURLPath)
 	if runtime.GOOS == "windows" {
 		require.Equal(t, "tcp", info.ControlPlaneTransport)
 		require.Empty(t, info.ControlPlaneUnixSocket)
@@ -63,6 +72,65 @@ func TestStartFrontsHTTPMCPServerWithoutHealthListener(t *testing.T) {
 	recorded := mcpServer.ReceivedRequests()
 	require.Len(t, recorded, 1)
 	require.Equal(t, "echo", recorded[0].Tool)
+}
+
+func TestStartFrontsHTTPMCPServerOverUnixIngress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are unavailable on Windows")
+	}
+	mcpServer := mockmcpserver.NewMockMCPServer(
+		mockmcpserver.WithToolListChangedNotificationsDisabled(),
+		mockmcpserver.WithCalls(mockmcpserver.Call{
+			Tool:   "echo",
+			Result: json.RawMessage(`{"message":"unix ingress"}`),
+		}),
+	)
+	mcpServer.Start(t)
+
+	socketPath := shortUnixSocketPath(t)
+	proxy, err := Start(context.Background(), Options{
+		ListenUnixSocket: socketPath,
+		MCPServerURLs:    []string{mcpServer.BaseURL().String()},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, proxy.Stop(context.Background()))
+	})
+
+	info := proxy.Info()
+	require.Equal(t, "go-in-memory", info.Backend)
+	require.Equal(t, "unix", info.MCPTransport)
+	require.Empty(t, info.MCPURL)
+	require.Equal(t, socketPath, info.MCPUnixSocket)
+	require.Equal(t, "/v1/mcp/"+info.TunnelID, info.MCPURLPath)
+
+	client := unixHTTPClient(socketPath)
+	mcpURL := "http://local-proxy" + info.MCPURLPath
+	sessionID := postInitializeWithClient(t, client, mcpURL, nil)
+	postInitializedNotificationWithClient(t, client, mcpURL, sessionID)
+	response := postToolCallWithClient(t, client, mcpURL, sessionID, nil)
+	require.Equal(t, "unix ingress", response.Result.StructuredContent["message"])
+
+	require.NoError(t, proxy.Stop(context.Background()))
+	_, err = os.Stat(socketPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestStartRejectsOccupiedUnixIngressPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are unavailable on Windows")
+	}
+	mcpServer := mockmcpserver.NewMockMCPServer(mockmcpserver.WithToolListChangedNotificationsDisabled())
+	mcpServer.Start(t)
+
+	socketPath := shortUnixSocketPath(t)
+	require.NoError(t, os.WriteFile(socketPath, []byte("occupied"), 0o600))
+
+	_, err := Start(context.Background(), Options{
+		ListenUnixSocket: socketPath,
+		MCPServerURLs:    []string{mcpServer.BaseURL().String()},
+	})
+	require.ErrorContains(t, err, "listen on external MCP unix socket")
 }
 
 func TestStartFrontsStdioMCPServer(t *testing.T) {
@@ -124,6 +192,144 @@ func TestStartSupportsChannelRouteAndHeaderFiltering(t *testing.T) {
 	require.Len(t, recorded, 1)
 	require.Equal(t, "Bearer connector-user-token", recorded[0].Headers.Get("Authorization"))
 	require.Empty(t, recorded[0].Headers.Get("Cookie"))
+}
+
+func TestStartStreamsMultipleProgressNotificationsBeforeFinalResponse(t *testing.T) {
+	mcpServer := mockmcpserver.NewMockMCPServer(
+		mockmcpserver.WithToolListChangedNotificationsDisabled(),
+		mockmcpserver.WithCalls(mockmcpserver.Call{
+			Tool: "echo",
+			Progress: []mockmcpserver.ProgressUpdate{
+				{Percentage: 25, Message: "quarter"},
+				{Percentage: 75, Message: "three quarters"},
+			},
+			Result: json.RawMessage(`{"message":"done"}`),
+		}),
+	)
+	mcpServer.Start(t)
+
+	proxy, err := Start(context.Background(), Options{
+		MCPServerURLs: []string{mcpServer.BaseURL().String()},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, proxy.Stop(context.Background()))
+	})
+
+	sessionID := postInitialize(t, proxy.Info().MCPURL, nil)
+	postInitializedNotification(t, proxy.Info().MCPURL, sessionID)
+	received := postJSONRPCWithClient(t, http.DefaultClient, proxy.Info().MCPURL, sessionHeaders(sessionID), `{
+		"jsonrpc":"2.0",
+		"id":"tool-progress",
+		"method":"tools/call",
+		"params":{"name":"echo","arguments":{"name":"Ada"}}
+	}`)
+
+	require.Equal(t, "text/event-stream", received.headers.Get("Content-Type"))
+	events := jsonRPCEventBodies(received.body)
+	require.Len(t, events, 3, string(received.body))
+	for _, event := range events[:2] {
+		var notification struct {
+			Method string `json:"method"`
+		}
+		require.NoError(t, json.Unmarshal(event, &notification), string(event))
+		require.Equal(t, "notifications/progress", notification.Method)
+	}
+	var final toolCallResponse
+	require.NoError(t, json.Unmarshal(events[2], &final), string(events[2]))
+	require.Equal(t, "done", final.Result.StructuredContent["message"])
+}
+
+func TestHandleMCPBuffersProgressUntilFinalJSONForNonSSEClient(t *testing.T) {
+	server := &localServer{
+		tunnelID:        types.TunnelID("tunnel_jsonfallbackaaaaaaaaaaaaaaaaaa"),
+		responseTimeout: time.Second,
+		stateCh:         make(chan struct{}),
+		inFlight:        make(map[string]*localRequest),
+	}
+	stateChanged := server.stateCh
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mcp/"+server.tunnelID.String(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":"tool-json","method":"tools/call"}`),
+	)
+	request.Header.Set("Accept", "application/json")
+	done := make(chan struct{})
+	go func() {
+		server.handleMCP(recorder, request)
+		close(done)
+	}()
+	<-stateChanged
+
+	server.mu.Lock()
+	var pending *localRequest
+	if len(server.pending) == 1 {
+		pending = server.pending[0]
+	}
+	server.mu.Unlock()
+	require.NotNil(t, pending)
+	pending.responseCh <- localResponse{payload: wiretypes.TunnelResponsePayload{
+		RequestID:    pending.id,
+		JSONResponse: json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}`),
+		ResponseType: wiretypes.ResponsePayloadJSONRPCNotify,
+	}}
+	pending.responseCh <- localResponse{payload: wiretypes.TunnelResponsePayload{
+		RequestID:    pending.id,
+		JSONResponse: json.RawMessage(`{"jsonrpc":"2.0","id":"tool-json","result":{"structuredContent":{"message":"done"}}}`),
+		ResponseCode: http.StatusOK,
+		ResponseType: wiretypes.ResponsePayloadJSONRPC,
+	}}
+	<-done
+
+	require.NotEqual(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	var final toolCallResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &final), recorder.Body.String())
+	require.Equal(t, "done", final.Result.StructuredContent["message"])
+}
+
+func TestHandleResponsePreservesFinalWhenNotificationBufferIsFull(t *testing.T) {
+	request := &localRequest{
+		id:         "local-1",
+		responseCh: make(chan localResponse, 1),
+	}
+	request.responseCh <- localResponse{payload: wiretypes.TunnelResponsePayload{
+		RequestID:    request.id,
+		JSONResponse: json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/progress"}`),
+		ResponseType: wiretypes.ResponsePayloadJSONRPCNotify,
+	}}
+	server := &localServer{
+		stateCh:  make(chan struct{}),
+		inFlight: map[string]*localRequest{request.id: request},
+	}
+	final := wiretypes.TunnelResponsePayload{
+		RequestID:    request.id,
+		JSONResponse: json.RawMessage(`{"jsonrpc":"2.0","id":"tool-1","result":{"ok":true}}`),
+		ResponseType: wiretypes.ResponsePayloadJSONRPC,
+	}
+	body, err := json.Marshal(final)
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	server.handleResponse(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/tunnels/local/response", bytes.NewReader(body)),
+	)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	select {
+	case response := <-request.responseCh:
+		require.Equal(t, wiretypes.ResponsePayloadJSONRPC, response.payload.ResponseType)
+	default:
+		t.Fatal("terminal response was dropped")
+	}
+	require.Empty(t, server.inFlight)
+}
+
+func TestWaitForMCPProbeAllowsOAuthRequiredProbeError(t *testing.T) {
+	probeState := mcpclient.NewProbeState()
+	probeState.Set(errors.New("401 unauthorized"))
+
+	require.NoError(t, waitForMCPProbe(context.Background(), time.Second, probeState))
 }
 
 func TestStartWritesProxyInfoFile(t *testing.T) {
@@ -191,13 +397,13 @@ func TestStartRejectsUnavailableRustBackend(t *testing.T) {
 }
 
 func TestResolveBackendAutoFallsBackToGo(t *testing.T) {
-	factory, err := resolveBackendFactory(BackendAuto, nil)
+	factory, err := resolveBackendFactory(BackendAuto, QueueBackendInMemory, nil)
 	require.NoError(t, err)
 	require.Equal(t, BackendGo, factory.Name())
 }
 
 func TestResolveBackendAutoPrefersRegisteredRust(t *testing.T) {
-	factory, err := resolveBackendFactory(BackendAuto, []BackendFactory{
+	factory, err := resolveBackendFactory(BackendAuto, QueueBackendInMemory, []BackendFactory{
 		fakeBackendFactory{name: BackendRust},
 	})
 	require.NoError(t, err)
@@ -205,13 +411,31 @@ func TestResolveBackendAutoPrefersRegisteredRust(t *testing.T) {
 }
 
 func TestResolveBackendRejectsUnavailableRust(t *testing.T) {
-	_, err := resolveBackendFactory(BackendRust, nil)
+	_, err := resolveBackendFactory(BackendRust, QueueBackendInMemory, nil)
 	require.ErrorContains(t, err, "rust local proxy backend is unavailable in this build")
 }
 
 func TestResolveBackendRejectsUnknownBackend(t *testing.T) {
-	_, err := resolveBackendFactory(BackendName("python"), nil)
+	_, err := resolveBackendFactory(BackendName("python"), QueueBackendInMemory, nil)
 	require.ErrorContains(t, err, `unknown local proxy backend "python"`)
+}
+
+func TestResolveRedisQueueRequiresRust(t *testing.T) {
+	_, err := resolveBackendFactory(BackendAuto, QueueBackendRedis, nil)
+	require.ErrorContains(t, err, "redis engine queue backend requires the rust local proxy backend")
+}
+
+func TestResolveRedisQueueRejectsGo(t *testing.T) {
+	_, err := resolveBackendFactory(BackendGo, QueueBackendRedis, nil)
+	require.ErrorContains(t, err, "go local proxy backend does not support redis engine queue backend")
+}
+
+func TestResolveRedisQueueUsesRegisteredRust(t *testing.T) {
+	factory, err := resolveBackendFactory(BackendAuto, QueueBackendRedis, []BackendFactory{
+		fakeBackendFactory{name: BackendRust},
+	})
+	require.NoError(t, err)
+	require.Equal(t, BackendRust, factory.Name())
 }
 
 type fakeBackendFactory struct {
@@ -234,14 +458,24 @@ type toolCallResponse struct {
 
 func postInitialize(t *testing.T, mcpURL string, extraHeaders http.Header) string {
 	t.Helper()
-	sessionID := postInitializeOptionalSession(t, mcpURL, extraHeaders)
+	return postInitializeWithClient(t, http.DefaultClient, mcpURL, extraHeaders)
+}
+
+func postInitializeWithClient(t *testing.T, client *http.Client, mcpURL string, extraHeaders http.Header) string {
+	t.Helper()
+	sessionID := postInitializeOptionalSessionWithClient(t, client, mcpURL, extraHeaders)
 	require.NotEmpty(t, sessionID, "initialize response missing Mcp-Session-Id")
 	return sessionID
 }
 
 func postInitializeOptionalSession(t *testing.T, mcpURL string, extraHeaders http.Header) string {
 	t.Helper()
-	received := postJSONRPC(t, mcpURL, extraHeaders, `{
+	return postInitializeOptionalSessionWithClient(t, http.DefaultClient, mcpURL, extraHeaders)
+}
+
+func postInitializeOptionalSessionWithClient(t *testing.T, client *http.Client, mcpURL string, extraHeaders http.Header) string {
+	t.Helper()
+	received := postJSONRPCWithClient(t, client, mcpURL, extraHeaders, `{
 		"jsonrpc":"2.0",
 		"id":"initialize-0",
 		"method":"initialize",
@@ -256,7 +490,12 @@ func postInitializeOptionalSession(t *testing.T, mcpURL string, extraHeaders htt
 
 func postInitializedNotification(t *testing.T, mcpURL string, sessionID string) {
 	t.Helper()
-	_ = postJSONRPC(t, mcpURL, sessionHeaders(sessionID), `{
+	postInitializedNotificationWithClient(t, http.DefaultClient, mcpURL, sessionID)
+}
+
+func postInitializedNotificationWithClient(t *testing.T, client *http.Client, mcpURL string, sessionID string) {
+	t.Helper()
+	_ = postJSONRPCWithClient(t, client, mcpURL, sessionHeaders(sessionID), `{
 		"jsonrpc":"2.0",
 		"method":"notifications/initialized",
 		"params":{}
@@ -265,6 +504,11 @@ func postInitializedNotification(t *testing.T, mcpURL string, sessionID string) 
 
 func postToolCall(t *testing.T, mcpURL string, sessionID string, extraHeaders http.Header) toolCallResponse {
 	t.Helper()
+	return postToolCallWithClient(t, http.DefaultClient, mcpURL, sessionID, extraHeaders)
+}
+
+func postToolCallWithClient(t *testing.T, client *http.Client, mcpURL string, sessionID string, extraHeaders http.Header) toolCallResponse {
+	t.Helper()
 	headers := sessionHeaders(sessionID)
 	for name, values := range extraHeaders {
 		headers.Del(name)
@@ -272,14 +516,14 @@ func postToolCall(t *testing.T, mcpURL string, sessionID string, extraHeaders ht
 			headers.Add(name, value)
 		}
 	}
-	received := postJSONRPC(t, mcpURL, headers, `{
+	received := postJSONRPCWithClient(t, client, mcpURL, headers, `{
 		"jsonrpc":"2.0",
 		"id":"tool-1",
 		"method":"tools/call",
 		"params":{"name":"echo","arguments":{"name":"Ada"}}
 	}`)
 	var decoded toolCallResponse
-	require.NoError(t, json.Unmarshal(received.body, &decoded), string(received.body))
+	require.NoError(t, json.Unmarshal(jsonRPCResponseBody(received.body), &decoded), string(received.body))
 	return decoded
 }
 
@@ -296,7 +540,7 @@ type jsonRPCIngressResponse struct {
 	headers http.Header
 }
 
-func postJSONRPC(t *testing.T, mcpURL string, extraHeaders http.Header, body string) jsonRPCIngressResponse {
+func postJSONRPCWithClient(t *testing.T, client *http.Client, mcpURL string, extraHeaders http.Header, body string) jsonRPCIngressResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -309,7 +553,7 @@ func postJSONRPC(t *testing.T, mcpURL string, extraHeaders http.Header, body str
 			req.Header.Add(name, value)
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() {
 		_ = resp.Body.Close()
@@ -319,4 +563,44 @@ func postJSONRPC(t *testing.T, mcpURL string, extraHeaders http.Header, body str
 	require.GreaterOrEqual(t, resp.StatusCode, 200, string(responseBody))
 	require.Less(t, resp.StatusCode, 300, string(responseBody))
 	return jsonRPCIngressResponse{body: responseBody, headers: resp.Header.Clone()}
+}
+
+func jsonRPCResponseBody(body []byte) []byte {
+	events := jsonRPCEventBodies(body)
+	if len(events) > 0 {
+		return events[len(events)-1]
+	}
+	return body
+}
+
+func jsonRPCEventBodies(body []byte) [][]byte {
+	var events [][]byte
+	lines := bytes.Split(body, []byte("\n"))
+	for _, rawLine := range lines {
+		line := bytes.TrimSpace(rawLine)
+		if payload, ok := bytes.CutPrefix(line, []byte("data: ")); ok {
+			events = append(events, payload)
+		}
+	}
+	return events
+}
+
+func unixHTTPClient(socketPath string) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "unix", socketPath)
+	}
+	return &http.Client{Transport: transport}
+}
+
+func shortUnixSocketPath(t *testing.T) string {
+	t.Helper()
+	file, err := os.CreateTemp("/tmp", "tc-mcp-*.sock")
+	require.NoError(t, err)
+	path := file.Name()
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Remove(path))
+	t.Cleanup(func() { _ = os.Remove(path) })
+	return path
 }
