@@ -438,6 +438,183 @@ func TestResolveRedisQueueUsesRegisteredRust(t *testing.T) {
 	require.Equal(t, BackendRust, factory.Name())
 }
 
+func TestLocalServerStopClosesActivePollCombinedTCP(t *testing.T) {
+	const tunnelID = "tunnel_22222222222222222222222222222222"
+	server, err := startLocalServer(localServerOptions{
+		TunnelID: tunnelID,
+		APIKey:   localControlPlaneAPIKey,
+	})
+	require.NoError(t, err)
+
+	pollCtx, cancelPoll := context.WithCancel(context.Background())
+	defer cancelPoll()
+	pollURL := server.ControlPlaneBaseURL().JoinPath("v1", "tunnels", tunnelID, "poll")
+	query := pollURL.Query()
+	query.Set("timeout_ms", "30000")
+	pollURL.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, pollURL.String(), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+localControlPlaneAPIKey)
+	pollResult := doHTTPRequest(req, http.DefaultClient)
+	require.NoError(t, server.WaitForPoll(context.Background(), time.Second))
+
+	requireStopCompletes(t, server, cancelPoll)
+	require.Error(t, <-pollResult, "active control-plane poll did not observe connection closure")
+	requireEndpointClosed(t, http.DefaultClient, server.IngressBaseURL().JoinPath("readyz").String())
+}
+
+func TestLocalServerStopClosesActiveRequestsWithUnixControlPlane(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix control-plane listener is unavailable on Windows")
+	}
+
+	const tunnelID = "tunnel_22222222222222222222222222222222"
+	controlPlaneSocket := shortUnixSocketPath(t)
+	server, err := startLocalServer(localServerOptions{
+		ControlPlaneUnixSocket: controlPlaneSocket,
+		TunnelID:               tunnelID,
+		APIKey:                 localControlPlaneAPIKey,
+	})
+	require.NoError(t, err)
+
+	controlPlaneClient := unixHTTPClient(controlPlaneSocket)
+	t.Cleanup(controlPlaneClient.CloseIdleConnections)
+	requireStopClosesActiveIngressAndPoll(t, server, http.DefaultClient, controlPlaneClient)
+}
+
+func TestLocalServerStopClosesActiveRequestsWithUnixIngress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix ingress listener is unavailable on Windows")
+	}
+
+	const tunnelID = "tunnel_22222222222222222222222222222222"
+	ingressSocket := shortUnixSocketPath(t)
+	server, err := startLocalServer(localServerOptions{
+		ListenUnixSocket: ingressSocket,
+		TunnelID:         tunnelID,
+		APIKey:           localControlPlaneAPIKey,
+	})
+	require.NoError(t, err)
+
+	ingressClient := unixHTTPClient(ingressSocket)
+	t.Cleanup(ingressClient.CloseIdleConnections)
+	requireStopClosesActiveIngressAndPoll(t, server, ingressClient, http.DefaultClient)
+	_, err = os.Stat(ingressSocket)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func requireStopClosesActiveIngressAndPoll(
+	t *testing.T,
+	server *localServer,
+	ingressClient *http.Client,
+	controlPlaneClient *http.Client,
+) {
+	t.Helper()
+	ingressCtx, cancelIngress := context.WithCancel(context.Background())
+	defer cancelIngress()
+	ingressURL := server.IngressBaseURL().JoinPath("v1", "mcp", server.tunnelID.String())
+	ingressReq, err := http.NewRequestWithContext(
+		ingressCtx,
+		http.MethodPost,
+		ingressURL.String(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":"active","method":"tools/list"}`),
+	)
+	require.NoError(t, err)
+	ingressReq.Header.Set("Content-Type", "application/json")
+	ingressResult := doHTTPRequest(ingressReq, ingressClient)
+	require.Eventually(t, func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return len(server.pending) == 1
+	}, time.Second, time.Millisecond, "ingress request did not become active")
+
+	pollURL := server.ControlPlaneBaseURL().JoinPath("v1", "tunnels", server.tunnelID.String(), "poll")
+	query := pollURL.Query()
+	query.Set("timeout_ms", "30000")
+	pollURL.RawQuery = query.Encode()
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), time.Second)
+	defer cancelDispatch()
+	dispatchReq, err := http.NewRequestWithContext(dispatchCtx, http.MethodGet, pollURL.String(), nil)
+	require.NoError(t, err)
+	dispatchReq.Header.Set("Authorization", "Bearer "+localControlPlaneAPIKey)
+	require.NoError(t, <-doHTTPRequest(dispatchReq, controlPlaneClient))
+	require.Eventually(t, func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return len(server.inFlight) == 1
+	}, time.Second, time.Millisecond, "ingress request was not dispatched")
+
+	server.mu.Lock()
+	server.lastPoll = time.Time{}
+	server.mu.Unlock()
+	pollCtx, cancelPoll := context.WithCancel(context.Background())
+	defer cancelPoll()
+	pollReq, err := http.NewRequestWithContext(pollCtx, http.MethodGet, pollURL.String(), nil)
+	require.NoError(t, err)
+	pollReq.Header.Set("Authorization", "Bearer "+localControlPlaneAPIKey)
+	pollResult := doHTTPRequest(pollReq, controlPlaneClient)
+	require.NoError(t, server.WaitForPoll(context.Background(), time.Second))
+
+	requireStopCompletes(t, server, func() {
+		cancelIngress()
+		cancelPoll()
+	})
+	require.Error(t, <-ingressResult, "active ingress request did not observe connection closure")
+	require.Error(t, <-pollResult, "active control-plane poll did not observe connection closure")
+	requireEndpointClosed(t, ingressClient, server.IngressBaseURL().JoinPath("readyz").String())
+	requireEndpointClosed(t, controlPlaneClient, server.ControlPlaneBaseURL().JoinPath("readyz").String())
+}
+
+func doHTTPRequest(req *http.Request, client *http.Client) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		resp, err := client.Do(req)
+		if err == nil {
+			_, err = io.Copy(io.Discard, resp.Body)
+			closeErr := resp.Body.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+		result <- err
+	}()
+	return result
+}
+
+func requireStopCompletes(t *testing.T, server *localServer, cancelRequests context.CancelFunc) {
+	t.Helper()
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- server.Stop(context.Background())
+	}()
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		cancelRequests()
+		select {
+		case err := <-stopDone:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("local server Stop remained blocked after active requests were canceled")
+		}
+		t.Fatal("local server Stop waited for active requests")
+	}
+}
+
+func requireEndpointClosed(t *testing.T, client *http.Client, endpoint string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	require.Error(t, err, "endpoint %s still accepted connections after Stop", endpoint)
+}
+
 type fakeBackendFactory struct {
 	name BackendName
 }

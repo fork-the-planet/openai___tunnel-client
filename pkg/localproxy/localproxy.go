@@ -928,27 +928,27 @@ func (s *localServer) ControlPlaneBaseURL() *url.URL {
 	return &copyURL
 }
 
-func (s *localServer) Stop(ctx context.Context) error {
+func (s *localServer) Stop(_ context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var stopErr error
 	s.stopOnce.Do(func() {
+		// The tunnel-client owns the control-plane poll requests served here.
+		// Graceful shutdown would wait for those requests and can therefore wait
+		// on the client that is stopping this server.
 		if s.ingressServer != nil {
-			if err := s.ingressServer.Shutdown(ctx); err != nil {
+			if err := s.ingressServer.Close(); err != nil {
 				stopErr = errors.Join(stopErr, err)
 			}
 		}
 		if s.controlPlaneServer != nil {
-			if err := s.controlPlaneServer.Shutdown(ctx); err != nil {
+			if err := s.controlPlaneServer.Close(); err != nil {
 				stopErr = errors.Join(stopErr, err)
 			}
 		}
 		if s.tcpFallbackServer != nil {
-			if err := s.tcpFallbackServer.Shutdown(ctx); err != nil {
+			if err := s.tcpFallbackServer.Close(); err != nil {
 				stopErr = errors.Join(stopErr, err)
 			}
 		}
