@@ -10,6 +10,11 @@ const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const SERVER_VERSION = readPluginVersion();
 const MAX_STDIO_COMMAND_LENGTH = 4096;
 const BIN_HINT_PATH = path.join(PLUGIN_ROOT, ".tunnel-client-bin");
+const ALLOWED_CONTROL_PLANE_ORIGINS = new Set([
+  "https://api.openai.com",
+  "https://mtls.api.openai.com",
+]);
+const CONTROL_PLANE_BASE_URL_ENV = "CONTROL_PLANE_BASE_URL";
 
 const NORMALIZED_KEYS = [
   "tunnel_id",
@@ -385,6 +390,7 @@ function listRuntimeAliasesSchema() {
 
 function buildCreateArgs(args) {
   validateRemoteScope(args, { allowTunnelId: false, required: true, command: "create_tunnel_runtime" });
+  validateControlPlaneOverride(args.control_plane_base_url);
   const out = ["runtimes", "create", "--alias", args.alias];
   appendRemoteScope(out, args);
   appendOptional(out, "--admin-profile", args.admin_profile);
@@ -400,6 +406,7 @@ function buildConnectArgs(args) {
   validateStdioCommand(args.mcp_command);
   validateRemoteScope(args, { allowTunnelId: true, required: true, command: "connect_stdio_mcp" });
   validateRuntimeAPIKey(args.runtime_api_key);
+  validateControlPlaneOverride(args.control_plane_base_url);
   const out = ["runtimes", "connect", "--alias", args.alias, "--mcp-command", args.mcp_command];
   appendRemoteScope(out, args);
   appendOptional(out, "--tunnel-id", args.tunnel_id);
@@ -415,6 +422,7 @@ function buildConnectArgs(args) {
 
 function buildListArgs(args) {
   validateListScope(args);
+  validateControlPlaneOverride(args.control_plane_base_url);
   const out = ["runtimes", "list"];
   appendRemoteScope(out, args);
   appendOptional(out, "--tenant-id", args.tenant_id);
@@ -766,6 +774,63 @@ function validateRuntimeAPIKey(value) {
   }
 }
 
+function validateControlPlaneOverride(value) {
+  const raw = trimString(value);
+  if (!raw) {
+    return;
+  }
+
+  const parsed = parseCanonicalControlPlaneOrigin(raw);
+  if (!parsed) {
+    throw new Error("control_plane_base_url must be an HTTP or HTTPS origin in authority form");
+  }
+
+  if (parsed.protocol === "https:" && ALLOWED_CONTROL_PLANE_ORIGINS.has(parsed.origin)) {
+    return;
+  }
+
+  const configuredOrigin = parseCanonicalControlPlaneOrigin(
+    trimString(process.env[CONTROL_PLANE_BASE_URL_ENV]),
+  );
+  if (configuredOrigin?.origin === parsed.origin) {
+    return;
+  }
+
+  throw new Error(
+    [
+      "control_plane_base_url must be https://api.openai.com or https://mtls.api.openai.com.",
+      "Use the native tunnel-client CLI for custom control planes,",
+      `or exactly match the trusted ${CONTROL_PLANE_BASE_URL_ENV} origin in the plugin environment.`,
+    ].join(" "),
+  );
+}
+
+function parseCanonicalControlPlaneOrigin(raw) {
+  if (!/^https?:\/\/[^/?#]+\/?$/i.test(raw)) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
 function validateRemoteScope(args, { allowTunnelId, required, command }) {
   const count = [args.organization_id, args.workspace_id, allowTunnelId ? args.tunnel_id : ""]
     .map(trimString)
@@ -908,10 +973,14 @@ async function main() {
 
 module.exports = {
   NORMALIZED_KEYS,
+  buildConnectArgs,
+  buildCreateArgs,
+  buildListArgs,
   callTool,
   handleRpc,
   normalizedPayload,
   toolDefinitions,
+  validateControlPlaneOverride,
 };
 
 if (require.main === module) {
