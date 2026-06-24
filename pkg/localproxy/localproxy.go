@@ -815,7 +815,7 @@ func startLocalServer(opts localServerOptions) (*localServer, error) {
 			_ = tcpListener.Close()
 			return nil, fmt.Errorf("listen on external MCP unix socket %s: %w", opts.ListenUnixSocket, err)
 		}
-		ingressURL = &url.URL{Scheme: "http", Host: "tunnel-client-local-proxy"}
+		ingressURL = &url.URL{Scheme: "http", Host: "localhost"}
 	}
 	server := &localServer{
 		tunnelID:              opts.TunnelID,
@@ -854,7 +854,7 @@ func startLocalServer(opts localServerOptions) (*localServer, error) {
 			return nil, err
 		}
 		server.controlPlaneListener = controlPlaneListener
-		server.controlPlaneBaseURL = &url.URL{Scheme: "http", Host: "tunnel-client-local-proxy"}
+		server.controlPlaneBaseURL = &url.URL{Scheme: "http", Host: "localhost"}
 		server.controlPlaneServer = &http.Server{
 			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,

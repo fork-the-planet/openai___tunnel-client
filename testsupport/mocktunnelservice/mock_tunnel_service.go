@@ -431,7 +431,7 @@ func (m *MockTunnelService) Start(t testing.TB) {
 	server.Start()
 	baseURL := server.URL
 	if m.unixSocketPath != "" {
-		baseURL = "http://tunnel-service"
+		baseURL = "http://localhost"
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil {

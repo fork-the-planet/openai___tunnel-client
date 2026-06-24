@@ -64,7 +64,7 @@ func TestApplyUnixSocketPathDialsUnixListener(t *testing.T) {
 	require.NoError(t, err)
 
 	client := &http.Client{Transport: roundTripper}
-	response, err := client.Get("http://tunnel-service/healthz")
+	response, err := client.Get("http://localhost/healthz")
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, response.Body.Close())
