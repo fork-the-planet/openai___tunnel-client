@@ -23,7 +23,7 @@ const (
 	metricOutcomeResponseReadError   = "response_read_error"
 	metricOutcomeResponseTooLarge    = "response_too_large"
 	defaultMetricsMeterName          = "harpoon"
-	defaultMetricsUnknownTargetLabel = "unknown"
+	defaultMetricsUnknownTargetLabel = "__unknown__"
 )
 
 type serverMetrics struct {

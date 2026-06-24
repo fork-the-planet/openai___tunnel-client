@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/base64"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/proxy"
+	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 )
 
 func TestRecordResultHistoryRetention(t *testing.T) {
@@ -78,7 +81,7 @@ func TestConnectThroughProxyIncludesProxyAuthorization(t *testing.T) {
 	requestLines := serveConnectRequest(proxyConn, "HTTP/1.1 200 Connection established\r\n\r\n")
 
 	proxyURL := mustParseURL(t, "http://alice:wonderland@proxy.example:8080")
-	duration, category, err := connectThroughProxy(clientConn, proxyURL, "api.example.com:443", time.Second)
+	duration, category, err := connectThroughProxyWithTLSConfig(clientConn, proxyURL, "api.example.com:443", time.Second, nil)
 	if err != nil {
 		t.Fatalf("connectThroughProxy returned error: %v", err)
 	}
@@ -100,6 +103,66 @@ func TestConnectThroughProxyIncludesProxyAuthorization(t *testing.T) {
 	}
 }
 
+func TestConnectThroughHTTPSProxyEncryptsProxyAuthorization(t *testing.T) {
+	t.Parallel()
+
+	requests := make(chan *http.Request, 1)
+	proxy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(proxy.Close)
+
+	conn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial HTTPS proxy: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	proxyURL := mustParseURL(t, "https://alice:wonderland@"+proxy.Listener.Addr().String())
+	transport, ok := proxy.Client().Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatalf("TLS test transport missing client TLS config: %T", proxy.Client().Transport)
+	}
+	bundle := &tlsconfig.Bundle{RootCAs: transport.TLSClientConfig.RootCAs}
+	tlsConfig := proxyTLSConfig(bundle)
+	if tlsConfig == nil || tlsConfig.RootCAs != bundle.RootCAs {
+		t.Fatal("proxyTLSConfig did not preserve the configured CA bundle")
+	}
+
+	duration, category, err := connectThroughProxyWithTLSConfig(
+		conn,
+		proxyURL,
+		"api.example.com:443",
+		time.Second,
+		tlsConfig,
+	)
+	if err != nil {
+		t.Fatalf("connectThroughProxyWithTLSConfig returned error: %v", err)
+	}
+	if category != "2xx" {
+		t.Fatalf("status category = %q, want %q", category, "2xx")
+	}
+	if duration <= 0 {
+		t.Fatalf("duration = %v, want > 0", duration)
+	}
+
+	select {
+	case req := <-requests:
+		if req.Method != http.MethodConnect {
+			t.Fatalf("method = %q, want %q", req.Method, http.MethodConnect)
+		}
+		encodedCreds := base64.StdEncoding.EncodeToString([]byte("alice:wonderland"))
+		if got, want := req.Header.Get("Proxy-Authorization"), "Basic "+encodedCreds; got != want {
+			t.Fatalf("Proxy-Authorization = %q, want %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for HTTPS CONNECT request")
+	}
+}
+
 func TestConnectThroughProxyReturnsStatusCategoryForErrors(t *testing.T) {
 	t.Parallel()
 
@@ -111,7 +174,7 @@ func TestConnectThroughProxyReturnsStatusCategoryForErrors(t *testing.T) {
 
 	serveConnectRequest(proxyConn, "HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
 
-	_, category, err := connectThroughProxy(clientConn, nil, "api.example.com:443", time.Second)
+	_, category, err := connectThroughProxyWithTLSConfig(clientConn, nil, "api.example.com:443", time.Second, nil)
 	if err == nil {
 		t.Fatal("expected error for 4xx CONNECT response")
 	}
@@ -132,7 +195,7 @@ func TestConnectThroughProxyOmitsProxyAuthorizationWithoutCredentials(t *testing
 	requestLines := serveConnectRequest(proxyConn, "HTTP/1.1 200 Connection established\r\n\r\n")
 
 	proxyURL := mustParseURL(t, "http://proxy.example:8080")
-	_, category, err := connectThroughProxy(clientConn, proxyURL, "api.example.com:443", time.Second)
+	_, category, err := connectThroughProxyWithTLSConfig(clientConn, proxyURL, "api.example.com:443", time.Second, nil)
 	if err != nil {
 		t.Fatalf("connectThroughProxy returned error: %v", err)
 	}

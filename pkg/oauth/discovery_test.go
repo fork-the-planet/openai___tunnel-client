@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +145,64 @@ func TestFetchOAuthMetadataEmptyBodyIsError(t *testing.T) {
 	)
 	require.Error(t, fetchErr)
 	require.Contains(t, fetchErr.Error(), "empty body")
+}
+
+func TestFetchOAuthMetadataRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat("a", protectedResourceMetadataBodyLimitBytes+1)))
+	}))
+	t.Cleanup(server.Close)
+
+	candidateURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	resp, _, attempts, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		server.Client(),
+		[]DiscoveryCandidate{{URL: candidateURL, Source: DiscoverySourceWWWAuthenticate}},
+		nil,
+	)
+	require.Error(t, fetchErr)
+	require.Nil(t, resp)
+	require.Contains(t, fetchErr.Error(), "exceeds")
+	require.Len(t, attempts, 1)
+	require.Contains(t, attempts[0].Error, "exceeds")
+}
+
+func TestFetchOAuthMetadataFallsBackOn404OversizedBody(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	var expectedResource string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(strings.Repeat("a", protectedResourceMetadataBodyLimitBytes+1)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
+	}))
+	t.Cleanup(server.Close)
+
+	baseURL, err := url.Parse(server.URL + "/base")
+	require.NoError(t, err)
+	expectedResource = baseURL.String()
+
+	resp, _, attempts, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		server.Client(),
+		buildWellKnownCandidates(baseURL),
+		nil,
+	)
+	require.NoError(t, fetchErr)
+	require.Equal(t, http.StatusOK, resp.ResponseCode())
+	require.GreaterOrEqual(t, calls, 2)
+	require.Contains(t, attempts[0].Error, "exceeds")
 }
 
 func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {

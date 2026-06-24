@@ -3,6 +3,7 @@ package proxyhealth
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/proxy"
+	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 )
 
 const (
@@ -78,6 +80,7 @@ type Checker struct {
 	started       bool
 	startStopMu   sync.Mutex
 	meterProvider *sdkmetric.MeterProvider
+	tlsBundle     *tlsconfig.Bundle
 	cancel        context.CancelFunc
 }
 
@@ -100,6 +103,7 @@ type checkerParams struct {
 	HarpoonConfig *config.HarpoonConfig
 	HarpoonReg    *harpoon.Registry `optional:"true"`
 	MeterProvider *sdkmetric.MeterProvider
+	TLSBundle     *tlsconfig.Bundle
 }
 
 // Module wires the proxy health checker.
@@ -122,6 +126,7 @@ func newChecker(p checkerParams) (*Checker, error) {
 		interval:      interval,
 		routes:        buildRoutes(p.ControlPlane, p.MCPConfig, p.HarpoonConfig, p.HarpoonReg, os.LookupEnv),
 		meterProvider: p.MeterProvider,
+		tlsBundle:     p.TLSBundle,
 	}
 	checker.identityMap = proxy.BuildIdentityMap(checker.routes)
 	checker.routeStatus = make(map[string]*routeStatus)
@@ -238,7 +243,13 @@ func (c *Checker) checkProxyRoute(ctx context.Context, route proxy.Route) (Check
 		_ = conn.Close()
 	}()
 
-	connectDuration, statusCategory, err := connectThroughProxy(conn, route.ProxyURL, route.TargetHostPort, defaultConnectTimeout)
+	connectDuration, statusCategory, err := connectThroughProxyWithTLSConfig(
+		conn,
+		route.ProxyURL,
+		route.TargetHostPort,
+		defaultConnectTimeout,
+		proxyTLSConfig(c.tlsBundle),
+	)
 	record.ConnectDurationMS = connectDuration.Milliseconds()
 	record.HTTPStatusCategory = statusCategory
 	if err != nil {
@@ -262,12 +273,35 @@ func dialTCP(ctx context.Context, hostPort string, timeout time.Duration) (net.C
 	return conn, time.Since(start), err
 }
 
-func connectThroughProxy(conn net.Conn, proxyURL *url.URL, targetHostPort string, timeout time.Duration) (time.Duration, string, error) {
+func proxyTLSConfig(bundle *tlsconfig.Bundle) *tls.Config {
+	if bundle == nil || bundle.RootCAs == nil {
+		return nil
+	}
+	return &tls.Config{RootCAs: bundle.RootCAs}
+}
+
+func connectThroughProxyWithTLSConfig(conn net.Conn, proxyURL *url.URL, targetHostPort string, timeout time.Duration, tlsConfig *tls.Config) (time.Duration, string, error) {
 	if conn == nil {
 		return 0, "", errors.New("missing connection")
 	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	start := time.Now()
+	proxyConn := conn
+
+	if proxyURL != nil && strings.EqualFold(proxyURL.Scheme, "https") {
+		config := &tls.Config{}
+		if tlsConfig != nil {
+			config = tlsConfig.Clone()
+		}
+		if config.ServerName == "" {
+			config.ServerName = proxyURL.Hostname()
+		}
+		tlsConn := tls.Client(conn, config)
+		if err := tlsConn.Handshake(); err != nil {
+			return time.Since(start), "", fmt.Errorf("tls handshake with proxy: %w", err)
+		}
+		proxyConn = tlsConn
+	}
 
 	proxyAuth := ""
 	if proxyURL != nil && proxyURL.User != nil {
@@ -278,11 +312,11 @@ func connectThroughProxy(conn net.Conn, proxyURL *url.URL, targetHostPort string
 	}
 
 	request := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", targetHostPort, targetHostPort, proxyAuth)
-	if _, err := conn.Write([]byte(request)); err != nil {
+	if _, err := proxyConn.Write([]byte(request)); err != nil {
 		return time.Since(start), "", err
 	}
 
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(proxyConn)
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
 		return time.Since(start), "", err
