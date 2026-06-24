@@ -73,6 +73,7 @@ export interface SystemResponse {
 
 export interface StatusResponse {
   version?: string;
+  client_instance_id?: string;
   started_at?: string;
   uptime_seconds?: number;
   health_listen_addr?: string;

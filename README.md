@@ -181,7 +181,12 @@ Starter prompts for Codex:
   aliases. Tunnel-service keeps those aliases during migration; removing them,
   if ever desired, is a separate later cleanup after telemetry shows no
   remaining legacy clients.
-- Control-plane requests include `User-Agent: oai-tunnel-client/<version>` for compatibility, plus explicit `X-Tunnel-Client-Name` and `X-Tunnel-Client-Version` headers for service-side logs and metrics.
+- Control-plane requests include `User-Agent: oai-tunnel-client/<version>` for
+  compatibility, plus explicit `X-Tunnel-Client-Name` and
+  `X-Tunnel-Client-Version` headers for service-side logs and metrics. Each
+  process also generates a new opaque `client_instance_id`, sends it as
+  `X-Tunnel-Client-Instance-Id`, and includes it in structured logs and the
+  local admin UI for request correlation.
 - Control-plane HTTPS requests can present a separate client certificate/key
   pair using `--control-plane.client-cert` and `--control-plane.client-key`
   (or `CONTROL_PLANE_CLIENT_CERT` / `CONTROL_PLANE_CLIENT_KEY`). When those are
@@ -205,8 +210,8 @@ Starter prompts for Codex:
   mismatch diagnostics preserved in logs/state.
 - It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) and
   a lightweight **admin UI** (`/ui`) for operational status.
-- The admin UI Overview reports channel availability and reasons when channels
-  are disabled.
+- The admin UI Overview reports the process-scoped `client_instance_id`,
+  channel availability, and reasons when channels are disabled.
 - The admin UI Logs tab can switch the live runtime log level between `debug`,
   `info`, and `warn` without restarting the process.
 - The admin UI log export returns a redacted support bundle with recent logs

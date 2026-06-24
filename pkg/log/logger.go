@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 )
@@ -38,6 +39,9 @@ const (
 
 	// FieldTunnelID is the stable structured logging key for the configured tunnel identifier.
 	FieldTunnelID = "tunnel_id"
+
+	// FieldClientInstanceID is the process-scoped correlation key shared with tunnel-service.
+	FieldClientInstanceID = "client_instance_id"
 
 	ComponentHealth       = "health"
 	ComponentDispatcher   = "dispatcher"
@@ -99,6 +103,8 @@ func NewLoggerWithLevelController(cfg *config.LoggingConfig, defaultWriter io.Wr
 
 		logger = slog.New(handler)
 	}
+
+	logger = logger.With(slog.String(FieldClientInstanceID, clientinstance.ID()))
 
 	if cfg.HTTPRawUnsafe {
 		logger.Warn("\u26a0\ufe0f  WARNING: Raw HTTP logging enabled \u2014 sensitive data may be exposed")

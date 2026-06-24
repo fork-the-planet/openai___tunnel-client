@@ -61,6 +61,31 @@ func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 	)
 }
 
+func TestControlPlaneRequestsSendClientInstanceID(t *testing.T) {
+	const clientInstanceHeader = "X-Tunnel-Client-Instance-Id"
+
+	h := runSimpleToolScenarioWithHarnessOptions(t, nil, nil)
+	requests := h.ControlPlane.ReceivedHTTPRequests()
+	if len(requests) == 0 {
+		t.Fatal("expected control-plane requests")
+	}
+
+	var instanceID string
+	for _, request := range requests {
+		got := request.Headers.Get(clientInstanceHeader)
+		if got == "" {
+			t.Fatalf("control-plane %s %s missing %s", request.Method, request.Path, clientInstanceHeader)
+		}
+		if instanceID == "" {
+			instanceID = got
+			continue
+		}
+		if got != instanceID {
+			t.Fatalf("control-plane %s %s sent %s=%q, want stable process ID %q", request.Method, request.Path, clientInstanceHeader, got, instanceID)
+		}
+	}
+}
+
 func runSimpleToolScenarioWithHarnessOptions(
 	t *testing.T,
 	harnessOptions []harnesspkg.HarnessOption,

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
@@ -305,6 +306,9 @@ func assertIdentityHeaders(t *testing.T, r *http.Request) {
 	}
 	if got := r.Header.Get("X-Tunnel-Client-Version"); got != version.Version {
 		t.Fatalf("unexpected X-Tunnel-Client-Version header %q", got)
+	}
+	if got := r.Header.Get(clientinstance.HeaderName); got != clientinstance.ID() {
+		t.Fatalf("unexpected %s header %q", clientinstance.HeaderName, got)
 	}
 }
 

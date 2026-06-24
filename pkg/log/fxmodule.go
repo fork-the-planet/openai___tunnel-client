@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/fx"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 )
 
@@ -36,7 +37,11 @@ func newLogger(p loggerParams) (*slog.Logger, error) {
 	}
 
 	if p.Sink != nil && logger != nil {
-		logger = slog.New(newTeeHandler(logger.Handler(), p.Sink))
+		logger = slog.New(newTeeHandler(
+			logger.Handler(),
+			p.Sink,
+			slog.String(FieldClientInstanceID, clientinstance.ID()),
+		))
 	}
 	if logger != nil && p.ControlPlane != nil && p.ControlPlane.TunnelID != "" {
 		logger = logger.With(slog.String(FieldTunnelID, p.ControlPlane.TunnelID.String()))

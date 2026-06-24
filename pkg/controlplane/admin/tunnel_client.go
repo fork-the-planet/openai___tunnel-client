@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/apierror"
 	tctransport "go.openai.org/api/tunnel-client/pkg/transport"
@@ -179,6 +180,7 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 	req.Header.Set("User-Agent", version.UserAgent)
 	req.Header.Set("X-Tunnel-Client-Name", version.ClientName)
 	req.Header.Set("X-Tunnel-Client-Version", version.Version)
+	req.Header.Set(clientinstance.HeaderName, clientinstance.ID())
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -84,6 +84,8 @@
     <div class="kv" style="margin-top: 8px">
       <div class="muted">Version</div>
       <div class="mono">{status?.version || "—"}</div>
+      <div class="muted">Instance ID</div>
+      <div class="mono">{status?.client_instance_id || "—"}</div>
       <div class="muted">Uptime</div>
       <div class="mono">{fmtUptime(status?.uptime_seconds || 0)}</div>
       <div class="muted">Health addr</div>

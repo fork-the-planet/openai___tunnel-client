@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
@@ -53,4 +54,5 @@ func TestNewLoggerBindsTunnelIDToSinkRecords(t *testing.T) {
 		return true
 	})
 	require.Equal(t, "tunnel_0123456789abcdef0123456789abcdef", attrs[FieldTunnelID])
+	require.Equal(t, clientinstance.ID(), attrs[FieldClientInstanceID])
 }

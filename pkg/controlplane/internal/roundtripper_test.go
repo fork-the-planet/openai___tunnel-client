@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
@@ -47,6 +48,7 @@ func TestControlPlaneRoundTripperAddsDefaultHeaders(t *testing.T) {
 	assert.Equal(t, userAgent, seen.Get("User-Agent"), "expected User-Agent header to be set")
 	assert.Equal(t, version.ClientName, seen.Get(headerTunnelClientName), "expected tunnel client name header to be set")
 	assert.Equal(t, version.Version, seen.Get(headerTunnelClientVersion), "expected tunnel client version header to be set")
+	assert.Equal(t, clientinstance.ID(), seen.Get(clientinstance.HeaderName), "expected tunnel client instance ID header to be set")
 	assert.Equal(t, "true", seen.Get("extra-header"), "expected extra header to be forwarded")
 }
 
@@ -106,6 +108,7 @@ func TestControlPlaneRoundTripperPreservesProtectedHeaders(t *testing.T) {
 		"authorization":           "Bearer attacker",
 		"User-Agent":              "custom-agent",
 		headerTunnelClientVersion: "dev",
+		clientinstance.HeaderName: "configured-id",
 	}, logger)
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
@@ -119,6 +122,7 @@ func TestControlPlaneRoundTripperPreservesProtectedHeaders(t *testing.T) {
 	assert.Equal(t, "Bearer api-key", req.Header.Get("Authorization"), "expected Authorization to be preserved")
 	assert.Equal(t, "ua", req.Header.Get("User-Agent"), "expected User-Agent to be preserved")
 	assert.Equal(t, version.Version, req.Header.Get(headerTunnelClientVersion), "expected client version to be preserved")
+	assert.Equal(t, clientinstance.ID(), req.Header.Get(clientinstance.HeaderName), "expected client instance ID to be preserved")
 }
 
 func TestControlPlaneRoundTripperNoWarningWhenValueMatches(t *testing.T) {

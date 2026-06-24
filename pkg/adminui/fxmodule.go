@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/fx"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/codexappserver"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
@@ -67,6 +68,7 @@ type routeParams struct {
 
 type statusResponse struct {
 	Version                           string                       `json:"version"`
+	ClientInstanceID                  string                       `json:"client_instance_id"`
 	StartedAt                         time.Time                    `json:"started_at"`
 	UptimeSeconds                     int64                        `json:"uptime_seconds"`
 	HealthListenAddr                  string                       `json:"health_listen_addr,omitempty"`
@@ -185,9 +187,10 @@ func buildStatus(p routeParams) statusResponse {
 	}
 
 	out := statusResponse{
-		Version:       version.Version,
-		StartedAt:     startedAt,
-		UptimeSeconds: int64(uptime.Seconds()),
+		Version:          version.Version,
+		ClientInstanceID: clientinstance.ID(),
+		StartedAt:        startedAt,
+		UptimeSeconds:    int64(uptime.Seconds()),
 	}
 
 	if p.HealthService != nil {

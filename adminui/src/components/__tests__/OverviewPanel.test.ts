@@ -9,6 +9,7 @@ describe("OverviewPanel", () => {
       if (url.includes("/api/status")) {
         return jsonResponse({
           version: "test",
+          client_instance_id: "instance-test",
           channels: [],
           control_plane_route: {
             kind: "control_plane",
@@ -26,6 +27,8 @@ describe("OverviewPanel", () => {
 
     const { findByText } = render(OverviewPanel, { active: true });
 
+    expect(await findByText("Instance ID")).toBeTruthy();
+    expect(await findByText("instance-test")).toBeTruthy();
     expect(await findByText("Proxy mode")).toBeTruthy();
     expect(await findByText("proxy-cp")).toBeTruthy();
     expect(await findByText("http://proxy.control:8080")).toBeTruthy();

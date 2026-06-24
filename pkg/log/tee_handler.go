@@ -17,19 +17,24 @@ type Sink interface {
 type teeHandler struct {
 	base slog.Handler
 	sink Sink
-	// attrs are the slog.Attrs bound to this handler via slog.Logger.With(...).
-	// These attrs do not appear on slog.Record directly, but they do appear in output.
+	// attrs are the slog.Attrs bound to this handler via slog.Logger.With(...)
+	// plus any attrs already bound to the base handler before teeing. These attrs
+	// do not appear on slog.Record directly, but they do appear in output.
 	attrs []slog.Attr
 }
 
-func newTeeHandler(base slog.Handler, sink Sink) slog.Handler {
+func newTeeHandler(base slog.Handler, sink Sink, baseAttrs ...slog.Attr) slog.Handler {
 	if base == nil {
 		base = slog.Default().Handler()
 	}
 	if sink == nil {
 		return base
 	}
-	return &teeHandler{base: base, sink: sink}
+	return &teeHandler{
+		base:  base,
+		sink:  sink,
+		attrs: append([]slog.Attr{}, baseAttrs...),
+	}
 }
 
 func (h *teeHandler) Enabled(ctx context.Context, level slog.Level) bool {

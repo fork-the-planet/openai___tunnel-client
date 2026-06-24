@@ -77,8 +77,8 @@ done
   captured from `/metrics` at export time.
 - The `admin/*.json` files are point-in-time copies of `/api/status`,
   `/api/system`, and `/api/oauth` at export time, so support can review the
-  configured `tunnel_id`, route state, probe status, and OAuth discovery state
-  alongside the log stream.
+  configured `tunnel_id`, process-scoped `client_instance_id`, route state,
+  probe status, and OAuth discovery state alongside the log stream.
 - The archive is redacted before it is returned.
 
 ## Connector setup and runtime pitfalls

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	tctransport "go.openai.org/api/tunnel-client/pkg/transport"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
@@ -48,6 +49,7 @@ func (c *controlPlaneRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set(headerTunnelClientName, version.ClientName)
 	req.Header.Set(headerTunnelClientVersion, version.Version)
+	req.Header.Set(clientinstance.HeaderName, clientinstance.ID())
 	c.applyExtraHeaders(req.Context(), req.Header)
 	if c.organizationID != "" {
 		req.Header.Set(headerOpenAIOrganization, c.organizationID)
@@ -83,7 +85,7 @@ func (c *controlPlaneRoundTripper) applyExtraHeaders(ctx context.Context, header
 
 func isProtectedControlPlaneHeader(key string) bool {
 	switch http.CanonicalHeaderKey(key) {
-	case "Authorization", "Accept", "User-Agent", headerTunnelClientName, headerTunnelClientVersion:
+	case "Authorization", "Accept", "User-Agent", headerTunnelClientName, headerTunnelClientVersion, clientinstance.HeaderName:
 		return true
 	default:
 		return false

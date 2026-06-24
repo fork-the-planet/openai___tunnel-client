@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
@@ -121,6 +122,9 @@ func TestNewLoggerEmitsRawHTTPWarning(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "Raw HTTP logging enabled") {
 		t.Fatalf("expected raw HTTP warning in logs, got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "client_instance_id="+clientinstance.ID()) {
+		t.Fatalf("expected client instance ID in logs, got: %s", buf.String())
 	}
 }
 

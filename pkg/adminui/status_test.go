@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.openai.org/api/tunnel-client/pkg/clientinstance"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
@@ -54,6 +55,7 @@ func TestBuildStatusIncludesChannels(t *testing.T) {
 		MCPProbeState: mcpclient.NewProbeState(),
 	})
 
+	require.Equal(t, clientinstance.ID(), out.ClientInstanceID)
 	require.Len(t, out.Channels, 2)
 	require.Equal(t, types.DefaultChannel.String(), out.Channels[0].Name)
 	require.True(t, out.Channels[0].Enabled)
