@@ -1,0 +1,779 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Secure MCP Tunnel client control-plane API",
+    "description": "Language-independent HTTP and JSON contract implemented by Secure MCP Tunnel clients. This document intentionally contains only the client-facing metadata, long-poll, and response endpoints.",
+    "version": "0.0.1"
+  },
+  "servers": [
+    {
+      "url": "https://api.openai.com"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/tunnels/{tunnel_id}": {
+      "get": {
+        "summary": "Fetch a tunnel metadata record by id",
+        "description": "Fetch the minimal tunnel metadata used for startup diagnostics. Clients only depend on id, name, and description and must ignore additional fields.",
+        "operationId": "getTunnelMetadata",
+        "parameters": [
+          {
+            "name": "tunnel_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Opaque tunnel identifier.",
+              "title": "Tunnel Id"
+            },
+            "description": "Opaque tunnel identifier.",
+            "example": "tunnel_1234abcd"
+          },
+          {
+            "name": "X-Tunnel-Client-Name",
+            "in": "header",
+            "required": false,
+            "description": "Stable client implementation name for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Tunnel-Client-Version",
+            "in": "header",
+            "required": false,
+            "description": "Client implementation version for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TunnelClientMetadata"
+                },
+                "example": {
+                  "id": "tunnel_123",
+                  "name": "Production MCP",
+                  "description": "Tunnel for the production MCP server"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Tunnel-service error response (403). Stable codes: `tunnel_active_organization_required`, `tunnel_use_forbidden`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "tunnel_active_organization_required",
+              "tunnel_use_forbidden"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tunnel-service error response (429). Stable codes: `rate_limit_exceeded`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "rate_limit_exceeded"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/tunnels/{tunnel_id}/poll": {
+      "get": {
+        "summary": "Long-poll for pending MCP requests destined for a tunnel client",
+        "operationId": "pollTunnelCommands",
+        "parameters": [
+          {
+            "name": "tunnel_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Opaque tunnel identifier.",
+              "title": "Tunnel Id"
+            },
+            "description": "Opaque tunnel identifier."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 25,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional maximum number of requests to return",
+              "title": "Limit"
+            },
+            "description": "Optional maximum number of requests to return"
+          },
+          {
+            "name": "timeout_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional client-requested poll wait timeout in milliseconds",
+              "title": "Timeout Ms"
+            },
+            "description": "Optional client-requested poll wait timeout in milliseconds"
+          },
+          {
+            "name": "X-Tunnel-Client-Name",
+            "in": "header",
+            "required": false,
+            "description": "Stable client implementation name for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Tunnel-Client-Version",
+            "in": "header",
+            "required": false,
+            "description": "Client implementation version for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolledCommandList"
+                },
+                "example": {
+                  "commands": [
+                    {
+                      "request_id": "req_123",
+                      "shard_token": "opaque-shard-token",
+                      "command_type": "jsonrpc",
+                      "channel": "main",
+                      "created_at": "2026-01-01T00:00:00Z",
+                      "headers": {
+                        "Mcp-Session-Id": [
+                          "session_123"
+                        ]
+                      },
+                      "jsonrpc": {
+                        "jsonrpc": "2.0",
+                        "id": "rpc_123",
+                        "method": "tools/list",
+                        "params": {}
+                      }
+                    },
+                    {
+                      "request_id": "req_124",
+                      "shard_token": "opaque-shard-token",
+                      "command_type": "session_termination",
+                      "channel": "main",
+                      "created_at": "2026-01-01T00:00:01Z",
+                      "headers": {
+                        "Mcp-Session-Id": [
+                          "session_123"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Tunnel-service error response (400). Stable codes: `invalid_tunnel_id_format`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "invalid_tunnel_id_format"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Tunnel-service error response (401). Stable codes: `tunnel_active_organization_required`, `tunnel_missing_principals`, `tunnel_use_forbidden`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "tunnel_active_organization_required",
+              "tunnel_missing_principals",
+              "tunnel_use_forbidden"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tunnel-service error response (429). Stable codes: `rate_limit_exceeded`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "rate_limit_exceeded"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "description": "Long-poll for pending commands. A 204 response means the poll completed without commands; issue another poll. A 200 response contains every command the client must process."
+      }
+    },
+    "/v1/tunnels/{tunnel_id}/response": {
+      "post": {
+        "summary": "Deliver the final JSON-RPC response for an in-flight tunnel request",
+        "operationId": "postTunnelResponse",
+        "parameters": [
+          {
+            "name": "tunnel_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Opaque tunnel identifier.",
+              "title": "Tunnel Id"
+            },
+            "description": "Opaque tunnel identifier."
+          },
+          {
+            "name": "X-Tunnel-Client-Name",
+            "in": "header",
+            "required": false,
+            "description": "Stable client implementation name for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Tunnel-Client-Version",
+            "in": "header",
+            "required": false,
+            "description": "Client implementation version for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Tunnel-Shard-Token",
+            "in": "header",
+            "required": true,
+            "description": "Opaque shard token from the polled command. Echo it exactly; do not place it in the JSON body.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Client-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Optional control-plane request identifier for diagnostics.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TunnelResponsePayload"
+              },
+              "example": {
+                "request_id": "req_123",
+                "channel": "main",
+                "resp_json": {
+                  "jsonrpc": "2.0",
+                  "id": "rpc_123",
+                  "result": {
+                    "tools": []
+                  }
+                },
+                "resp_headers": {
+                  "Content-Type": [
+                    "application/json"
+                  ]
+                },
+                "resp_code": 200,
+                "resp_type": "jsonrpc_response"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TunnelResponseAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Tunnel-service error response (400). Stable codes: `invalid_channel_format`, `invalid_tunnel_id_format`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "invalid_channel_format",
+              "invalid_tunnel_id_format"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Tunnel-service error response (401). Stable codes: `tunnel_active_organization_required`, `tunnel_missing_principals`, `tunnel_request_mismatch`, `tunnel_use_forbidden`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "tunnel_active_organization_required",
+              "tunnel_missing_principals",
+              "tunnel_request_mismatch",
+              "tunnel_use_forbidden"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tunnel-service error response (404). Stable codes: `pending_request_not_found`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "pending_request_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tunnel-service error response (429). Stable codes: `rate_limit_exceeded`. Code details and mitigations are documented in the APIErrorBody.code schema.",
+            "x-tunnel-error-codes": [
+              "rate_limit_exceeded"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "description": "Post the result for one polled command. Echo the command request_id in the JSON body and its shard_token in the X-Tunnel-Shard-Token header."
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Send the tunnel API key as Authorization: Bearer <key>."
+      }
+    },
+    "schemas": {
+      "APIErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/APIErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "APIErrorResponse"
+      },
+      "PolledCommandList": {
+        "properties": {
+          "commands": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JsonRpcPolledCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/SessionTerminationPolledCommand"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "command_type",
+                "mapping": {
+                  "jsonrpc": "#/components/schemas/JsonRpcPolledCommand",
+                  "session_termination": "#/components/schemas/SessionTerminationPolledCommand"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Commands"
+          }
+        },
+        "type": "object",
+        "required": [
+          "commands"
+        ],
+        "title": "PolledCommandList"
+      },
+      "TunnelClientMetadata": {
+        "type": "object",
+        "description": "Minimal tunnel metadata used by a tunnel client during startup. The service may return additional management fields; clients must ignore fields they do not recognize.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Opaque tunnel identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable tunnel name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable tunnel description."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description"
+        ],
+        "additionalProperties": true
+      },
+      "TunnelResponseAck": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "description": "Acknowledgement indicator",
+            "default": "ok"
+          }
+        },
+        "type": "object",
+        "title": "TunnelResponseAck"
+      },
+      "TunnelResponsePayload": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "description": "Request identifier received from long-poll"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel",
+            "description": "Logical channel for routing MCP traffic (defaults to main)."
+          },
+          "resp_json": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resp Json",
+            "description": "Final JSON payload (omitted when acknowledging notifications)"
+          },
+          "resp_headers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Resp Headers",
+            "description": "Auxiliary metadata for the response"
+          },
+          "resp_code": {
+            "type": "integer",
+            "title": "Resp Code",
+            "description": "HTTP-style status code describing the upstream MCP response"
+          },
+          "resp_type": {
+            "$ref": "#/components/schemas/ResponsePayloadType",
+            "description": "Indicates whether the payload contains a JSON response body (JSON-RPC response, JSON-RPC notification), or an ack-only notification/session termination response",
+            "default": "jsonrpc_response"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "resp_code"
+        ],
+        "title": "TunnelResponsePayload"
+      },
+      "APIErrorBody": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable error message."
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "description": "OpenAI API error category, for example invalid_request_error or server_error."
+          },
+          "param": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Param",
+            "description": "Request parameter related to the error when one is available."
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "description": "Stable tunnel-service error code when one is available. Generic platform or validation errors can return null or a non-tunnel code.\n\nKnown tunnel-service codes:\n- `invalid_channel_format`: The MCP channel name contains unsupported characters. Mitigation: Use lowercase letters, digits, hyphens, or underscores in channel names.\n- `invalid_json_payload`: The MCP request body could not be decoded as a JSON object. Mitigation: Fix the MCP caller/server to send a valid JSON object payload.\n- `invalid_tunnel_id_format`: The tunnel ID path segment is not a tunnel_<32 lowercase alphanumeric> value. Mitigation: Use the exact tunnel ID from Platform tunnel settings in control_plane.tunnel_id, CONTROL_PLANE_TUNNEL_ID, or --control-plane.tunnel-id.\n- `missing_mcp_session_id`: An MCP session termination request did not include Mcp-Session-Id. Mitigation: Send DELETE session termination requests with the Mcp-Session-Id header from the active MCP session.\n- `oauth_shim_harpoon_call_failed`: The OAuth shim Harpoon call failed or returned an invalid upstream response. Mitigation: Check the Harpoon target URL, upstream MCP server health, and tunnel-client logs.\n- `oauth_shim_invalid_target_uri`: An OAuth shim metadata URI was malformed or used an invalid harpoon target label. Mitigation: Use an absolute http(s) URI or harpoon://<label> that matches harpoon.targets[].label.\n- `oauth_shim_target_not_found`: The requested OAuth shim target label was not found. Mitigation: Add or correct the matching harpoon.targets[].label entry and restart tunnel-client.\n- `oauth_shim_unshimmable_endpoint`: The OAuth shim could not map the upstream metadata endpoint to a supported tunnel route. Mitigation: Configure supported OAuth metadata endpoints and grouped harpoon targets for auth-server metadata.\n- `oauth_shim_upstream_timeout`: The OAuth shim timed out waiting for a Harpoon response. Mitigation: Ensure the Harpoon target and upstream MCP server respond before the tunnel timeout.\n- `pending_request_not_found`: The pending request was already processed, expired, or never existed for this tunnel. Mitigation: No manual action is needed for isolated races; if repeated, ensure only healthy clients acknowledge requests for this tunnel.\n- `rate_limit_exceeded`: The caller exceeded the tunnel-service rate limit for this route or tunnel. Mitigation: Reduce request concurrency or volume and let tunnel-client retry after backoff.\n- `request_body_too_large`: The MCP request body exceeded the service byte limit. Mitigation: Send a smaller MCP request body; avoid large inline payloads.\n- `rfc9728_www_authenticate_unsupported`: The request attempted an RFC9728 WWW-Authenticate probe flow that tunnels do not support. Mitigation: Use the well-known OAuth discovery endpoints instead of WWW-Authenticate probing.\n- `tunnel_active_organization_context_required`: The route requires an active organization context but none was available. Mitigation: Select or pass the intended organization ID before listing principals or managing principal-validation overrides.\n- `tunnel_active_organization_required`: The tunnel is organization-backed and the request did not include an explicit organization context. Mitigation: Set --control-plane.organization-id, CONTROL_PLANE_ORGANIZATION_ID, or control_plane.organization_id for tunnel-client.\n- `tunnel_client_not_connected`: The tunnel-client is not currently connected to drain requests for this tunnel. Mitigation: Start or restart tunnel-client, then check its /readyz endpoint and logs.\n- `tunnel_client_not_seen`: No tunnel-client has polled recently for this tunnel. Mitigation: Start or restart tunnel-client with the matching control_plane.tunnel_id and control_plane.api_key.\n- `tunnel_management_permission_required`: The caller lacks tunnel management permission for the active org or workspace. Mitigation: Use an admin key or account with Tunnels Read and Manage for the target org/workspace.\n- `tunnel_missing_principals`: The authenticated request did not contain org/workspace principals that can be checked for tunnel use. Mitigation: Use a runtime API key associated with the intended organization or workspace.\n- `tunnel_principal_association_unverified`: Tunnel creation or update requested principals whose association could not be automatically verified. Mitigation: Use an automatically verifiable org/workspace/tenant combination or request a reviewed association override.\n- `tunnel_principal_limit_exceeded`: A tunnel principal list exceeded the per-kind limit. Mitigation: Reduce each of tenant_ids, workspace_ids, and organization_ids to the documented maximum.\n- `tunnel_principal_validation_override_automatically_derivable`: A reviewed principal-validation override was rejected because the association is already automatically derivable. Mitigation: Create or update the tunnel directly; no reviewed override is needed for that principal set.\n- `tunnel_principal_validation_override_management_permission_required`: The caller lacks permission to manage tunnel principal-validation overrides. Mitigation: Use a credential authorized for tunnel principal-validation override management.\n- `tunnel_queue_full`: The per-tunnel pending request queue is full. Mitigation: Reduce MCP request concurrency or add enough healthy tunnel-client capacity to drain the tunnel.\n- `tunnel_request_mismatch`: The response request_id does not belong to the tunnel being acknowledged. Mitigation: Verify the client uses the same control_plane.tunnel_id that received the command.\n- `tunnel_use_forbidden`: The caller does not have tunnel use permission for any default principal. Mitigation: Use credentials for a principal that has access to this tunnel or recreate/connect the runtime in the owning org/workspace.",
+            "x-tunnel-error-codes": [
+              "invalid_channel_format",
+              "invalid_json_payload",
+              "invalid_tunnel_id_format",
+              "missing_mcp_session_id",
+              "oauth_shim_harpoon_call_failed",
+              "oauth_shim_invalid_target_uri",
+              "oauth_shim_target_not_found",
+              "oauth_shim_unshimmable_endpoint",
+              "oauth_shim_upstream_timeout",
+              "pending_request_not_found",
+              "rate_limit_exceeded",
+              "request_body_too_large",
+              "rfc9728_www_authenticate_unsupported",
+              "tunnel_active_organization_context_required",
+              "tunnel_active_organization_required",
+              "tunnel_client_not_connected",
+              "tunnel_client_not_seen",
+              "tunnel_management_permission_required",
+              "tunnel_missing_principals",
+              "tunnel_principal_association_unverified",
+              "tunnel_principal_limit_exceeded",
+              "tunnel_principal_validation_override_automatically_derivable",
+              "tunnel_principal_validation_override_management_permission_required",
+              "tunnel_queue_full",
+              "tunnel_request_mismatch",
+              "tunnel_use_forbidden"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "type"
+        ],
+        "title": "APIErrorBody"
+      },
+      "JsonRpcPolledCommand": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "description": "Opaque identifier assigned by TunnelService"
+          },
+          "shard_token": {
+            "type": "string",
+            "title": "Shard Token",
+            "description": "Opaque identifier for the backend shard/worker handling the request"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "description": "Logical channel for routing MCP traffic (defaults to main).",
+            "default": "main"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "RFC3339 timestamp indicating when the request was enqueued"
+          },
+          "headers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Headers",
+            "description": "Auxiliary metadata for the request"
+          },
+          "command_type": {
+            "type": "string",
+            "const": "jsonrpc",
+            "title": "Command Type",
+            "description": "Discriminator for the command payload type",
+            "default": "jsonrpc"
+          },
+          "jsonrpc": {
+            "type": "object",
+            "title": "Jsonrpc",
+            "description": "JSON-RPC request body to send upstream"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "shard_token",
+          "created_at",
+          "jsonrpc"
+        ],
+        "title": "JsonRpcPolledCommand"
+      },
+      "SessionTerminationPolledCommand": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "description": "Opaque identifier assigned by TunnelService"
+          },
+          "shard_token": {
+            "type": "string",
+            "title": "Shard Token",
+            "description": "Opaque identifier for the backend shard/worker handling the request"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "description": "Logical channel for routing MCP traffic (defaults to main).",
+            "default": "main"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "RFC3339 timestamp indicating when the request was enqueued"
+          },
+          "headers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Headers",
+            "description": "Auxiliary metadata for the request"
+          },
+          "command_type": {
+            "type": "string",
+            "const": "session_termination",
+            "title": "Command Type",
+            "description": "Discriminator for the command payload type",
+            "default": "session_termination"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "shard_token",
+          "created_at"
+        ],
+        "title": "SessionTerminationPolledCommand"
+      },
+      "ResponsePayloadType": {
+        "type": "string",
+        "enum": [
+          "jsonrpc_response",
+          "jsonrpc_notify",
+          "notify_ack",
+          "session_termination_response"
+        ],
+        "title": "ResponsePayloadType"
+      }
+    }
+  }
+}

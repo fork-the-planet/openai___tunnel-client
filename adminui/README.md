@@ -60,9 +60,3 @@ From the repository root:
 ```bash
 make admin-ui-test
 ```
-
-Bazel target:
-
-```bash
-bazel test //api/tunnel-client/adminui:vitest_test
-```

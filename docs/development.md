@@ -8,6 +8,7 @@ This document is for contributors working on `tunnel-client`.
 ./scripts/build_admin_ui.sh ./adminui ./pkg/adminui/assets
 # or
 make admin-ui
+go build ./...
 go build -o bin/tunnel-client ./cmd/client
 ```
 
@@ -27,6 +28,16 @@ make release-tag VERSION=1.2.3 WORD=ember-orchid
 ```bash
 go test ./...
 ```
+
+The wire-contract tests treat [`openapi.json`](openapi.json) as executable
+documentation:
+
+```bash
+go test ./pkg/controlplane/wiretypes ./pkg/controlplane/internal
+```
+
+They validate the documented endpoint methods, OpenAPI examples, command
+discriminators, and serialized response payloads against the published schema.
 
 ## E2E tests (in-repo harness)
 
@@ -84,12 +95,6 @@ Stable touch points:
 - TypeScript tests can copy or import
   `wrappers/mcp-tunnel-client-proxy/typescript/mcp_tunnel_client_proxy.ts`.
 - Copyable example subprojects live under `examples/`.
-
-Run the wrapper/example suite with:
-
-```bash
-bazel test //api/tunnel-client:mcp_tunnel_client_proxy_tests
-```
 
 ## Repo structure (high level)
 

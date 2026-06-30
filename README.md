@@ -31,6 +31,9 @@ then read the onboarding guide below.
   [`docs/deployment/overview.md`](docs/deployment/overview.md).
 - **Need to debug readiness, connector discovery, or OAuth?** Read
   [`docs/troubleshooting.md`](docs/troubleshooting.md).
+- **Building a compatible client in another language?** Read
+  [`docs/protocol.md`](docs/protocol.md) and use
+  [`docs/openapi.json`](docs/openapi.json).
 
 ## Documentation Map
 
@@ -41,6 +44,8 @@ then read the onboarding guide below.
 - **Permissions, roles, and groups**: [`docs/permissions.md`](docs/permissions.md)
 - **Architecture diagrams**: [`docs/architecture.md`](docs/architecture.md)
 - **Connector behavior**: [`docs/connectors.md`](docs/connectors.md)
+- **Wire protocol for client implementers**: [`docs/protocol.md`](docs/protocol.md)
+- **OpenAPI contract**: [`docs/openapi.json`](docs/openapi.json)
 - **Enterprise customer handoff**:
   [`docs/enterprise-customer-onboarding.md`](docs/enterprise-customer-onboarding.md)
 - **Configuration reference**: [`docs/configuration.md`](docs/configuration.md)
@@ -135,7 +140,14 @@ gated tunnel metadata response. When a new public tunnel-client release becomes
 the supported download, update tunnel-service's hard-coded public artifact URL
 alongside the release handoff.
 
-Source-checkout build path:
+Validate a source checkout with native Go tooling:
+
+```bash
+go build ./...
+go test ./...
+```
+
+Build the CLI binary:
 
 ```bash
 make admin-ui

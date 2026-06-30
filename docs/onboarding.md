@@ -167,15 +167,8 @@ Release source archives include the release semantic version in
 `pkg/version/VERSION`, so a plain `go build` from a downloaded release `.tar.gz`
 keeps the same client name and version metadata used by released binaries.
 
-Or from a repository checkout with Bazel available:
-
-```bash
-bazel build //api/tunnel-client/cmd/client:client
-./bazel-bin/api/tunnel-client/cmd/client/client
-```
-
-After building from source, use `./bin/tunnel-client` or the Bazel output path
-unless you add that location to your `PATH`.
+After building from source, use `./bin/tunnel-client` unless you add that
+location to your `PATH`.
 
 ## 4) Configure
 
