@@ -5,7 +5,7 @@ on:
     branches:
       - master
     tags:
-      - "v*"  # release tags must be v<semver>--<operator-word>
+      - "v*"  # release tags must be v<semver>
 
 permissions:
   contents: read
@@ -41,6 +41,8 @@ jobs:
         run: |
           ./scripts/release_tag.sh parse "${GITHUB_REF_NAME}"
           ./scripts/release_tag.sh check-source-version "${GITHUB_REF_NAME}"
+      - name: Test release tag tooling
+        run: bash ./scripts/release_tag_test.sh
       - name: Validate
         run: |
           go env

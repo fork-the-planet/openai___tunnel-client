@@ -41,7 +41,7 @@ help:
 	@echo "  end-user-guide-html - Render docs/end-user-guide.md to a standalone HTML archive"
 	@echo "  end-user-guide-slides - Render docs/end-user-guide.md to a local .pptx deck for on-demand slide import/distribution"
 	@echo "  release-source-version - Write VERSION into pkg/version/VERSION before creating a release tag"
-	@echo "  release-tag   - Generate a release tag like v1.2.3--ember-orchid"
+	@echo "  release-tag   - Generate a release tag like v1.2.3"
 	@echo "  clean         - Remove built binaries"
 	@echo "  build-image   - Build Docker image with tunnel-client binary"
 	@echo ""
@@ -54,7 +54,6 @@ help:
 	@echo "  GOARCH       - Target architecture (default: $(ARCH))"
 	@echo "  GIT_SHA      - Git SHA/tag for version info and Docker tagging"
 	@echo "  VERSION      - Version for make release-tag (required)"
-	@echo "  WORD         - Required release word for make release-tag"
 	@echo ""
 	@echo "Artifacts:"
 	@echo "  $(STABLE_BIN) -> $(BIN)"
@@ -109,12 +108,12 @@ release-source-version:
 	@./scripts/release_tag.sh set-source-version "$(VERSION)"
 
 release-tag:
-	@if [ -z "$(VERSION)" ] || [ -z "$(WORD)" ]; then \
-		echo "usage: make release-tag VERSION=1.2.3 WORD=ember-orchid"; \
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-tag VERSION=1.2.3"; \
 		exit 1; \
 	fi
 	@./scripts/release_tag.sh check-source-version "$(VERSION)"
-	@./scripts/release_tag.sh make "$(VERSION)" "$(WORD)"
+	@./scripts/release_tag.sh make "$(VERSION)"
 
 $(TARGET): clean | $(dir $(BIN))
 	CGO_ENABLED=$(if $(CGO_ENABLED),$(CGO_ENABLED),0) go build -o $(BIN) -ldflags "$(LDFLAGS)" $(GO_PACKAGE)

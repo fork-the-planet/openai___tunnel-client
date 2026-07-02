@@ -14,7 +14,7 @@ Usage:
 
 Example:
   ./scripts/build_distribution_package.sh \
-    --tag v0.3.1--ember-orchid \
+    --tag v0.3.1 \
     --binary-dir dist/package-input \
     --output-dir dist/public
 EOF

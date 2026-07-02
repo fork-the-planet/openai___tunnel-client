@@ -10,18 +10,18 @@ readonly SOURCE_VERSION_FILE="${REPO_ROOT}/pkg/version/VERSION"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/release_tag.sh make <version> <word>
+  ./scripts/release_tag.sh make <version>
   ./scripts/release_tag.sh parse <tag>
   ./scripts/release_tag.sh source-version
   ./scripts/release_tag.sh set-source-version <version>
   ./scripts/release_tag.sh check-source-version <tag-or-version>
 
 Examples:
-  ./scripts/release_tag.sh make 0.3.1 ember-orchid
-  ./scripts/release_tag.sh parse v0.3.1--ember-orchid
-  ./scripts/release_tag.sh parse v0.3.1-rc.1--ember-orchid
+  ./scripts/release_tag.sh make 0.3.1
+  ./scripts/release_tag.sh parse v0.3.1
+  ./scripts/release_tag.sh parse v0.3.1-rc.1
   ./scripts/release_tag.sh set-source-version 0.3.1
-  ./scripts/release_tag.sh check-source-version v0.3.1--ember-orchid
+  ./scripts/release_tag.sh check-source-version v0.3.1
 EOF
 }
 
@@ -31,29 +31,21 @@ die() {
 }
 
 version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-word_re='^[a-z0-9]+(-[a-z0-9]+)*$'
 
 validate_version() {
   local version="$1"
+  [[ "$version" != *--* ]] || die "version must not include a release-word suffix"
   [[ "$version" =~ $version_re ]] || die "version must be a semver like 1.2.3 or 1.2.3-rc.1"
-}
-
-validate_word() {
-  local word="$1"
-  [[ "$word" =~ $word_re ]] || die "word must contain only lowercase letters, digits, and single hyphen separators"
 }
 
 release_version_from_tag_or_version() {
   local input="$1"
-  local version word version_prefix
+  local version
 
-  if [[ "$input" == v*--* ]]; then
-    version_prefix="${input%%--*}"
-    word="${input#*--}"
-    version="${version_prefix#v}"
-    [[ -n "$version" && -n "$word" ]] || die "tag must include both a version and a word"
+  if [[ "$input" == v* ]]; then
+    version="${input#v}"
+    [[ -n "$version" ]] || die "tag must look like v<semver>"
     validate_version "$version"
-    validate_word "$word"
     printf '%s\n' "$version"
     return
   fi
@@ -80,50 +72,24 @@ check_source_version() {
   local expected actual
   expected="$(release_version_from_tag_or_version "$1")"
   actual="$(source_version)"
-  if [[ "$actual" == "$expected" ]]; then
-    return
-  fi
-
-  local next_dev
-  next_dev="$(next_patch_dev_version "$expected")"
-  if [[ -n "$next_dev" && "$actual" == "$next_dev" ]]; then
-    return
-  fi
-
-  if [[ -n "$next_dev" ]]; then
-    die "source version ${actual} in pkg/version/VERSION does not match release version ${expected} or next development version ${next_dev}"
-  fi
-  die "source version ${actual} in pkg/version/VERSION does not match release version ${expected}"
-}
-
-next_patch_dev_version() {
-  local version="$1"
-  if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    printf '%s.%s.%s-dev\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$((BASH_REMATCH[3] + 1))"
-  fi
+  [[ "$actual" == "$expected" ]] ||
+    die "source version ${actual} in pkg/version/VERSION does not match release version ${expected}"
 }
 
 make_tag() {
   local version="$1"
-  local word="$2"
   validate_version "$version"
-  validate_word "$word"
-  printf 'v%s--%s\n' "$version" "$word"
+  printf 'v%s\n' "$version"
 }
 
 parse_tag() {
   local tag="$1"
-  local version_prefix word version prerelease public_blob_path public_base_url
+  local version prerelease public_blob_path public_base_url
 
-  [[ "$tag" == v*--* ]] || die "tag must look like v<semver>--<word>"
-
-  version_prefix="${tag%%--*}"
-  word="${tag#*--}"
-  version="${version_prefix#v}"
-
-  [[ -n "$version" && -n "$word" ]] || die "tag must include both a version and a word"
+  [[ "$tag" == v* ]] || die "tag must look like v<semver>"
+  version="${tag#v}"
+  [[ -n "$version" ]] || die "tag must look like v<semver>"
   validate_version "$version"
-  validate_word "$word"
 
   prerelease=false
   if [[ "$version" == *-* ]]; then
@@ -135,7 +101,6 @@ parse_tag() {
 
   printf 'release_tag=%s\n' "$tag"
   printf 'release_version=%s\n' "$version"
-  printf 'release_word=%s\n' "$word"
   printf 'prerelease=%s\n' "$prerelease"
   printf 'public_blob_path=%s\n' "$public_blob_path"
   printf 'public_base_url=%s\n' "$public_base_url"
@@ -145,11 +110,11 @@ main() {
   local command="${1:-}"
   case "$command" in
     make)
-      [[ $# -eq 3 ]] || {
+      [[ $# -eq 2 ]] || {
         usage >&2
         exit 1
       }
-      make_tag "$2" "$3"
+      make_tag "$2"
       ;;
     parse)
       [[ $# -eq 2 ]] || {

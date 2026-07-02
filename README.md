@@ -34,6 +34,45 @@ then read the onboarding guide below.
 - **Building a compatible client in another language?** Read
   [`docs/protocol.md`](docs/protocol.md) and use
   [`docs/openapi.json`](docs/openapi.json).
+- **Embedding an MCP server directly in a Go process?** Use the Go SDK with
+  the MCP SDK's in-memory transport; see
+  [`examples/go-sdk-inmemory`](examples/go-sdk-inmemory).
+
+## Embed as a Go SDK
+
+The module can run in the same process as a Go MCP server. The MCP server does
+not need to bind a port or use stdio: give the server side of an in-memory MCP
+transport pair to your server and the client side to `tunnelclient.New`.
+
+~~~bash
+go get github.com/openai/tunnel-client
+~~~
+
+~~~go
+import (
+    "context"
+
+    "github.com/modelcontextprotocol/go-sdk/mcp"
+    tunnelclient "github.com/openai/tunnel-client"
+)
+
+ctx := context.Background()
+server := mcp.NewServer(&mcp.Implementation{Name: "my-server", Version: "1.0.0"}, nil)
+serverTransport, tunnelTransport := mcp.NewInMemoryTransports()
+go server.Run(ctx, serverTransport)
+
+client, err := tunnelclient.New(tunnelclient.Config{
+    TunnelID: "tunnel_0123456789abcdef0123456789abcdef",
+    APIKey:   apiKey,
+}, tunnelTransport)
+if err != nil {
+    return err
+}
+return client.Run(ctx)
+~~~
+
+The runnable [Go SDK example](examples/go-sdk-inmemory) registers an `echo`
+tool and connects it to the OpenAI Tunnel control plane.
 
 ## Documentation Map
 
@@ -52,6 +91,8 @@ then read the onboarding guide below.
 - **Deployment guides**: [`docs/deployment/overview.md`](docs/deployment/overview.md)
 - **Troubleshooting**: [`docs/troubleshooting.md`](docs/troubleshooting.md)
 - **Development & testing**: [`docs/development.md`](docs/development.md)
+- **In-memory Go SDK example**:
+  [`examples/go-sdk-inmemory`](examples/go-sdk-inmemory)
 - **Roadmap / design notes**: [`docs/roadmap.md`](docs/roadmap.md)
 
 To generate the shareable guide output locally:
@@ -155,7 +196,8 @@ go build -o bin/tunnel-client ./cmd/client
 ./bin/tunnel-client help quickstart
 ```
 
-Source archives from release tags carry the release version in
+Public releases use plain semantic-version tags such as `v0.0.10`. Source
+archives from release tags carry the release version in
 `pkg/version/VERSION`. A plain `go build` from a downloaded release `.tar.gz`
 therefore reports the tag semantic version through `tunnel-client --version`,
 `User-Agent`, and the explicit control-plane version headers.

@@ -20,7 +20,7 @@ archives build with the tag semantic version:
 
 ```bash
 make release-source-version VERSION=1.2.3
-make release-tag VERSION=1.2.3 WORD=ember-orchid
+make release-tag VERSION=1.2.3
 ```
 
 ## Unit tests
