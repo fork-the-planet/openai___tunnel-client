@@ -20,11 +20,44 @@
 - Ensure `CONTROL_PLANE_BASE_URL` is the host root (for example
   `https://api.openai.com`) and not a pre-prefixed path.
 
-## Auth failures (401/403)
+## Authorization failures: identify the failing surface first
 
-- Confirm the API key is correct and permitted to access the tunnel control plane.
-- If using `--control-plane.api-key=env:VARNAME`, ensure that env var is set
-  and non-empty.
+A Platform page error and a tunnel-client runtime `401`/`403` are different
+failures. `tunnel-client doctor` is a local preflight: it validates config, key
+presence, MCP/OAuth reachability, and the local health listener. It does not
+query the Platform UI or prove that a key can poll the target tunnel.
+
+- **Platform Tunnels page says "Tunnels access required", "not authorized", or
+  that Tunnels Read access is required**
+  - This is Platform UI authorization, not a tunnel-client runtime or MCP
+    failure. Tunnel permissions are organization-level, not project-level.
+  - Select the intended organization. Ask an organization owner or RBAC
+    administrator to add you to a role or group with Tunnels **Read** to view
+    tunnels, or **Read** + **Manage** to create, edit, or delete them. If no
+    matching role exists, they can create one, assign it to a group, and add
+    you to that group. Allow up to 30 minutes for a new role assignment to
+    propagate, then reload the page.
+- **`tunnel-client doctor --explain` fails**
+  - Fix the named local preflight check before starting the daemon.
+- **`doctor` passes, but `tunnel-client admin tunnels get <tunnel_id>` returns
+  `401` or `403`**
+  - First identify the credential this probe used. `admin tunnels get` uses
+    `--admin-key` or `OPENAI_ADMIN_KEY` when either is configured; only without
+    an admin key does it fall back to `CONTROL_PLANE_API_KEY` or
+    `OPENAI_API_KEY`. To test the runtime key, leave `--admin-key` and
+    `OPENAI_ADMIN_KEY` unset and set `CONTROL_PLANE_API_KEY` to the same key
+    used by `tunnel-client run`.
+  - If that same runtime key gets `401`/`403`, confirm the tunnel ID and
+    organization/workspace association.
+- **The same runtime key can read tunnel metadata, but `tunnel-client run` or
+  `/ui#logs` shows a polling `401`/`403`**
+  - Metadata read works, but the runtime path likely lacks Tunnels **Use**.
+    Grant the runtime-key principal Tunnels **Read** + **Use**, then restart.
+- **Platform lists the tunnel, but ChatGPT cannot select it**
+  - Check the tunnel workspace ID, connector operator's Tunnels **Read** +
+    **Use**, and `/readyz`; this is not proof of a daemon failure.
+
+See [`permissions.md`](permissions.md) for role and group setup.
 
 ## Debug why `/readyz` is failing
 

@@ -169,6 +169,39 @@ func TestSearchFindsTroubleshootingDocForReadyzPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContextExplainsPlatformAuthorizationBoundary(t *testing.T) {
+	t.Parallel()
+
+	text := BuildPromptContext("Platform Tunnels says Tunnels access required; is tunnel-client broken?")
+	if text == "" {
+		t.Fatal("expected packaged knowledge context")
+	}
+	requireContainsAll(t, text,
+		"docs/troubleshooting.md",
+		"Platform UI authorization",
+		"not a tunnel-client runtime or MCP",
+		"organization-level, not project-level",
+		"role or group",
+		"30 minutes",
+		"local preflight",
+	)
+}
+
+func TestBuildPromptContextExplainsAdminProbeCredentialSelection(t *testing.T) {
+	t.Parallel()
+
+	text := BuildPromptContext("same OPENAI_ADMIN_KEY CONTROL_PLANE_API_KEY")
+	if text == "" {
+		t.Fatal("expected packaged knowledge context")
+	}
+	requireContainsAll(t, text,
+		"docs/troubleshooting.md",
+		"OPENAI_ADMIN_KEY",
+		"CONTROL_PLANE_API_KEY",
+		"same key",
+	)
+}
+
 func TestSearchFindsPermissionsDocForTunnelRolePrompt(t *testing.T) {
 	t.Parallel()
 
