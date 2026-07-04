@@ -90,6 +90,13 @@ Harpoon is routable only when at least one allowlisted target is registered.
 When no Harpoon target exists, commands on `harpoon` receive an
 `unsupported_channel` response rather than falling back to `main`.
 
+OAuth discovery can make tunnel-service open an internal FastMCP session on
+`harpoon`. Seeing `initialize`, `notifications/initialized`, or
+`tools/list` on that channel is expected control traffic for the embedded
+Harpoon server, not ChatGPT's runtime session with the customer MCP server.
+Those internal commands intentionally do not carry the connector's OAuth
+bearer token and must not be routed to the customer MCP binding.
+
 ## Streaming and notifications
 
 The dispatcher treats JSON-RPC requests and notifications differently:
@@ -113,6 +120,10 @@ For OAuth-protected MCP servers, discovery and auth challenges still happen from
 inside the customer network:
 
 - The connector's inbound `Authorization` header is forwarded to the MCP server.
+- After OAuth completes, runtime `initialize`, `tools/list`, and tool calls
+  use the configured `main` MCP endpoint (`/v1/mcp/{tunnel_id}` for a
+  tunnel-backed connector). The connector bearer is forwarded only on that
+  customer MCP path, not on the internal `harpoon` channel.
 - OAuth discovery is represented as a tunnel command and executed by
   `tunnel-client`, using the MCP server URL and the same outbound proxy/CA trust
   as other MCP HTTP traffic.
