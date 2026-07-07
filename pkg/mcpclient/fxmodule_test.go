@@ -236,6 +236,60 @@ func TestChannelHTTPClientScopesStaticAndForwardedAuthorizationHeaders(t *testin
 	}
 }
 
+func TestOriginScopedRoundTripperScopesClientCertificateAcrossOAuthRequests(t *testing.T) {
+	t.Parallel()
+
+	var withCertificateCalls []string
+	var withoutCertificateCalls []string
+	rt := &originScopedRoundTripper{
+		serverURL: mustParseURL(t, "https://mcp.example.com/mcp"),
+		withClientCertificate: testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			withCertificateCalls = append(withCertificateCalls, req.URL.String())
+			statusCode := http.StatusNoContent
+			headers := make(http.Header)
+			if req.URL.Path == "/redirect" {
+				statusCode = http.StatusFound
+				headers.Set("Location", "https://auth.example.com/redirected")
+			}
+			return &http.Response{
+				StatusCode: statusCode,
+				Header:     headers,
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		withoutClientCertificate: testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			withoutCertificateCalls = append(withoutCertificateCalls, req.URL.String())
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     make(http.Header),
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	client := &http.Client{Transport: rt}
+	for _, rawURL := range []string{
+		"https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+		"https://auth.example.com/.well-known/oauth-authorization-server",
+		"https://mcp.example.com/redirect",
+	} {
+		resp, err := client.Get(rawURL)
+		if err != nil {
+			t.Fatalf("GET %q failed: %v", rawURL, err)
+		}
+		_ = resp.Body.Close()
+	}
+
+	if got, want := strings.Join(withCertificateCalls, ","), "https://mcp.example.com/.well-known/oauth-protected-resource/mcp,https://mcp.example.com/redirect"; got != want {
+		t.Fatalf("with-client-certificate calls = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(withoutCertificateCalls, ","), "https://auth.example.com/.well-known/oauth-authorization-server,https://auth.example.com/redirected"; got != want {
+		t.Fatalf("without-client-certificate calls = %q, want %q", got, want)
+	}
+}
+
 func TestRunStartupProbeMarksSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -377,6 +431,12 @@ func mustReceiveHeaders(t *testing.T, ch <-chan http.Header) http.Header {
 		t.Fatal("timed out waiting for test server request")
 		return nil
 	}
+}
+
+type testRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f testRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

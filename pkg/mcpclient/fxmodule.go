@@ -271,10 +271,6 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
 	}
-	base, err = tctransport.ApplyClientCertificate(base, clientCertificate)
-	if err != nil {
-		return nil, fmt.Errorf("mcpclient: %w", err)
-	}
 	base, err = tctransport.ApplyProxy(base, proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
@@ -282,6 +278,17 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 	base, err = tctransport.ApplyUnixSocketPath(base, unixSocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
+	}
+	if clientCertificate != nil {
+		mtlsBase, err := tctransport.ApplyClientCertificate(base, clientCertificate)
+		if err != nil {
+			return nil, fmt.Errorf("mcpclient: %w", err)
+		}
+		base = &originScopedRoundTripper{
+			serverURL:                serverURL,
+			withClientCertificate:    mtlsBase,
+			withoutClientCertificate: base,
+		}
 	}
 	base = otelhttp.NewTransport(
 		base,
@@ -295,6 +302,29 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 	base = tclog.NewRoundTripper(base, forwardingLogger, loggingCfg, tclog.ComponentMcpClient)
 	base = internal.NewForwardingRoundTripper(base)
 	return internal.NewStaticHeadersRoundTripper(base, serverURL, extraHeaders, discoveryExtraHeaders), nil
+}
+
+// originScopedRoundTripper keeps an MCP client certificate scoped to the
+// configured MCP origin. Redirects issue a new RoundTrip, so cross-origin
+// redirect destinations use the transport without the client certificate.
+type originScopedRoundTripper struct {
+	serverURL                *url.URL
+	withClientCertificate    http.RoundTripper
+	withoutClientCertificate http.RoundTripper
+}
+
+func (t *originScopedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req != nil && sameURLOrigin(req.URL, t.serverURL) {
+		return t.withClientCertificate.RoundTrip(req)
+	}
+	return t.withoutClientCertificate.RoundTrip(req)
+}
+
+func sameURLOrigin(left *url.URL, right *url.URL) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func transportTargetLabel(kind config.MCPTransportKind, serverURL *url.URL) string {
