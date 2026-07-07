@@ -177,13 +177,10 @@ jobs:
             done
           } > PUBLIC_URLS.txt
 
-      - name: Install Azure CLI on macOS
+      - name: Verify Azure CLI on macOS
         run: |
           set -euo pipefail
-          if ! command -v az >/dev/null 2>&1; then
-            brew update
-            brew install azure-cli
-          fi
+          command -v az
           az version
 
       - name: Azure login for public artifact upload
