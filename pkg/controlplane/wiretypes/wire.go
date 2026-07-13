@@ -2,7 +2,9 @@ package wiretypes
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -27,6 +29,50 @@ const (
 	ResponsePayloadOAuth              ResponsePayloadType = "oauth_discovery_response"
 	ResponsePayloadSessionTermination ResponsePayloadType = "session_termination_response"
 )
+
+var (
+	responseTimeoutPattern    = regexp.MustCompile(`^[0-9]+(ns|us|ms|s|m|h)$`)
+	errInvalidResponseTimeout = errors.New("invalid response timeout")
+)
+
+// ResponseTimeoutDuration is an integer value followed by one response-timeout
+// unit. Invalid JSON values decode to an invalid empty value so optional timing
+// metadata never makes an otherwise valid command unreadable. Callers must use
+// Value to distinguish a valid zero duration from invalid metadata.
+type ResponseTimeoutDuration string
+
+func (d *ResponseTimeoutDuration) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		*d = ""
+		return nil
+	}
+	if _, err := parseResponseTimeout(value); err != nil {
+		*d = ""
+		return nil
+	}
+	*d = ResponseTimeoutDuration(value)
+	return nil
+}
+
+// Value parses the duration and reports whether the wire value is valid.
+func (d ResponseTimeoutDuration) Value() (time.Duration, bool) {
+	if d == "" {
+		return 0, false
+	}
+	parsed, err := parseResponseTimeout(string(d))
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func parseResponseTimeout(value string) (time.Duration, error) {
+	if !responseTimeoutPattern.MatchString(value) {
+		return 0, errInvalidResponseTimeout
+	}
+	return time.ParseDuration(value)
+}
 
 // TunnelResponsePayload mirrors the body posted to POST /v1/tunnels/{tunnel_id}/response when
 // delivering MCP results back to tunnel-service.
@@ -56,6 +102,9 @@ type BaseRawPolledCommand struct {
 	Channel     string      `json:"channel,omitempty"`
 	CreatedAt   time.Time   `json:"created_at"`
 	Headers     http.Header `json:"headers"`
+	// ResponseTimeout is an optional relative duration for the complete command
+	// lifecycle, anchored when the poll response is received.
+	ResponseTimeout *ResponseTimeoutDuration `json:"response_timeout,omitempty"`
 }
 
 // RawJSONRPCPolledCommand represents a single JSON object returned by

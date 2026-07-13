@@ -77,6 +77,7 @@ another poll. A `200 OK` response contains a JSON envelope:
       "command_type": "jsonrpc",
       "channel": "main",
       "created_at": "2026-01-01T00:00:00Z",
+      "response_timeout": "30s",
       "headers": {
         "Mcp-Session-Id": ["session_123"]
       },
@@ -100,7 +101,46 @@ Common command fields:
 | `command_type` | Discriminator for the command shape. |
 | `channel` | Logical MCP channel; defaults to `main` when absent. Echo it in the response body. |
 | `created_at` | RFC 3339 enqueue timestamp. |
+| `response_timeout` | Optional relative duration for the complete command lifecycle, anchored when the poll response is received. |
 | `headers` | Multi-valued headers to apply to the MCP request. |
+
+### Response timeout
+
+When present, `response_timeout` is a relative duration for the complete
+command lifecycle, anchored when the poll response is received. Its wire
+grammar is:
+
+```abnf
+ResponseTimeout = 1*DIGIT TimeoutUnit
+TimeoutUnit     = "ns" / "us" / "ms" / "s" / "m" / "h"
+```
+
+The value contains one non-negative integer and one lowercase unit. `30s`,
+`4500ms`, and `0s` are valid. Fractions such as `4.5s`, signed values such as
+`-1s` or `+1s`, compound values such as `1m30s`, JSON strings such as `" 1s"`
+or `"1s "` that contain whitespace, exponents such as `1e3s`, unknown units
+such as `30d`, and overflowing values such as `999999999999999999999999h` are
+invalid. A JSON number such as `30` is also invalid because the wire value must
+be a string.
+
+An absent or JSON `null` value retains legacy no-deadline behavior. The
+official Go decoder also fails open for malformed values, wrong JSON types,
+unknown units, and values that overflow its duration range: the command remains
+decodable and retains legacy behavior. At the contract level, a valid zero such
+as `0s` represents immediate expiry.
+
+Compatibility is per command, including when tunnel-service instances produce
+different payload shapes during a mixed deployment:
+
+| Poll command | Released official Go client without this field | Contract-aware client |
+| --- | --- | --- |
+| `response_timeout` omitted or `null` | Decodes normally with legacy behavior. | Decodes normally with legacy behavior. |
+| Valid `response_timeout` present | `encoding/json` ignores the unknown property; legacy behavior is retained. | Decodes and validates the field; this contract-preparation release retains legacy runtime behavior. |
+| Malformed, wrong-type, unknown-unit, or overflowing value present | `encoding/json` ignores the unknown property; legacy behavior is retained. | Decoding succeeds and legacy behavior is retained. |
+
+Previously generated OpenAPI clients are outside this compatibility guarantee.
+Command schemas remain open with `additionalProperties: true`, and clients must
+accept unknown future command properties.
 
 ### `jsonrpc` commands
 

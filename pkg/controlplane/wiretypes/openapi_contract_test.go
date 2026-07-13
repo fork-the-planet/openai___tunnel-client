@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAPIContractSurface(t *testing.T) {
@@ -56,6 +58,63 @@ func TestOpenAPIContractSurface(t *testing.T) {
 	}
 
 	components := mustMap(t, spec["components"], "components")
+	componentSchemas := mustMap(t, components["schemas"], "components.schemas")
+	for _, schemaName := range []string{"JsonRpcPolledCommand", "SessionTerminationPolledCommand"} {
+		command := mustMap(t, componentSchemas[schemaName], "components.schemas."+schemaName)
+		properties := mustMap(t, command["properties"], schemaName+".properties")
+		responseTimeout := mustMap(t, properties["response_timeout"], schemaName+".response_timeout")
+		for _, value := range []string{"30s", "4500ms", "1ns", "1us", "1ms", "2m", "3h", "0s", "0h"} {
+			requireValidAgainstSchema(t, spec, responseTimeout, value, schemaName+" response_timeout")
+		}
+		requireValidAgainstSchema(t, spec, responseTimeout, nil, schemaName+" null response_timeout")
+
+		for _, value := range []string{
+			"-1s",
+			"+1s",
+			"4.5s",
+			"1m30s",
+			" 1s",
+			"1s ",
+			"1s\n",
+			"1e3s",
+			"1d",
+			"1S",
+			"1µs",
+		} {
+			if err := validateAgainstSchema(spec, responseTimeout, value, "$.response_timeout"); err == nil {
+				t.Fatalf("%s response_timeout must reject %q", schemaName, value)
+			}
+		}
+		for _, value := range []any{float64(30), true, map[string]any{}, []any{}} {
+			if err := validateAgainstSchema(spec, responseTimeout, value, "$.response_timeout"); err == nil {
+				t.Fatalf("%s response_timeout must reject JSON value %#v", schemaName, value)
+			}
+		}
+
+		if additional, ok := command["additionalProperties"].(bool); !ok || !additional {
+			t.Fatalf("%s must allow additive fields for forward compatibility", schemaName)
+		}
+		commandType := "jsonrpc"
+		if schemaName == "SessionTerminationPolledCommand" {
+			commandType = "session_termination"
+		}
+		commandWithFutureField := map[string]any{
+			"request_id":   "req-future",
+			"shard_token":  "shard-future",
+			"created_at":   "2025-01-01T00:00:00Z",
+			"command_type": commandType,
+			"future_field": map[string]any{"value": true},
+		}
+		if schemaName == "JsonRpcPolledCommand" {
+			commandWithFutureField["jsonrpc"] = map[string]any{"jsonrpc": "2.0", "id": "rpc-1", "method": "ping"}
+		}
+		requireValidAgainstSchema(t, spec, command, commandWithFutureField, schemaName+" with additive field")
+		for _, required := range stringSlice(t, command["required"], schemaName+".required") {
+			if required == "response_timeout" {
+				t.Fatalf("%s response_timeout must remain optional", schemaName)
+			}
+		}
+	}
 	securitySchemes := mustMap(t, components["securitySchemes"], "components.securitySchemes")
 	bearer := mustMap(t, securitySchemes["BearerAuth"], "components.securitySchemes.BearerAuth")
 	if got := mustString(t, bearer["scheme"], "BearerAuth.scheme"); got != "bearer" {
@@ -91,6 +150,7 @@ func TestOpenAPIExamplesMatchWireTypes(t *testing.T) {
 	if rpc.CommandType != CommandTypeJSONRPC || len(rpc.JSONRPC) == 0 {
 		t.Fatalf("unexpected documented jsonrpc command: %#v", rpc)
 	}
+	assertResponseTimeoutValue(t, rpc.ResponseTimeout, 30*time.Second, "documented jsonrpc command")
 
 	var termination RawSessionTerminationPolledCommand
 	if err := json.Unmarshal(envelope.Commands[1], &termination); err != nil {
@@ -99,6 +159,7 @@ func TestOpenAPIExamplesMatchWireTypes(t *testing.T) {
 	if termination.CommandType != CommandTypeSessionTermination {
 		t.Fatalf("unexpected documented session command type %q", termination.CommandType)
 	}
+	assertResponseTimeoutValue(t, termination.ResponseTimeout, 30*time.Second, "documented session command")
 
 	response := operation(t, spec, "/v1/tunnels/{tunnel_id}/response", "post")
 	requestContent := requestBodyContent(t, response)
@@ -116,6 +177,18 @@ func TestOpenAPIExamplesMatchWireTypes(t *testing.T) {
 	}
 	if payload.ResponseType != ResponsePayloadJSONRPC {
 		t.Fatalf("expected documented response type %q, got %q", ResponsePayloadJSONRPC, payload.ResponseType)
+	}
+}
+
+func assertResponseTimeoutValue(t *testing.T, value *ResponseTimeoutDuration, want time.Duration, label string) {
+	t.Helper()
+	if value == nil {
+		t.Fatalf("%s response_timeout is absent", label)
+		return
+	}
+	got, ok := value.Value()
+	if !ok || got != want {
+		t.Fatalf("%s response_timeout = %v, %v; want %v, true", label, got, ok, want)
 	}
 }
 
@@ -289,7 +362,6 @@ func validateAgainstSchema(spec map[string]any, schema map[string]any, value any
 		}
 		return validateAgainstSchema(spec, resolved, value, path)
 	}
-
 	if variants, ok := schema["anyOf"].([]any); ok {
 		return validateVariant(spec, variants, value, path, false)
 	}
@@ -322,8 +394,18 @@ func validateAgainstSchema(spec map[string]any, schema map[string]any, value any
 			return fmt.Errorf("%s: expected null, got %T", path, value)
 		}
 	case "string":
-		if _, ok := value.(string); !ok {
+		stringValue, ok := value.(string)
+		if !ok {
 			return fmt.Errorf("%s: expected string, got %T", path, value)
+		}
+		if pattern, ok := schema["pattern"].(string); ok {
+			compiled, err := regexp.Compile(pattern)
+			if err != nil {
+				return fmt.Errorf("%s: invalid schema pattern %q: %w", path, pattern, err)
+			}
+			if !compiled.MatchString(stringValue) {
+				return fmt.Errorf("%s: string %q does not match pattern %q", path, stringValue, pattern)
+			}
 		}
 	case "integer":
 		number, ok := value.(float64)

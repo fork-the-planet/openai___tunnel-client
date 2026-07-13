@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,6 +62,284 @@ func TestRawJSONRPCPolledCommandMarshalFieldNames(t *testing.T) {
 	traceHeaders, ok := headersValue["X-Trace-ID"].([]any)
 	if !ok || len(traceHeaders) != 1 || traceHeaders[0] != "trace-789" {
 		t.Fatalf("expected headers to include X-Trace-ID trace-789, got %v", headersValue)
+	}
+}
+
+func TestResponseTimeoutIsOptionalDurationString(t *testing.T) {
+	responseTimeout := ResponseTimeoutDuration("30s")
+	command := RawJSONRPCPolledCommand{
+		BaseRawPolledCommand: BaseRawPolledCommand{
+			RequestID:       "req-timeout",
+			ShardToken:      "shard-timeout",
+			CommandType:     CommandTypeJSONRPC,
+			ResponseTimeout: &responseTimeout,
+		},
+		JSONRPC: json.RawMessage(`{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}`),
+	}
+
+	payload, err := json.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	if !strings.Contains(string(payload), `"response_timeout":"30s"`) {
+		t.Fatalf("response timeout must be encoded as a duration string, got %s", payload)
+	}
+
+	command.ResponseTimeout = nil
+	payload, err = json.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal command without response timeout: %v", err)
+	}
+	if strings.Contains(string(payload), "response_timeout") {
+		t.Fatalf("optional response timeout must be omitted when absent, got %s", payload)
+	}
+}
+
+func TestResponseTimeoutParsesIntegerValueAndSingleUnit(t *testing.T) {
+	tests := []struct {
+		wire string
+		want time.Duration
+	}{
+		{wire: "30s", want: 30 * time.Second},
+		{wire: "4500ms", want: 4500 * time.Millisecond},
+		{wire: "1ns", want: time.Nanosecond},
+		{wire: "1us", want: time.Microsecond},
+		{wire: "1ms", want: time.Millisecond},
+		{wire: "2m", want: 2 * time.Minute},
+		{wire: "3h", want: 3 * time.Hour},
+		{wire: "0s", want: 0},
+		{wire: "0h", want: 0},
+		{wire: "9223372036854775807ns", want: time.Duration(1<<63 - 1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.wire, func(t *testing.T) {
+			var command RawJSONRPCPolledCommand
+			payload := `{
+				"request_id":"req-timeout",
+				"shard_token":"shard-timeout",
+				"command_type":"jsonrpc",
+				"response_timeout":` + strconv.Quote(tc.wire) + `,
+				"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}
+			}`
+			if err := json.Unmarshal([]byte(payload), &command); err != nil {
+				t.Fatalf("decode response timeout: %v", err)
+			}
+			if command.ResponseTimeout == nil {
+				t.Fatal("response timeout was not decoded")
+			}
+			got, ok := command.ResponseTimeout.Value()
+			if !ok || got != tc.want {
+				t.Fatalf("response timeout = %v, %v; want %v, true", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidResponseTimeoutDoesNotRejectCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		wire string
+	}{
+		{name: "malformed", wire: `"not-a-duration"`},
+		{name: "number", wire: `30`},
+		{name: "boolean", wire: `true`},
+		{name: "object", wire: `{}`},
+		{name: "array", wire: `[]`},
+		{name: "negative", wire: `"-1s"`},
+		{name: "negative zero", wire: `"-0s"`},
+		{name: "positive sign", wire: `"+1s"`},
+		{name: "unitless zero", wire: `"0"`},
+		{name: "fractional", wire: `"4.5s"`},
+		{name: "compound", wire: `"1m30s"`},
+		{name: "leading whitespace", wire: `" 1s"`},
+		{name: "trailing whitespace", wire: `"1s "`},
+		{name: "trailing newline", wire: `"1s\n"`},
+		{name: "exponent", wire: `"1e3s"`},
+		{name: "unknown unit", wire: `"1d"`},
+		{name: "overflow", wire: `"9223372036854775808ns"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var command RawJSONRPCPolledCommand
+			payload := `{
+				"request_id":"req-invalid-timeout",
+				"shard_token":"shard-invalid-timeout",
+				"command_type":"jsonrpc",
+				"response_timeout":` + tc.wire + `,
+				"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}
+			}`
+			if err := json.Unmarshal([]byte(payload), &command); err != nil {
+				t.Fatalf("optional invalid response timeout must not reject command: %v", err)
+			}
+			if command.ResponseTimeout == nil {
+				t.Fatal("present invalid response timeout should retain an invalid sentinel")
+			}
+			if got, ok := command.ResponseTimeout.Value(); ok || got != 0 {
+				t.Fatalf("invalid response timeout should be ignored, got %v, %v", got, ok)
+			}
+		})
+	}
+}
+
+func TestMissingOrNullResponseTimeoutAndUnknownFieldsAreCompatible(t *testing.T) {
+	fixture := []byte(`{"commands":[
+		{
+			"request_id":"req-compatible-rpc",
+			"shard_token":"shard-compatible-rpc",
+			"command_type":"jsonrpc",
+			"future_field":{"nested":true},
+			"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}
+		},
+		{
+			"request_id":"req-compatible-termination",
+			"shard_token":"shard-compatible-termination",
+			"command_type":"session_termination",
+			"response_timeout":null,
+			"future_field":["future"],
+			"headers":{"Mcp-Session-Id":["session-1"]}
+		}
+	]}`)
+
+	var envelope PolledCommandEnvelope
+	if err := json.Unmarshal(fixture, &envelope); err != nil {
+		t.Fatalf("decode compatible command envelope: %v", err)
+	}
+	if len(envelope.Commands) != 2 {
+		t.Fatalf("compatible command count = %d, want 2", len(envelope.Commands))
+	}
+
+	var rpc RawJSONRPCPolledCommand
+	if err := json.Unmarshal(envelope.Commands[0], &rpc); err != nil {
+		t.Fatalf("missing timeout or unknown JSON-RPC field must not reject command: %v", err)
+	}
+	if rpc.ResponseTimeout != nil {
+		t.Fatalf("missing response timeout should remain absent, got %v", rpc.ResponseTimeout)
+	}
+	if rpc.RequestID != "req-compatible-rpc" || rpc.CommandType != CommandTypeJSONRPC || len(rpc.JSONRPC) == 0 {
+		t.Fatalf("unknown JSON-RPC field changed established fields: %#v", rpc)
+	}
+
+	var termination RawSessionTerminationPolledCommand
+	if err := json.Unmarshal(envelope.Commands[1], &termination); err != nil {
+		t.Fatalf("null timeout or unknown session-termination field must not reject command: %v", err)
+	}
+	if termination.ResponseTimeout != nil {
+		t.Fatalf("null response timeout should use legacy behavior, got %v", termination.ResponseTimeout)
+	}
+	if termination.RequestID != "req-compatible-termination" || termination.CommandType != CommandTypeSessionTermination {
+		t.Fatalf("unknown session-termination field changed established fields: %#v", termination)
+	}
+}
+
+func TestReleasedV0010DecoderIgnoresResponseTimeout(t *testing.T) {
+	// These types are frozen from github.com/openai/tunnel-client v0.0.10,
+	// commit 105e17a79a36e4e5c897fd698ed2b8dbf935b144. Keep them independent of
+	// current wire types so the test continues to exercise the released decoder.
+	type releasedV0010CommandType string
+	const (
+		releasedV0010JSONRPC            releasedV0010CommandType = "jsonrpc"
+		releasedV0010SessionTermination releasedV0010CommandType = "session_termination"
+	)
+	type releasedV0010BaseRawPolledCommand struct {
+		RequestID   string                   `json:"request_id"`
+		ShardToken  string                   `json:"shard_token"`
+		CommandType releasedV0010CommandType `json:"command_type"`
+		Channel     string                   `json:"channel,omitempty"`
+		CreatedAt   time.Time                `json:"created_at"`
+		Headers     http.Header              `json:"headers"`
+	}
+	type releasedV0010RawJSONRPCPolledCommand struct {
+		releasedV0010BaseRawPolledCommand
+		JSONRPC json.RawMessage `json:"jsonrpc"`
+	}
+	type releasedV0010RawSessionTerminationPolledCommand struct {
+		releasedV0010BaseRawPolledCommand
+	}
+	type releasedV0010PolledCommandEnvelope struct {
+		Commands []json.RawMessage `json:"commands"`
+	}
+
+	fixture := []byte(`{"commands":[
+		{
+			"request_id":"req-new-service-old-client-rpc",
+			"shard_token":"shard-new-service-old-client-rpc",
+			"command_type":"jsonrpc",
+			"channel":"main",
+			"created_at":"2026-07-10T12:00:00Z",
+			"headers":{"X-Trace-Id":["trace-rpc"]},
+			"response_timeout":"30s",
+			"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}
+		},
+		{
+			"request_id":"req-new-service-old-client-termination",
+			"shard_token":"shard-new-service-old-client-termination",
+			"command_type":"session_termination",
+			"channel":"main",
+			"created_at":"2026-07-10T12:00:01Z",
+			"headers":{"Mcp-Session-Id":["session-legacy"]},
+			"response_timeout":"30s"
+		}
+	]}`)
+
+	var envelope releasedV0010PolledCommandEnvelope
+	if err := json.Unmarshal(fixture, &envelope); err != nil {
+		t.Fatalf("released v0.0.10 envelope decoder failed: %v", err)
+	}
+	if len(envelope.Commands) != 2 {
+		t.Fatalf("released v0.0.10 command count = %d, want 2", len(envelope.Commands))
+	}
+
+	seen := map[releasedV0010CommandType]bool{}
+	for _, raw := range envelope.Commands {
+		var probe struct {
+			CommandType releasedV0010CommandType `json:"command_type"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			t.Fatalf("released v0.0.10 discriminator decoder failed: %v", err)
+		}
+
+		switch probe.CommandType {
+		case releasedV0010JSONRPC:
+			var command releasedV0010RawJSONRPCPolledCommand
+			if err := json.Unmarshal(raw, &command); err != nil {
+				t.Fatalf("released v0.0.10 JSON-RPC decoder must ignore response_timeout: %v", err)
+			}
+			if command.RequestID != "req-new-service-old-client-rpc" {
+				t.Fatalf("released v0.0.10 JSON-RPC request_id = %q", command.RequestID)
+			}
+			if command.ShardToken != "shard-new-service-old-client-rpc" {
+				t.Fatalf("released v0.0.10 JSON-RPC shard_token = %q", command.ShardToken)
+			}
+			if command.CommandType != releasedV0010JSONRPC || command.Channel != "main" {
+				t.Fatalf("released v0.0.10 JSON-RPC discriminator/channel = %q/%q", command.CommandType, command.Channel)
+			}
+			if command.CreatedAt.IsZero() || command.Headers.Get("X-Trace-Id") != "trace-rpc" || len(command.JSONRPC) == 0 {
+				t.Fatalf("released v0.0.10 JSON-RPC decoder dropped payload metadata: %#v", command)
+			}
+		case releasedV0010SessionTermination:
+			var command releasedV0010RawSessionTerminationPolledCommand
+			if err := json.Unmarshal(raw, &command); err != nil {
+				t.Fatalf("released v0.0.10 session-termination decoder must ignore response_timeout: %v", err)
+			}
+			if command.RequestID != "req-new-service-old-client-termination" {
+				t.Fatalf("released v0.0.10 session-termination request_id = %q", command.RequestID)
+			}
+			if command.ShardToken != "shard-new-service-old-client-termination" {
+				t.Fatalf("released v0.0.10 session-termination shard_token = %q", command.ShardToken)
+			}
+			if command.CommandType != releasedV0010SessionTermination || command.Channel != "main" {
+				t.Fatalf("released v0.0.10 session-termination discriminator/channel = %q/%q", command.CommandType, command.Channel)
+			}
+			if command.CreatedAt.IsZero() || command.Headers.Get("Mcp-Session-Id") != "session-legacy" {
+				t.Fatalf("released v0.0.10 session-termination decoder dropped payload metadata: %#v", command)
+			}
+		default:
+			t.Fatalf("unexpected released v0.0.10 command type %q", probe.CommandType)
+		}
+		seen[probe.CommandType] = true
+	}
+	if !seen[releasedV0010JSONRPC] || !seen[releasedV0010SessionTermination] {
+		t.Fatalf("released v0.0.10 decoder did not cover both command types: %v", seen)
 	}
 }
 
