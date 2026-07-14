@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/openai/tunnel-client/pkg/config"
+	"github.com/openai/tunnel-client/pkg/controlplane"
 	"github.com/openai/tunnel-client/pkg/harpoon"
 	"github.com/openai/tunnel-client/pkg/harpoon/hostbus"
 	"github.com/openai/tunnel-client/pkg/mcpclient"
@@ -150,6 +151,160 @@ func TestProcessorForwardResponses(t *testing.T) {
 	require.NotNil(t, result.ServerInfo)
 	require.Equal(t, "test-server", result.ServerInfo.Name)
 	require.Equal(t, "1.0.0", result.ServerInfo.Version)
+}
+
+func TestProcessorDropsExpiredCommandBeforeMCPOrResponse(t *testing.T) {
+	t.Parallel()
+
+	transport := &countingForwardingTransport{conn: &stubForwardingConnection{}}
+	responder := &countingResponder{}
+	processor := newDeadlineTestProcessor(t, transport, responder)
+	id, err := jsonrpc.MakeID("expired")
+	require.NoError(t, err)
+	command := &fakePolledCommand{
+		id:                  "expired-command",
+		message:             &jsonrpc.Request{ID: id, Method: "tools/list"},
+		shardToken:          "expired-shard",
+		responseDeadline:    time.Now().Add(-time.Second),
+		hasResponseDeadline: true,
+	}
+
+	require.NoError(t, processor.Process(context.Background(), command))
+	require.Zero(t, transport.calls.Load(), "expired command must not connect to MCP")
+	require.Zero(t, responder.calls.Load(), "expired command must not post a response")
+}
+
+func TestProcessorAppliesResponseDeadlineToMCPAndResponsePost(t *testing.T) {
+	t.Parallel()
+
+	id, err := jsonrpc.MakeID("deadline-propagation")
+	require.NoError(t, err)
+	conn := &deadlineObservingConnection{
+		response: &jsonrpc.Response{ID: id, Result: json.RawMessage(`{"ok":true}`)},
+	}
+	transport := &deadlineObservingTransport{conn: conn}
+	responder := &deadlineObservingResponder{}
+	processor := newDeadlineTestProcessor(t, transport, responder)
+	responseDeadline := time.Now().Add(time.Minute)
+	command := &fakePolledCommand{
+		id:                  "deadline-propagation-command",
+		message:             &jsonrpc.Request{ID: id, Method: "tools/list"},
+		shardToken:          "deadline-propagation-shard",
+		responseDeadline:    responseDeadline,
+		hasResponseDeadline: true,
+	}
+
+	require.NoError(t, processor.Process(context.Background(), command))
+	wantDeadline := responseDeadline
+	require.True(t, transport.deadline.Equal(wantDeadline), "Connect deadline = %v, want %v", transport.deadline, wantDeadline)
+	require.True(t, conn.writeDeadline.Equal(wantDeadline), "Write deadline = %v, want %v", conn.writeDeadline, wantDeadline)
+	require.True(t, conn.readDeadline.Equal(wantDeadline), "Read deadline = %v, want %v", conn.readDeadline, wantDeadline)
+	require.True(t, responder.deadline.Equal(wantDeadline), "PostResponse deadline = %v, want %v", responder.deadline, wantDeadline)
+}
+
+func TestProcessorDeadlineDuringReadClosesMCPAndPostsNothing(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	conn := newDeadlineBlockingConnection()
+	transport := &stubForwardingTransport{conn: conn}
+	responder := &countingResponder{}
+	processor := newDeadlineTestProcessor(t, transport, responder)
+	processor.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	var expire context.CancelCauseFunc
+	processor.withDeadlineCause = func(ctx context.Context, _ time.Time, cause error) (context.Context, context.CancelFunc) {
+		deadlineCtx, cancelCause := context.WithCancelCause(ctx)
+		expire = cancelCause
+		return deadlineCtx, func() { cancelCause(context.Canceled) }
+	}
+	id, err := jsonrpc.MakeID("blocking-read")
+	require.NoError(t, err)
+	command := &fakePolledCommand{
+		id:                  "blocking-read-command",
+		message:             &jsonrpc.Request{ID: id, Method: "tools/list"},
+		shardToken:          "blocking-read-shard",
+		responseDeadline:    time.Now().Add(time.Hour),
+		hasResponseDeadline: true,
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- processor.Process(context.Background(), command) }()
+	waitForSignal(t, conn.readStarted, "MCP read to start")
+	expire(errResponseDeadlineExceeded)
+	require.NoError(t, waitForResult(t, done, "processor to stop after deadline"))
+	waitForSignal(t, conn.closed, "MCP connection to close")
+	require.Zero(t, responder.calls.Load(), "deadline expiry must not synthesize a response")
+	require.Contains(t, logs.String(), "command response deadline reached; dropping without posting a response")
+}
+
+func TestProcessorDoesNotSwallowEarlierParentDeadline(t *testing.T) {
+	t.Parallel()
+
+	transport := &countingForwardingTransport{conn: &stubForwardingConnection{}}
+	responder := &countingResponder{}
+	processor := newDeadlineTestProcessor(t, transport, responder)
+	id, err := jsonrpc.MakeID("parent-deadline")
+	require.NoError(t, err)
+	command := &fakePolledCommand{
+		id:                  "parent-deadline-command",
+		message:             &jsonrpc.Request{ID: id, Method: "tools/list"},
+		shardToken:          "parent-deadline-shard",
+		responseDeadline:    time.Now().Add(time.Hour),
+		hasResponseDeadline: true,
+	}
+	parentCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err = processor.Process(parentCtx, command)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, responder.calls.Load())
+}
+
+func TestProcessorDeadlineCancelsResponsePostWithoutClosingCompletedMCP(t *testing.T) {
+	t.Parallel()
+
+	id, err := jsonrpc.MakeID("blocking-post")
+	require.NoError(t, err)
+	conn := newResponseThenTrackCloseConnection(&jsonrpc.Response{ID: id, Result: json.RawMessage(`{"ok":true}`)})
+	responder := newDeadlineBlockingResponder()
+	processor := newDeadlineTestProcessor(t, &stubForwardingTransport{conn: conn}, responder)
+	var expire context.CancelCauseFunc
+	processor.withDeadlineCause = func(ctx context.Context, _ time.Time, cause error) (context.Context, context.CancelFunc) {
+		deadlineCtx, cancelCause := context.WithCancelCause(ctx)
+		expire = cancelCause
+		return deadlineCtx, func() { cancelCause(context.Canceled) }
+	}
+	command := &fakePolledCommand{
+		id:                  "blocking-post-command",
+		message:             &jsonrpc.Request{ID: id, Method: "tools/list"},
+		shardToken:          "blocking-post-shard",
+		responseDeadline:    time.Now().Add(time.Hour),
+		hasResponseDeadline: true,
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- processor.Process(context.Background(), command) }()
+	waitForSignal(t, responder.started, "response POST to start")
+	expire(errResponseDeadlineExceeded)
+	waitForSignal(t, responder.canceled, "response POST to cancel")
+	require.NoError(t, waitForResult(t, done, "processor to stop after response POST deadline"))
+	require.False(t, conn.closed.Load(), "completed MCP lifecycle must not be closed after response POST expiry")
+	require.EqualValues(t, 1, responder.calls.Load(), "deadline must cancel the one in-flight POST without retrying")
+}
+
+func newDeadlineTestProcessor(t *testing.T, transport mcpclient.ForwardingTransport, responder controlplane.Responder) *mcpProcessor {
+	t.Helper()
+	processor, err := NewProcessor(processorParams{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, 5*time.Minute),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   newTestMeterProvider(t),
+	})
+	require.NoError(t, err)
+	return processor.(*mcpProcessor)
 }
 
 func TestProcessorAddsDefaultAcceptHeaderWhenMissing(t *testing.T) {
@@ -2063,12 +2218,13 @@ func TestProcessorForwardResponsesPostFailureStopsForwarding(t *testing.T) {
 	callID, err := jsonrpc.MakeID("post-failure-forward")
 	require.NoError(t, err)
 
-	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+	conn := &scriptedForwardingConnection{
 		statusCode: http.StatusOK,
 		readSteps: []readStep{
 			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
 		},
-	}}
+	}
+	transport := &stubForwardingTransport{conn: conn}
 
 	meterProvider := newTestMeterProvider(t)
 	processor, err := NewProcessor(processorParams{
@@ -2092,6 +2248,9 @@ func TestProcessorForwardResponsesPostFailureStopsForwarding(t *testing.T) {
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
 	require.EqualValues(t, 1, responder.calls.Load())
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	require.True(t, conn.closed, "legacy response-post failure must retain close behavior")
 }
 
 func TestBuildJSONRPCErrorResponseAndRequestKindAttributes(t *testing.T) {
@@ -3098,6 +3257,134 @@ func (s *stubForwardingTransport) Connect(context.Context) (mcpclient.Forwarding
 	return s.conn, nil
 }
 
+type deadlineObservingTransport struct {
+	conn     mcpclient.ForwardingConnection
+	deadline time.Time
+}
+
+func (t *deadlineObservingTransport) Connect(ctx context.Context) (mcpclient.ForwardingConnection, error) {
+	t.deadline, _ = ctx.Deadline()
+	return t.conn, nil
+}
+
+type deadlineObservingConnection struct {
+	writeDeadline time.Time
+	readDeadline  time.Time
+	response      jsonrpc.Message
+}
+
+func (c *deadlineObservingConnection) Write(ctx context.Context, _ http.Header, _ jsonrpc.Message) (int, http.Header, error) {
+	c.writeDeadline, _ = ctx.Deadline()
+	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+}
+
+func (c *deadlineObservingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	c.readDeadline, _ = ctx.Deadline()
+	return c.response, nil
+}
+
+func (c *deadlineObservingConnection) Close() error { return nil }
+
+type deadlineObservingResponder struct {
+	deadline time.Time
+}
+
+func (r *deadlineObservingResponder) PostResponse(ctx context.Context, _ types.RequestID, _ *types.TunnelResponse) (types.TunnelServiceRequestID, error) {
+	r.deadline, _ = ctx.Deadline()
+	return "", nil
+}
+
+type deadlineBlockingConnection struct {
+	readStarted chan struct{}
+	closed      chan struct{}
+	readOnce    sync.Once
+	closeOnce   sync.Once
+}
+
+type responseThenTrackCloseConnection struct {
+	response jsonrpc.Message
+	closed   atomic.Bool
+}
+
+func newResponseThenTrackCloseConnection(response jsonrpc.Message) *responseThenTrackCloseConnection {
+	return &responseThenTrackCloseConnection{response: response}
+}
+
+func (c *responseThenTrackCloseConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
+	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+}
+
+func (c *responseThenTrackCloseConnection) Read(context.Context) (jsonrpc.Message, error) {
+	return c.response, nil
+}
+
+func (c *responseThenTrackCloseConnection) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+type deadlineBlockingResponder struct {
+	started    chan struct{}
+	canceled   chan struct{}
+	startOnce  sync.Once
+	cancelOnce sync.Once
+	calls      atomic.Int32
+}
+
+func newDeadlineBlockingResponder() *deadlineBlockingResponder {
+	return &deadlineBlockingResponder{started: make(chan struct{}), canceled: make(chan struct{})}
+}
+
+func (r *deadlineBlockingResponder) PostResponse(ctx context.Context, _ types.RequestID, _ *types.TunnelResponse) (types.TunnelServiceRequestID, error) {
+	r.calls.Add(1)
+	r.startOnce.Do(func() { close(r.started) })
+	<-ctx.Done()
+	r.cancelOnce.Do(func() { close(r.canceled) })
+	return "", ctx.Err()
+}
+
+func newDeadlineBlockingConnection() *deadlineBlockingConnection {
+	return &deadlineBlockingConnection{
+		readStarted: make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
+}
+
+func (c *deadlineBlockingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
+	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+}
+
+func (c *deadlineBlockingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	c.readOnce.Do(func() { close(c.readStarted) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *deadlineBlockingConnection) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func waitForResult(t *testing.T, result <-chan error, description string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+		return nil
+	}
+}
+
 type countingForwardingTransport struct {
 	conn  mcpclient.ForwardingConnection
 	calls atomic.Int32
@@ -3243,14 +3530,16 @@ func (c *scriptedForwardingConnection) Close() error {
 }
 
 type fakePolledCommand struct {
-	id         types.RequestID
-	message    jsonrpc.Message
-	enqueuedAt time.Time
-	polledAt   time.Time
-	headers    http.Header
-	sessionID  *string
-	shardToken string
-	channel    types.Channel
+	id                  types.RequestID
+	message             jsonrpc.Message
+	enqueuedAt          time.Time
+	polledAt            time.Time
+	headers             http.Header
+	sessionID           *string
+	shardToken          string
+	channel             types.Channel
+	responseDeadline    time.Time
+	hasResponseDeadline bool
 }
 
 func (f *fakePolledCommand) RequestID() types.RequestID {
@@ -3289,6 +3578,10 @@ func (f *fakePolledCommand) SessionID() (string, bool) {
 		return "", false
 	}
 	return *f.sessionID, true
+}
+
+func (f *fakePolledCommand) ResponseDeadline() (time.Time, bool) {
+	return f.responseDeadline, f.hasResponseDeadline
 }
 
 type fakeOauthDiscoveryCommand struct {

@@ -41,22 +41,23 @@ const tunnelIntegrationSocketEnv = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PAT
 const TestClientInstanceHeader = "X-Test-Tunnel-Client-Instance"
 
 type harnessConfig struct {
-	apiKey              string
-	tunnelID            types.TunnelID
-	controlPlaneOptions []mocktunnelservice.Option
-	mcpOptions          []mockmcpserver.Option
-	clientCustomizer    func(*config.Config)
-	scenarioTimeout     time.Duration
-	logWriter           io.Writer
-	mcpTransportKind    config.MCPTransportKind
-	mcpCommandArgs      []string
-	useHarpoonTransport bool
-	preserveClientURLs  bool
-	useUnixControlPlane bool
-	useUnixMCP          bool
-	beforeClientStart   func(*Harness)
-	afterClientStart    func(*Harness)
-	beforeClientStop    func(*Harness)
+	apiKey                string
+	tunnelID              types.TunnelID
+	controlPlaneOptions   []mocktunnelservice.Option
+	mcpOptions            []mockmcpserver.Option
+	clientCustomizer      func(*config.Config)
+	scenarioTimeout       time.Duration
+	logWriter             io.Writer
+	mcpTransportKind      config.MCPTransportKind
+	mcpCommandArgs        []string
+	useHarpoonTransport   bool
+	preserveClientURLs    bool
+	useUnixControlPlane   bool
+	useUnixMCP            bool
+	beforeClientStart     func(*Harness)
+	afterClientStart      func(*Harness)
+	beforeClientStop      func(*Harness)
+	polledCommandObserver func(controlplane.PolledCommand)
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -139,6 +140,14 @@ func WithBeforeClientStop(fn func(*Harness)) HarnessOption {
 	}
 }
 
+// WithPolledCommandObserver observes decoded commands before the dispatcher
+// consumes them. The observer must not block.
+func WithPolledCommandObserver(fn func(controlplane.PolledCommand)) HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.polledCommandObserver = fn
+	}
+}
+
 // WithScenarioTimeout overrides the time ExecuteScenarious waits for the
 // scripted tunnel commands to drain before failing the test.
 func WithScenarioTimeout(timeout time.Duration) HarnessOption {
@@ -197,6 +206,7 @@ type Harness struct {
 	beforeStart     func(*Harness)
 	afterStart      func(*Harness)
 	beforeStop      func(*Harness)
+	commandObserver func(controlplane.PolledCommand)
 	logWriter       io.Writer
 	logBuffer       *lockedBuffer
 }
@@ -344,17 +354,18 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 	}
 
 	return &Harness{
-		ControlPlane: controlPlane,
-		MCP:          mcpServer,
-		cfg:          clientCfg,
-		waitTimeout:  cfg.scenarioTimeout,
-		useHarpoon:   cfg.useHarpoonTransport,
-		preserveURLs: cfg.preserveClientURLs,
-		beforeStart:  cfg.beforeClientStart,
-		afterStart:   cfg.afterClientStart,
-		beforeStop:   cfg.beforeClientStop,
-		logWriter:    logWriter,
-		logBuffer:    &logBuf,
+		ControlPlane:    controlPlane,
+		MCP:             mcpServer,
+		cfg:             clientCfg,
+		waitTimeout:     cfg.scenarioTimeout,
+		useHarpoon:      cfg.useHarpoonTransport,
+		preserveURLs:    cfg.preserveClientURLs,
+		beforeStart:     cfg.beforeClientStart,
+		afterStart:      cfg.afterClientStart,
+		beforeStop:      cfg.beforeClientStop,
+		commandObserver: cfg.polledCommandObserver,
+		logWriter:       logWriter,
+		logBuffer:       &logBuf,
 	}
 }
 
@@ -615,7 +626,7 @@ func (h *Harness) startTunnelClient(t testing.TB) *TunnelClient {
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
 		fx.Populate(&harpoonRegistry, &mcpProbeState),
 		fx.Decorate(func(fetcher controlplane.Fetcher) controlplane.Fetcher {
-			return poller.wrap(fetcher)
+			return poller.wrap(fetcher, h.commandObserver)
 		}),
 	}
 	if h.useHarpoon {
@@ -670,6 +681,7 @@ func (h *Harness) shutdown(t testing.TB) {
 type controlledFetcher struct {
 	delegate controlplane.Fetcher
 	control  *pollerControl
+	observer func(controlplane.PolledCommand)
 }
 
 func (f *controlledFetcher) Poll(
@@ -681,7 +693,13 @@ func (f *controlledFetcher) Poll(
 		return nil, "", err
 	}
 	defer done()
-	return f.delegate.Poll(pollCtx, limit)
+	commands, requestID, err := f.delegate.Poll(pollCtx, limit)
+	if err == nil && f.observer != nil {
+		for _, command := range commands {
+			f.observer(command)
+		}
+	}
+	return commands, requestID, err
 }
 
 type pollerControl struct {
@@ -703,8 +721,11 @@ func newPollerControl() *pollerControl {
 	}
 }
 
-func (c *pollerControl) wrap(delegate controlplane.Fetcher) controlplane.Fetcher {
-	return &controlledFetcher{delegate: delegate, control: c}
+func (c *pollerControl) wrap(
+	delegate controlplane.Fetcher,
+	observer func(controlplane.PolledCommand),
+) controlplane.Fetcher {
+	return &controlledFetcher{delegate: delegate, control: c, observer: observer}
 }
 
 func (c *pollerControl) beginPoll(ctx context.Context) (context.Context, func(), error) {

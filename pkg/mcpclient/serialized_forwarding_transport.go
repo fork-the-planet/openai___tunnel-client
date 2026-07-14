@@ -13,41 +13,80 @@ import (
 //
 // Some MCP transports multiplex poorly when several connector calls write to the
 // same long-lived connection and then each reader waits for its own response. The
-// wrapper holds a lifecycle lock from Write through any streamed notifications
+// wrapper holds a lifecycle slot from Connect through any streamed notifications
 // until the matching final JSON-RPC response, an error, or Close. Notifications
 // without ids release immediately after the write because no response is legal.
 func NewSerializedForwardingTransport(base ForwardingTransport) ForwardingTransport {
 	if base == nil {
 		return nil
 	}
-	return &serializedForwardingTransport{base: base}
+	return &serializedForwardingTransport{
+		base:          base,
+		lifecycleSlot: make(chan struct{}, 1),
+	}
 }
 
 type serializedForwardingTransport struct {
-	base ForwardingTransport
-	mu   sync.Mutex
+	base          ForwardingTransport
+	lifecycleSlot chan struct{}
 }
 
 func (t *serializedForwardingTransport) Connect(
 	ctx context.Context,
 ) (ForwardingConnection, error) {
+	if err := t.acquireLifecycle(ctx); err != nil {
+		return nil, err
+	}
+
 	conn, err := t.base.Connect(ctx)
 	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.releaseLifecycle()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.releaseLifecycle()
 		return nil, err
 	}
 	return &serializedForwardingConnection{
-		base:        conn,
-		lifecycleMu: &t.mu,
+		acquireLifecycle: t.acquireLifecycle,
+		base:             conn,
+		releaseLifecycle: t.releaseLifecycle,
+		lockHeld:         true,
 	}, nil
+}
+
+func (t *serializedForwardingTransport) acquireLifecycle(ctx context.Context) error {
+	select {
+	case t.lifecycleSlot <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			t.releaseLifecycle()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (t *serializedForwardingTransport) releaseLifecycle() {
+	<-t.lifecycleSlot
 }
 
 type serializedForwardingConnection struct {
 	base ForwardingConnection
 
-	lifecycleMu *sync.Mutex
+	acquireLifecycle func(context.Context) error
+	releaseLifecycle func()
 
 	stateMu          sync.Mutex
 	lockHeld         bool
+	writeStarted     bool
 	awaitingResponse bool
 	expectedID       jsonrpc.ID
 }
@@ -58,11 +97,14 @@ func (c *serializedForwardingConnection) Write(
 	msg jsonrpc.Message,
 ) (int, http.Header, error) {
 	if c.base == nil {
+		c.release()
 		return 0, nil, nil
 	}
 
 	expectResponse, expectedID := expectedResponseID(msg)
-	c.acquire(expectResponse, expectedID)
+	if err := c.acquire(ctx, expectResponse, expectedID); err != nil {
+		return 0, nil, err
+	}
 
 	statusCode, respHeaders, err := c.base.Write(ctx, header, msg)
 	if err != nil || !expectResponse || statusCode >= http.StatusBadRequest {
@@ -73,6 +115,7 @@ func (c *serializedForwardingConnection) Write(
 
 func (c *serializedForwardingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	if c.base == nil {
+		c.release()
 		return nil, nil
 	}
 
@@ -96,15 +139,30 @@ func (c *serializedForwardingConnection) Close() error {
 	return c.base.Close()
 }
 
-func (c *serializedForwardingConnection) acquire(expectResponse bool, expectedID jsonrpc.ID) {
-	if c.lifecycleMu != nil {
-		c.lifecycleMu.Lock()
+func (c *serializedForwardingConnection) acquire(ctx context.Context, expectResponse bool, expectedID jsonrpc.ID) error {
+	c.stateMu.Lock()
+	if c.lockHeld && !c.writeStarted {
+		c.writeStarted = true
+		c.awaitingResponse = expectResponse
+		c.expectedID = expectedID
+		c.stateMu.Unlock()
+		return nil
 	}
+	c.stateMu.Unlock()
+
+	if c.acquireLifecycle != nil {
+		if err := c.acquireLifecycle(ctx); err != nil {
+			return err
+		}
+	}
+
 	c.stateMu.Lock()
 	c.lockHeld = true
+	c.writeStarted = true
 	c.awaitingResponse = expectResponse
 	c.expectedID = expectedID
 	c.stateMu.Unlock()
+	return nil
 }
 
 func (c *serializedForwardingConnection) shouldReleaseAfterRead(msg jsonrpc.Message) bool {
@@ -133,16 +191,23 @@ func (c *serializedForwardingConnection) shouldReleaseAfterRead(msg jsonrpc.Mess
 }
 
 func (c *serializedForwardingConnection) release() {
+	if !c.markReleased() {
+		return
+	}
+	if c.releaseLifecycle != nil {
+		c.releaseLifecycle()
+	}
+}
+
+func (c *serializedForwardingConnection) markReleased() bool {
 	c.stateMu.Lock()
 	lockHeld := c.lockHeld
 	c.lockHeld = false
+	c.writeStarted = false
 	c.awaitingResponse = false
 	c.expectedID = jsonrpc.ID{}
 	c.stateMu.Unlock()
-
-	if lockHeld && c.lifecycleMu != nil {
-		c.lifecycleMu.Unlock()
-	}
+	return lockHeld
 }
 
 func expectedResponseID(msg jsonrpc.Message) (bool, jsonrpc.ID) {

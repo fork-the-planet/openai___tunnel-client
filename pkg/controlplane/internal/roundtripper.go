@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/openai/tunnel-client/pkg/clientinstance"
 	tctransport "github.com/openai/tunnel-client/pkg/transport"
@@ -16,6 +17,55 @@ const (
 	headerTunnelClientVersion = "X-Tunnel-Client-Version"
 	headerOpenAIOrganization  = "OpenAI-Organization"
 )
+
+type responseReceiptRecorderContextKey struct{}
+
+type responseReceiptRecorder struct {
+	now        func() time.Time
+	receivedAt time.Time
+	recorded   bool
+}
+
+func newResponseReceiptRecorder(now func() time.Time) *responseReceiptRecorder {
+	return &responseReceiptRecorder{now: now}
+}
+
+func (r *responseReceiptRecorder) record() {
+	if r == nil || r.now == nil {
+		return
+	}
+	r.receivedAt = r.now()
+	r.recorded = true
+}
+
+func (r *responseReceiptRecorder) value() (time.Time, bool) {
+	if r == nil {
+		return time.Time{}, false
+	}
+	return r.receivedAt, r.recorded
+}
+
+func contextWithResponseReceiptRecorder(ctx context.Context, recorder *responseReceiptRecorder) context.Context {
+	return context.WithValue(ctx, responseReceiptRecorderContextKey{}, recorder)
+}
+
+type responseReceiptRoundTripper struct {
+	base http.RoundTripper
+}
+
+func newResponseReceiptRoundTripper(base http.RoundTripper) http.RoundTripper {
+	return &responseReceiptRoundTripper{base: base}
+}
+
+func (r *responseReceiptRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := r.base.RoundTrip(req)
+	if resp != nil {
+		if recorder, ok := req.Context().Value(responseReceiptRecorderContextKey{}).(*responseReceiptRecorder); ok {
+			recorder.record()
+		}
+	}
+	return resp, err
+}
 
 type controlPlaneRoundTripper struct {
 	base           http.RoundTripper

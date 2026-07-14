@@ -53,6 +53,7 @@ type TunnelServiceClient struct {
 	userAgent        string
 	pollTimeout      time.Duration
 	pollGuardrail    time.Duration
+	now              func() time.Time
 }
 
 // NewTunnelServiceClient constructs an HTTP-backed client using the provided config.
@@ -106,6 +107,7 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 		userAgent:        version.UserAgent,
 		pollTimeout:      pollTimeout,
 		pollGuardrail:    pollGuardrail,
+		now:              time.Now,
 	}
 	logger.InfoContext(ctx, "TunnelServiceClient created",
 		slog.String("tunnel_id", client.tunnelID.String()),
@@ -233,7 +235,9 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 	// Order matters (outermost to innermost):
 	//   1. Control-plane round tripper applies auth headers before anything else.
 	//   2. Logging wraps otel instrumentation so dumps include the final headers.
-	//   3. otelhttp instrumentation sits closest to the network for accurate metrics.
+	//   3. otelhttp instrumentation sits close to the network for accurate metrics.
+	//   4. Response receipt recording sits closest to the network so outer response
+	//      middleware cannot delay the timestamp by consuming the response body.
 	base, err := tctransport.CloneDefaultWithBundle(tlsBundle)
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
@@ -254,6 +258,7 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}
+	base = newResponseReceiptRoundTripper(base)
 	base = otelhttp.NewTransport(
 		base,
 		otelhttp.WithMeterProvider(meterProvider),
@@ -373,10 +378,16 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 	query.Set("limit", strconv.Itoa(limit))
 	query.Set("timeout_ms", strconv.FormatInt(pollTimeoutMilliseconds(c.pollTimeout), 10))
 	req.URL.RawQuery = query.Encode()
+	receipt := newResponseReceiptRecorder(c.nowTime)
+	req = req.WithContext(contextWithResponseReceiptRecorder(req.Context(), receipt))
 
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, "", err
+	}
+	receivedAt, recorded := receipt.value()
+	if !recorded {
+		receivedAt = c.nowTime()
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -392,11 +403,18 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 	case http.StatusNoContent:
 		return nil, tunnelServiceRequestID, nil
 	case http.StatusOK:
-		cmds, err := c.decodeCommands(ctx, resp.Body, limit)
+		cmds, err := c.decodeCommands(ctx, resp.Body, limit, receivedAt)
 		return cmds, tunnelServiceRequestID, err
 	default:
 		return nil, tunnelServiceRequestID, newAPIStatusError("controlplane client: unexpected status", resp)
 	}
+}
+
+func (c *TunnelServiceClient) nowTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 func pollTimeoutMilliseconds(timeout time.Duration) int64 {
@@ -407,13 +425,11 @@ func pollTimeoutMilliseconds(timeout time.Duration) int64 {
 	return 1
 }
 
-func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, limit int) ([]controlplane.PolledCommand, error) {
+func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, limit int, polledAt time.Time) ([]controlplane.PolledCommand, error) {
 	limited := limit
 	if limited <= 0 {
 		limited = 1
 	}
-
-	polledAt := time.Now()
 
 	data, err := io.ReadAll(r)
 	if err != nil {

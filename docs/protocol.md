@@ -69,7 +69,10 @@ client must not assume the requested duration is exact.
 concurrency limit; each client chooses its own bounded concurrency.
 
 A `204 No Content` response means the poll completed without commands. Issue
-another poll. A `200 OK` response contains a JSON envelope:
+another poll. When a poll response arrives, record the local receipt time as
+soon as the response headers are available and before decoding the body. Use
+one receipt time for every command in the response. A `200 OK` response
+contains a JSON envelope:
 
 ```json
 {
@@ -138,12 +141,29 @@ different payload shapes during a mixed deployment:
 | Poll command | Released official Go client without this field | Contract-aware client |
 | --- | --- | --- |
 | `response_timeout` omitted or `null` | Decodes normally with legacy behavior. | Decodes normally with legacy behavior. |
-| Valid `response_timeout` present | `encoding/json` ignores the unknown property; legacy behavior is retained. | Decodes and validates the field; this contract-preparation release retains legacy runtime behavior. |
+| Valid `response_timeout` present | `encoding/json` ignores the unknown property; legacy behavior is retained. | Anchors a local deadline at poll-response receipt and enforces it across MCP work and response delivery. |
 | Malformed, wrong-type, unknown-unit, or overflowing value present | `encoding/json` ignores the unknown property; legacy behavior is retained. | Decoding succeeds and legacy behavior is retained. |
 
 Previously generated OpenAPI clients are outside this compatibility guarantee.
 Command schemas remain open with `additionalProperties: true`, and clients must
 accept unknown future command properties.
+
+The receipt time must retain the platform's monotonic-clock component. For a
+valid timeout, derive the local deadline without adding another allowance:
+
+```text
+local_response_deadline = local_poll_response_received_at + response_timeout
+```
+
+No wall-clock synchronization or server-time field is required, and clients
+must not derive this deadline from `created_at`. The deadline bounds the whole
+command lifecycle: MCP connect, write, read, and the response POST. Drop a
+command that is already expired without contacting MCP or posting a response.
+If the deadline passes during MCP work, cancel the operation and close its
+connection. If it passes after MCP completes, cancel the response POST without
+closing a shared connection that may already serve another command. Never
+synthesize a late error response. Progress notifications do not restart the
+deadline.
 
 ### `jsonrpc` commands
 
@@ -262,7 +282,12 @@ A successful POST returns:
 ```text
 workers = bounded_worker_pool(client_defined_concurrency)
 
-process(command):
+process(command, deadline):
+  if deadline is not none:
+    if deadline has passed:
+      return
+    apply deadline to MCP work and response delivery
+
   # Dispatch yields zero or more notifications, then a terminal response.
   for response in dispatch_by_command_type(command):
     POST /v1/tunnels/{tunnel_id}/response
@@ -273,6 +298,8 @@ process(command):
 
 loop:
   poll = GET /v1/tunnels/{tunnel_id}/poll?limit=25&timeout_ms=15000
+  poll_received_at = monotonic_now()  # immediately when response headers arrive
+
   if poll.status == 204:
     continue
   if poll.status != 200:
@@ -280,7 +307,12 @@ loop:
     continue
 
   for command in poll.body.commands:
-    workers.submit(process, command)
+    deadline = none
+    timeout = parse_optional_response_timeout(command.response_timeout)
+    if timeout is valid:
+      deadline = poll_received_at + timeout
+
+    workers.submit(process, command, deadline)
 ```
 
 ## Implementation checklist
@@ -289,6 +321,11 @@ loop:
 - Send bearer auth and stable client name/version headers.
 - Use only the canonical plural endpoints.
 - Handle `200` and `204` poll responses.
+- Record one monotonic receipt time before decoding a successful poll response.
+- Parse the optional relative `response_timeout`, fail open when it is missing
+  or invalid, and treat `0s` as immediately expired.
+- Bound MCP work and response delivery by receipt time plus the timeout without
+  adding another skew, and drop expired commands without a response.
 - Support both documented `command_type` values.
 - Preserve raw JSON-RPC payloads and multi-valued headers.
 - Echo `request_id`, `channel`, and `shard_token` in the correct locations.

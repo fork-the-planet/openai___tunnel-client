@@ -231,31 +231,31 @@ func TestMissingOrNullResponseTimeoutAndUnknownFieldsAreCompatible(t *testing.T)
 	}
 }
 
-func TestReleasedV0010DecoderIgnoresResponseTimeout(t *testing.T) {
-	// These types are frozen from github.com/openai/tunnel-client v0.0.10,
-	// commit 105e17a79a36e4e5c897fd698ed2b8dbf935b144. Keep them independent of
-	// current wire types so the test continues to exercise the released decoder.
-	type releasedV0010CommandType string
+func TestLegacyOfficialDecoderIgnoresResponseTimeout(t *testing.T) {
+	// These types freeze the wire shape used by legacy official Go tunnel-clients.
+	// Keep them independent of current wire types so the test continues to exercise
+	// the legacy decoder.
+	type legacyCommandType string
 	const (
-		releasedV0010JSONRPC            releasedV0010CommandType = "jsonrpc"
-		releasedV0010SessionTermination releasedV0010CommandType = "session_termination"
+		legacyJSONRPC            legacyCommandType = "jsonrpc"
+		legacySessionTermination legacyCommandType = "session_termination"
 	)
-	type releasedV0010BaseRawPolledCommand struct {
-		RequestID   string                   `json:"request_id"`
-		ShardToken  string                   `json:"shard_token"`
-		CommandType releasedV0010CommandType `json:"command_type"`
-		Channel     string                   `json:"channel,omitempty"`
-		CreatedAt   time.Time                `json:"created_at"`
-		Headers     http.Header              `json:"headers"`
+	type legacyBaseRawPolledCommand struct {
+		RequestID   string            `json:"request_id"`
+		ShardToken  string            `json:"shard_token"`
+		CommandType legacyCommandType `json:"command_type"`
+		Channel     string            `json:"channel,omitempty"`
+		CreatedAt   time.Time         `json:"created_at"`
+		Headers     http.Header       `json:"headers"`
 	}
-	type releasedV0010RawJSONRPCPolledCommand struct {
-		releasedV0010BaseRawPolledCommand
+	type legacyRawJSONRPCPolledCommand struct {
+		legacyBaseRawPolledCommand
 		JSONRPC json.RawMessage `json:"jsonrpc"`
 	}
-	type releasedV0010RawSessionTerminationPolledCommand struct {
-		releasedV0010BaseRawPolledCommand
+	type legacyRawSessionTerminationPolledCommand struct {
+		legacyBaseRawPolledCommand
 	}
-	type releasedV0010PolledCommandEnvelope struct {
+	type legacyPolledCommandEnvelope struct {
 		Commands []json.RawMessage `json:"commands"`
 	}
 
@@ -281,65 +281,65 @@ func TestReleasedV0010DecoderIgnoresResponseTimeout(t *testing.T) {
 		}
 	]}`)
 
-	var envelope releasedV0010PolledCommandEnvelope
+	var envelope legacyPolledCommandEnvelope
 	if err := json.Unmarshal(fixture, &envelope); err != nil {
-		t.Fatalf("released v0.0.10 envelope decoder failed: %v", err)
+		t.Fatalf("legacy official envelope decoder failed: %v", err)
 	}
 	if len(envelope.Commands) != 2 {
-		t.Fatalf("released v0.0.10 command count = %d, want 2", len(envelope.Commands))
+		t.Fatalf("legacy official command count = %d, want 2", len(envelope.Commands))
 	}
 
-	seen := map[releasedV0010CommandType]bool{}
+	seen := map[legacyCommandType]bool{}
 	for _, raw := range envelope.Commands {
 		var probe struct {
-			CommandType releasedV0010CommandType `json:"command_type"`
+			CommandType legacyCommandType `json:"command_type"`
 		}
 		if err := json.Unmarshal(raw, &probe); err != nil {
-			t.Fatalf("released v0.0.10 discriminator decoder failed: %v", err)
+			t.Fatalf("legacy official discriminator decoder failed: %v", err)
 		}
 
 		switch probe.CommandType {
-		case releasedV0010JSONRPC:
-			var command releasedV0010RawJSONRPCPolledCommand
+		case legacyJSONRPC:
+			var command legacyRawJSONRPCPolledCommand
 			if err := json.Unmarshal(raw, &command); err != nil {
-				t.Fatalf("released v0.0.10 JSON-RPC decoder must ignore response_timeout: %v", err)
+				t.Fatalf("legacy official JSON-RPC decoder must ignore response_timeout: %v", err)
 			}
 			if command.RequestID != "req-new-service-old-client-rpc" {
-				t.Fatalf("released v0.0.10 JSON-RPC request_id = %q", command.RequestID)
+				t.Fatalf("legacy official JSON-RPC request_id = %q", command.RequestID)
 			}
 			if command.ShardToken != "shard-new-service-old-client-rpc" {
-				t.Fatalf("released v0.0.10 JSON-RPC shard_token = %q", command.ShardToken)
+				t.Fatalf("legacy official JSON-RPC shard_token = %q", command.ShardToken)
 			}
-			if command.CommandType != releasedV0010JSONRPC || command.Channel != "main" {
-				t.Fatalf("released v0.0.10 JSON-RPC discriminator/channel = %q/%q", command.CommandType, command.Channel)
+			if command.CommandType != legacyJSONRPC || command.Channel != "main" {
+				t.Fatalf("legacy official JSON-RPC discriminator/channel = %q/%q", command.CommandType, command.Channel)
 			}
 			if command.CreatedAt.IsZero() || command.Headers.Get("X-Trace-Id") != "trace-rpc" || len(command.JSONRPC) == 0 {
-				t.Fatalf("released v0.0.10 JSON-RPC decoder dropped payload metadata: %#v", command)
+				t.Fatalf("legacy official JSON-RPC decoder dropped payload metadata: %#v", command)
 			}
-		case releasedV0010SessionTermination:
-			var command releasedV0010RawSessionTerminationPolledCommand
+		case legacySessionTermination:
+			var command legacyRawSessionTerminationPolledCommand
 			if err := json.Unmarshal(raw, &command); err != nil {
-				t.Fatalf("released v0.0.10 session-termination decoder must ignore response_timeout: %v", err)
+				t.Fatalf("legacy official session-termination decoder must ignore response_timeout: %v", err)
 			}
 			if command.RequestID != "req-new-service-old-client-termination" {
-				t.Fatalf("released v0.0.10 session-termination request_id = %q", command.RequestID)
+				t.Fatalf("legacy official session-termination request_id = %q", command.RequestID)
 			}
 			if command.ShardToken != "shard-new-service-old-client-termination" {
-				t.Fatalf("released v0.0.10 session-termination shard_token = %q", command.ShardToken)
+				t.Fatalf("legacy official session-termination shard_token = %q", command.ShardToken)
 			}
-			if command.CommandType != releasedV0010SessionTermination || command.Channel != "main" {
-				t.Fatalf("released v0.0.10 session-termination discriminator/channel = %q/%q", command.CommandType, command.Channel)
+			if command.CommandType != legacySessionTermination || command.Channel != "main" {
+				t.Fatalf("legacy official session-termination discriminator/channel = %q/%q", command.CommandType, command.Channel)
 			}
 			if command.CreatedAt.IsZero() || command.Headers.Get("Mcp-Session-Id") != "session-legacy" {
-				t.Fatalf("released v0.0.10 session-termination decoder dropped payload metadata: %#v", command)
+				t.Fatalf("legacy official session-termination decoder dropped payload metadata: %#v", command)
 			}
 		default:
-			t.Fatalf("unexpected released v0.0.10 command type %q", probe.CommandType)
+			t.Fatalf("unexpected legacy official command type %q", probe.CommandType)
 		}
 		seen[probe.CommandType] = true
 	}
-	if !seen[releasedV0010JSONRPC] || !seen[releasedV0010SessionTermination] {
-		t.Fatalf("released v0.0.10 decoder did not cover both command types: %v", seen)
+	if !seen[legacyJSONRPC] || !seen[legacySessionTermination] {
+		t.Fatalf("legacy official decoder did not cover both command types: %v", seen)
 	}
 }
 

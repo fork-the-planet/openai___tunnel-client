@@ -13,6 +13,18 @@ import (
 	"github.com/openai/tunnel-client/pkg/types"
 )
 
+func responseDeadlineFromTimeout(responseTimeout *wiretypes.ResponseTimeoutDuration, receivedAt time.Time) *time.Time {
+	if responseTimeout == nil || receivedAt.IsZero() {
+		return nil
+	}
+	remaining, ok := responseTimeout.Value()
+	if !ok {
+		return nil
+	}
+	localDeadline := receivedAt.Add(remaining)
+	return &localDeadline
+}
+
 // buildBase constructs the common portion of a polled command from the raw
 // wire payload and shared validation rules.
 func buildBase(raw wiretypes.BaseRawPolledCommand, polledAt time.Time) (basePolledCommand, http.Header, error) {
@@ -45,6 +57,7 @@ func buildBase(raw wiretypes.BaseRawPolledCommand, polledAt time.Time) (basePoll
 		shardToken: raw.ShardToken,
 		sessionID:  mcpclient.SessionIDFromHeaders(headers),
 		channel:    channel,
+		deadline:   responseDeadlineFromTimeout(raw.ResponseTimeout, polledAt),
 	}
 	return base, headers, nil
 }

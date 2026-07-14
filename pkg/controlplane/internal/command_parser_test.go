@@ -59,6 +59,40 @@ func TestBuildBase_ClonesHeadersAndExtractsSession(t *testing.T) {
 	}
 }
 
+func TestResponseDeadlineFromTimeout(t *testing.T) {
+	t.Parallel()
+
+	receivedAt := time.Unix(1732844890, 0)
+	invalid := wiretypes.ResponseTimeoutDuration("invalid")
+	zero := wiretypes.ResponseTimeoutDuration("0s")
+	valid := wiretypes.ResponseTimeoutDuration("4500ms")
+	for _, tc := range []struct {
+		name    string
+		timeout *wiretypes.ResponseTimeoutDuration
+		want    *time.Time
+	}{
+		{name: "missing"},
+		{name: "invalid", timeout: &invalid},
+		{name: "zero", timeout: &zero, want: timePointer(receivedAt)},
+		{name: "valid", timeout: &valid, want: timePointer(receivedAt.Add(4500 * time.Millisecond))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := responseDeadlineFromTimeout(tc.timeout, receivedAt)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("deadline = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil || !got.Equal(*tc.want) {
+				t.Fatalf("deadline = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
 func TestConvertRawCommand_SuccessAndErrors(t *testing.T) {
 	t.Parallel()
 

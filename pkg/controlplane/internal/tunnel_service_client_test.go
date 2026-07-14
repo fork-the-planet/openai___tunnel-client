@@ -159,6 +159,115 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 
 }
 
+func TestTunnelServiceClientPollRecordsReceiptBeforeRawLoggingReadsBody(t *testing.T) {
+	t.Parallel()
+
+	receivedAt := time.Now()
+	payload := `{"commands":[{
+		"command_type":"jsonrpc",
+		"request_id":"req-timeout-1",
+		"shard_token":"shard-timeout",
+		"response_timeout":"4500ms",
+		"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list"}
+	},{
+		"command_type":"oauth_discovery",
+		"request_id":"req-timeout-2",
+		"shard_token":"shard-timeout",
+		"response_timeout":"4500ms"
+	},{
+		"command_type":"session_termination",
+		"request_id":"req-timeout-3",
+		"shard_token":"shard-timeout",
+		"headers":{"Mcp-Session-Id":["session-1"]},
+		"response_timeout":"4500ms"
+	}]}`
+	requestReceived := make(chan struct{})
+	releaseHeaders := make(chan struct{})
+	headersFlushed := make(chan struct{})
+	releaseBody := make(chan struct{})
+	var releaseBodyOnce sync.Once
+	releaseResponseBody := func() {
+		releaseBodyOnce.Do(func() { close(releaseBody) })
+	}
+	defer releaseResponseBody()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(requestReceived)
+		<-releaseHeaders
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(headersFlushed)
+		<-releaseBody
+		_, _ = w.Write([]byte(payload))
+	}))
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		TunnelID: types.TunnelID("cli-tunnel"),
+		APIKey:   "test-api-key",
+	}, nil, newDiscardLogger(), &config.LoggingConfig{HTTPRawUnsafe: true}, testMeterProvider)
+	require.NoError(t, err)
+
+	receiptCaptured := make(chan struct{})
+	nowCalls := 0
+	client.now = func() time.Time {
+		nowCalls++
+		close(receiptCaptured)
+		return receivedAt
+	}
+
+	type pollResult struct {
+		commands []controlplane.PolledCommand
+		err      error
+	}
+	result := make(chan pollResult, 1)
+	go func() {
+		commands, _, err := client.Poll(context.Background(), 3)
+		result <- pollResult{commands: commands, err: err}
+	}()
+
+	select {
+	case <-requestReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll request was not received")
+	}
+	select {
+	case <-receiptCaptured:
+		t.Fatal("poll receipt time was captured before the real response headers arrived")
+	default:
+	}
+	close(releaseHeaders)
+
+	select {
+	case <-headersFlushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll response headers were not flushed")
+	}
+	select {
+	case <-receiptCaptured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll receipt time was not captured while raw logging waited for the response body")
+	}
+
+	releaseResponseBody()
+	var got pollResult
+	select {
+	case got = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Poll did not return after the response body was released")
+	}
+	require.NoError(t, got.err)
+	require.Equal(t, 1, nowCalls, "poll response receipt time must be captured once")
+	require.Len(t, got.commands, 3)
+	for _, command := range got.commands {
+		deadline, ok := command.(controlplane.ResponseDeadlineProvider).ResponseDeadline()
+		require.True(t, ok)
+		require.Equal(t, 4500*time.Millisecond, deadline.Sub(receivedAt))
+		require.True(t, command.PolledAt().Equal(receivedAt))
+	}
+}
+
 func TestTunnelServiceClientPollSuccessWithControlPlaneURLPath(t *testing.T) {
 	t.Parallel()
 

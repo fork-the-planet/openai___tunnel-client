@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	_ controlplane.ResponseDeadlineProvider  = (*basePolledCommand)(nil)
 	_ controlplane.PolledCommand             = (*oauthDiscoveryCommand)(nil)
 	_ controlplane.OauthDiscoveryCommand     = (*oauthDiscoveryCommand)(nil)
 	_ controlplane.PolledCommand             = (*jsonRpcCommand)(nil)
@@ -39,6 +40,7 @@ type basePolledCommand struct {
 	sessionID  *string
 	shardToken string
 	channel    types.Channel
+	deadline   *time.Time
 }
 
 func (c *basePolledCommand) RequestID() types.RequestID { return c.requestID }
@@ -52,6 +54,12 @@ func (c *basePolledCommand) Headers() http.Header {
 }
 func (c *basePolledCommand) ShardToken() string     { return c.shardToken }
 func (c *basePolledCommand) Channel() types.Channel { return c.channel }
+func (c *basePolledCommand) ResponseDeadline() (time.Time, bool) {
+	if c.deadline == nil {
+		return time.Time{}, false
+	}
+	return *c.deadline, true
+}
 func (c *basePolledCommand) SessionID() (string, bool) {
 	if c.sessionID == nil {
 		return "", false

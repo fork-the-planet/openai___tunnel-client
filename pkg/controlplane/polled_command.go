@@ -35,6 +35,14 @@ type PolledCommand interface {
 	SessionID() (string, bool)
 }
 
+// ResponseDeadlineProvider is an optional extension implemented by commands
+// that carry a response deadline. The returned time is translated to the local
+// clock and may include a monotonic component. Keeping this separate from
+// PolledCommand preserves compatibility with existing command implementations.
+type ResponseDeadlineProvider interface {
+	ResponseDeadline() (time.Time, bool)
+}
+
 // Fetcher abstracts the control-plane poll endpoint. Implementations should
 // honor the provided limit and return at most that many commands so the poller
 // can respect downstream backpressure. TunnelServiceRequestID is returned so

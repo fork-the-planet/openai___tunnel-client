@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/openai/tunnel-client/pkg/config"
+	"github.com/openai/tunnel-client/pkg/controlplane"
 	"github.com/openai/tunnel-client/pkg/controlplane/wiretypes"
 	harnesspkg "github.com/openai/tunnel-client/testsupport/e2e"
 	"github.com/openai/tunnel-client/testsupport/mockmcpserver"
@@ -59,6 +60,111 @@ func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 		nil,
 		mockmcpserver.WithKeepalivePings(),
 	)
+}
+
+func TestCurrentClientHandlesLegacyOrMalformedResponseTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		responseTimeout json.RawMessage
+	}{
+		{name: "omitted"},
+		{name: "null", responseTimeout: json.RawMessage(`null`)},
+		{name: "malformed", responseTimeout: json.RawMessage(`"0s "`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const requestID = "cmd-timeout-fallback"
+			observedCommand := make(chan controlplane.PolledCommand, 1)
+			command := mocktunnelservice.NewCommand(
+				requestID,
+				json.RawMessage(`{
+					"jsonrpc":"2.0",
+					"id":"timeout-fallback",
+					"method":"tools/call",
+					"params":{"name":"echo","arguments":{}}
+				}`),
+				nil,
+			)
+			if tc.responseTimeout != nil {
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(command, &fields); err != nil {
+					t.Fatalf("decode command: %v", err)
+				}
+				fields["response_timeout"] = tc.responseTimeout
+				var err error
+				command, err = json.Marshal(fields)
+				if err != nil {
+					t.Fatalf("encode command: %v", err)
+				}
+			}
+
+			h := harnesspkg.NewHarness(
+				t,
+				harnesspkg.WithInMemoryMCPTransport(),
+				harnesspkg.WithPolledCommandObserver(func(command controlplane.PolledCommand) {
+					if command.RequestID().String() != requestID {
+						return
+					}
+					select {
+					case observedCommand <- command:
+					default:
+					}
+				}),
+				harnesspkg.WithControlPlaneOptions(
+					mocktunnelservice.WithInitializationPhaseCommandsWithoutSessionHeaders(),
+					mocktunnelservice.WithCommandResponses(mocktunnelservice.CommandResponse{
+						Command: command,
+						ExpectedResponses: []mocktunnelservice.ExpectedResponse{{
+							RequestID: requestID,
+							Assert: func(tb testing.TB, resp mocktunnelservice.ReceivedResponse) {
+								target := tb
+								if target == nil {
+									target = t
+								}
+								if resp.ResponseCode != http.StatusOK {
+									target.Fatalf("response code = %d, want %d", resp.ResponseCode, http.StatusOK)
+								}
+								if len(resp.JSONResponse) == 0 {
+									target.Fatal("expected JSON-RPC response payload")
+								}
+							},
+						}},
+					}),
+				),
+				harnesspkg.WithMCPOptions(
+					mockmcpserver.WithToolListChangedNotificationsDisabled(),
+					mockmcpserver.WithCalls(mockmcpserver.Call{
+						Tool:   "echo",
+						Result: json.RawMessage(`{"ok":true}`),
+					}),
+				),
+			)
+
+			h.ExecuteScenarious(t)
+
+			var decodedCommand controlplane.PolledCommand
+			select {
+			case decodedCommand = <-observedCommand:
+			default:
+				t.Fatal("current client did not decode the timeout fallback command")
+			}
+			deadlineProvider, ok := decodedCommand.(controlplane.ResponseDeadlineProvider)
+			if !ok {
+				t.Fatalf("decoded command %T does not expose response deadline state", decodedCommand)
+			}
+			if deadline, ok := deadlineProvider.ResponseDeadline(); ok {
+				t.Fatalf("response deadline = %v, want legacy no-deadline behavior", deadline)
+			}
+
+			responses := h.ControlPlane.ReceivedResponses(mocktunnelservice.ResponseMatchMatched)
+			if len(responses) != 3 {
+				t.Fatalf("matched responses = %d, want 3", len(responses))
+			}
+			requests := h.MCP.ReceivedRequests()
+			if len(requests) != 1 || requests[0].Tool != "echo" {
+				t.Fatalf("MCP requests = %+v, want one echo call", requests)
+			}
+		})
+	}
 }
 
 func TestControlPlaneRequestsSendClientInstanceID(t *testing.T) {

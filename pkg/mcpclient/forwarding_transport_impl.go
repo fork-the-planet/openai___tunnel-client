@@ -10,6 +10,26 @@ import (
 	"github.com/openai/tunnel-client/pkg/mcpclient/internal"
 )
 
+type responseDeadlineEnforcementContextKey struct{}
+
+// ContextWithResponseDeadlineEnforcement marks MCP work whose full lifecycle
+// is bounded by a tunnel command response deadline. Legacy commands without
+// response_timeout intentionally remain unmarked.
+func ContextWithResponseDeadlineEnforcement(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, responseDeadlineEnforcementContextKey{}, true)
+}
+
+func hasResponseDeadlineEnforcement(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(responseDeadlineEnforcementContextKey{}).(bool)
+	return marked
+}
+
 var _ ForwardingTransport = (*forwardingTransport)(nil)
 var _ SessionTerminatingTransport = (*forwardingTransport)(nil)
 
@@ -40,6 +60,10 @@ func (t *forwardingTransport) TerminateSession(ctx context.Context, headers http
 	if err != nil {
 		return 0, nil, err
 	}
+	if streamable, ok := unwrapStreamableClientTransport(t.base); ok && hasResponseDeadlineEnforcement(ctx) {
+		return terminateStreamableSession(ctxWithHeaders, streamable, headers)
+	}
+
 	conn, err := t.base.Connect(ctxWithHeaders)
 	if err != nil {
 		return 0, nil, err
@@ -47,6 +71,49 @@ func (t *forwardingTransport) TerminateSession(ctx context.Context, headers http
 	err = conn.Close()
 	statusCode, responseHeaders := carrier.ResponseStatusAndHeaders()
 	return statusCode, responseHeaders, err
+}
+
+func unwrapStreamableClientTransport(transport mcp.Transport) (*mcp.StreamableClientTransport, bool) {
+	switch typed := transport.(type) {
+	case *mcp.StreamableClientTransport:
+		return typed, typed != nil
+	case *mcp.LoggingTransport:
+		if typed == nil {
+			return nil, false
+		}
+		return unwrapStreamableClientTransport(typed.Transport)
+	default:
+		return nil, false
+	}
+}
+
+// terminateStreamableSession issues the protocol DELETE directly so the
+// command context remains attached to the network request. The SDK connection
+// Close method uses a detached lifecycle context, which cannot enforce a
+// per-command response deadline.
+func terminateStreamableSession(ctx context.Context, transport *mcp.StreamableClientTransport, headers http.Header) (int, http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, transport.Endpoint, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if headers != nil {
+		req.Header = headers.Clone()
+	}
+
+	client := transport.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() {
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	return resp.StatusCode, resp.Header.Clone(), nil
 }
 
 var _ ForwardingConnection = (*forwardingConnection)(nil)

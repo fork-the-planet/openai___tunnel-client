@@ -3,8 +3,10 @@ package mcpclient
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -193,6 +195,122 @@ func TestForwardingTransportTerminateSessionForwardsHeadersAndCapturesResponse(t
 	}
 }
 
+func TestForwardingTransportTerminateStreamableSessionCancelsDelete(t *testing.T) {
+	t.Parallel()
+
+	blockingRoundTripper := &blockingTerminationRoundTripper{
+		started:  make(chan *http.Request, 1),
+		canceled: make(chan struct{}),
+	}
+	streamable := &mcp.StreamableClientTransport{
+		Endpoint: "https://mcp.example.test/rpc",
+		HTTPClient: &http.Client{
+			Transport: internal.NewForwardingRoundTripper(blockingRoundTripper),
+		},
+	}
+	transport := NewForwardingTransport(&mcp.LoggingTransport{
+		Transport: streamable,
+		Writer:    io.Discard,
+	})
+	terminator, ok := transport.(SessionTerminatingTransport)
+	if !ok {
+		t.Fatalf("transport %T does not support session termination", transport)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = ContextWithResponseDeadlineEnforcement(ctx)
+	result := make(chan terminationResult, 1)
+	go func() {
+		statusCode, headers, err := terminator.TerminateSession(ctx, http.Header{
+			"Mcp-Session-Id": {"session-deadline"},
+		})
+		result <- terminationResult{statusCode: statusCode, headers: headers, err: err}
+	}()
+
+	req := waitForTerminationRequest(t, blockingRoundTripper.started)
+	if req.Method != http.MethodDelete {
+		t.Fatalf("termination method = %s, want DELETE", req.Method)
+	}
+	if got := req.Header.Get("Mcp-Session-Id"); got != "session-deadline" {
+		t.Fatalf("termination session header = %q, want session-deadline", got)
+	}
+	cancel()
+	waitForTerminationCancellation(t, blockingRoundTripper.canceled)
+
+	got := waitForTerminationResult(t, result)
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("TerminateSession error = %v, want context.Canceled", got.err)
+	}
+	if got.statusCode != 0 || got.headers != nil {
+		t.Fatalf("canceled termination response = (%d, %v), want (0, nil)", got.statusCode, got.headers)
+	}
+}
+
+func TestForwardingTransportTerminateStreamableSessionReturnsHTTPResponse(t *testing.T) {
+	t.Parallel()
+
+	var gotRequest *http.Request
+	streamable := &mcp.StreamableClientTransport{
+		Endpoint: "https://mcp.example.test/rpc",
+		HTTPClient: &http.Client{Transport: terminationRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotRequest = req
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{"X-Terminated": {"true"}},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		})},
+	}
+	terminator := NewForwardingTransport(streamable).(SessionTerminatingTransport)
+
+	ctx := ContextWithResponseDeadlineEnforcement(context.Background())
+	statusCode, headers, err := terminator.TerminateSession(ctx, http.Header{
+		"Mcp-Session-Id": {"session-success"},
+	})
+	if err != nil {
+		t.Fatalf("TerminateSession returned error: %v", err)
+	}
+	if statusCode != http.StatusNoContent || headers.Get("X-Terminated") != "true" {
+		t.Fatalf("termination response = (%d, %v), want (204, X-Terminated=true)", statusCode, headers)
+	}
+	if gotRequest == nil || gotRequest.Method != http.MethodDelete || gotRequest.Header.Get("Mcp-Session-Id") != "session-success" {
+		t.Fatalf("unexpected termination request: %#v", gotRequest)
+	}
+}
+
+func TestForwardingTransportLegacyStreamableTerminationDoesNotBypassSDK(t *testing.T) {
+	t.Parallel()
+
+	requestSent := false
+	streamable := &mcp.StreamableClientTransport{
+		Endpoint: "https://mcp.example.test/rpc",
+		HTTPClient: &http.Client{Transport: terminationRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requestSent = true
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		})},
+	}
+	terminator := NewForwardingTransport(streamable).(SessionTerminatingTransport)
+
+	statusCode, headers, err := terminator.TerminateSession(context.Background(), http.Header{
+		"Mcp-Session-Id": {"legacy-session"},
+	})
+	if err != nil {
+		t.Fatalf("TerminateSession returned error: %v", err)
+	}
+	if statusCode != 0 || len(headers) != 0 {
+		t.Fatalf("legacy termination response = (%d, %v), want (0, empty)", statusCode, headers)
+	}
+	if !requestSent {
+		t.Fatal("legacy SDK termination did not issue its cleanup request")
+	}
+}
+
 func TestForwardingConnectionCloseDelegates(t *testing.T) {
 	t.Parallel()
 
@@ -339,3 +457,58 @@ func (c *closeTrackingConnection) Read(context.Context) (jsonrpc.Message, error)
 func (c *closeTrackingConnection) Write(context.Context, jsonrpc.Message) error  { return nil }
 func (c *closeTrackingConnection) Close() error                                  { c.closed = true; return nil }
 func (c *closeTrackingConnection) SessionID() string                             { return "" }
+
+type blockingTerminationRoundTripper struct {
+	started  chan *http.Request
+	canceled chan struct{}
+}
+
+type terminationRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f terminationRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func (r *blockingTerminationRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.started <- req
+	<-req.Context().Done()
+	close(r.canceled)
+	return nil, req.Context().Err()
+}
+
+type terminationResult struct {
+	statusCode int
+	headers    http.Header
+	err        error
+}
+
+func waitForTerminationRequest(t *testing.T, started <-chan *http.Request) *http.Request {
+	t.Helper()
+	select {
+	case req := <-started:
+		return req
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for session termination DELETE")
+		return nil
+	}
+}
+
+func waitForTerminationCancellation(t *testing.T, canceled <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for session termination DELETE cancellation")
+	}
+}
+
+func waitForTerminationResult(t *testing.T, result <-chan terminationResult) terminationResult {
+	t.Helper()
+	select {
+	case got := <-result:
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for session termination result")
+		return terminationResult{}
+	}
+}
