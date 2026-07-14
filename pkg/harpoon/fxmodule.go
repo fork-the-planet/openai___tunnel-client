@@ -105,8 +105,8 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 		return harpoonOutputs{}, err
 	}
 	mcpServer := server.MCPServer()
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
+	clientTransport := newRestartableInMemoryTransport(ctx, mcpServer, logger)
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			targets := registry.Targets()
@@ -142,11 +142,6 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 				routeFields = append(routeFields, proxy.LogFields(route)...)
 				logger.Info("harpoon route resolved", routeFields...)
 			}
-			go func() {
-				if err := mcpServer.Run(ctx, serverTransport); err != nil {
-					logger.Error("harpoon server stopped", slog.String("error", err.Error()))
-				}
-			}()
 			return nil
 		},
 		OnStop: func(context.Context) error {

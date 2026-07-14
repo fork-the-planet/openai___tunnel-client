@@ -190,16 +190,21 @@ type CommandResponse struct {
 	CommandMutator    CommandMutator
 	DeliverAfter      <-chan struct{}
 	ExpectedResponses []ExpectedResponse
+	// NoResponseExpected marks the command complete as soon as it is delivered.
+	// Use it for paths where the client intentionally does not POST a response,
+	// such as a dispatcher connection TTL expiring while a request is in flight.
+	NoResponseExpected bool
 }
 
 type scriptedCommand struct {
-	command       json.RawMessage
-	expected      []ExpectedResponse
-	responseIndex int
-	mutator       CommandMutator
-	deliverAfter  <-chan struct{}
-	delivered     bool
-	completed     bool
+	command            json.RawMessage
+	expected           []ExpectedResponse
+	responseIndex      int
+	mutator            CommandMutator
+	deliverAfter       <-chan struct{}
+	noResponseExpected bool
+	delivered          bool
+	completed          bool
 }
 
 func (s *scriptedCommand) remainingResponses() int {
@@ -324,7 +329,10 @@ func (m *MockTunnelService) appendCommandResponses(commands ...CommandResponse) 
 			m.failf("command payload must be non-nil")
 		}
 		expectedResponses := entry.ExpectedResponses
-		if len(expectedResponses) == 0 {
+		if entry.NoResponseExpected && len(expectedResponses) != 0 {
+			m.failf("no-response command must not include expected responses")
+		}
+		if !entry.NoResponseExpected && len(expectedResponses) == 0 {
 			m.failf("expected responses must be non-empty")
 		}
 		mutator := entry.CommandMutator
@@ -345,10 +353,11 @@ func (m *MockTunnelService) appendCommandResponses(commands ...CommandResponse) 
 			normalizedExpected[i] = expected
 		}
 		slot := &scriptedCommand{
-			command:      cmd,
-			expected:     normalizedExpected,
-			mutator:      mutator,
-			deliverAfter: entry.DeliverAfter,
+			command:            cmd,
+			expected:           normalizedExpected,
+			mutator:            mutator,
+			deliverAfter:       entry.DeliverAfter,
+			noResponseExpected: entry.NoResponseExpected,
 		}
 		m.script = append(m.script, slot)
 	}
@@ -823,6 +832,9 @@ func (m *MockTunnelService) nextCommandLocked() (json.RawMessage, <-chan struct{
 				return nil, slot.deliverAfter, false
 			}
 			slot.delivered = true
+			if slot.noResponseExpected {
+				slot.completed = true
+			}
 			payload := slot.command
 			if slot.mutator != nil {
 				mutated := slot.mutator(cloneJSON(payload), m.storage)
