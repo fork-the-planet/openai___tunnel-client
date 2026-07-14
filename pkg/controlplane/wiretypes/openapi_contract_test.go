@@ -115,10 +115,102 @@ func TestOpenAPIContractSurface(t *testing.T) {
 			}
 		}
 	}
+	assertTunnelFailureContract(t, spec, componentSchemas)
+
 	securitySchemes := mustMap(t, components["securitySchemes"], "components.securitySchemes")
 	bearer := mustMap(t, securitySchemes["BearerAuth"], "components.securitySchemes.BearerAuth")
 	if got := mustString(t, bearer["scheme"], "BearerAuth.scheme"); got != "bearer" {
 		t.Fatalf("expected bearer auth scheme, got %q", got)
+	}
+}
+
+func assertTunnelFailureContract(t *testing.T, spec map[string]any, componentSchemas map[string]any) {
+	t.Helper()
+	responsePayload := mustMap(t, componentSchemas["TunnelResponsePayload"], "TunnelResponsePayload")
+	responseProperties := mustMap(t, responsePayload["properties"], "TunnelResponsePayload.properties")
+	responseJSON := mustMap(t, responseProperties["resp_json"], "TunnelResponsePayload.resp_json")
+	failureSchema := mustMap(t, responseJSON["x-tunnel-failure-schema"], "resp_json.x-tunnel-failure-schema")
+	failureProperties := mustMap(t, failureSchema["properties"], "tunnel_failure.properties")
+
+	if got := mustString(t, failureSchema["$schema"], "tunnel_failure.$schema"); got != "https://json-schema.org/draft/2020-12/schema" {
+		t.Fatalf("unexpected tunnel failure schema dialect %q", got)
+	}
+	if additional, ok := failureSchema["additionalProperties"].(bool); !ok || !additional {
+		t.Fatal("tunnel failure schema must tolerate additive future fields")
+	}
+	version := mustMap(t, failureProperties["version"], "tunnel_failure.version")
+	if current, ok := version["x-current-version"].(float64); !ok || current != 1 {
+		t.Fatalf("expected tunnel failure current version 1, got %v", version["x-current-version"])
+	}
+	source := mustMap(t, failureProperties["source"], "tunnel_failure.source")
+	if _, restrictive := source["enum"]; restrictive {
+		t.Fatal("tunnel failure source must not reject unknown future values")
+	}
+	wantSources := []string{
+		"target_http",
+		"dns",
+		"tls",
+		"connect",
+		"transport_closed",
+		"timeout",
+		"protocol",
+		"client_internal",
+	}
+	if got := stringSlice(t, source["x-known-values"], "tunnel_failure.source.x-known-values"); !reflect.DeepEqual(got, wantSources) {
+		t.Fatalf("unexpected known tunnel failure sources: got %v want %v", got, wantSources)
+	}
+
+	valid := []map[string]any{
+		{
+			"version":                    float64(1),
+			"source":                     "transport_closed",
+			"upstream_response_received": false,
+		},
+		{
+			"version":                    float64(1),
+			"source":                     "target_http",
+			"upstream_response_received": true,
+			"upstream_status":            float64(502),
+		},
+		{
+			"version":                    float64(37),
+			"source":                     "future_source",
+			"upstream_response_received": false,
+			"future_field":               map[string]any{"ignored": true},
+		},
+	}
+	for index, value := range valid {
+		requireValidAgainstSchema(t, spec, failureSchema, value, fmt.Sprintf("valid tunnel failure %d", index))
+	}
+
+	invalid := []map[string]any{
+		{
+			"version":                    float64(1),
+			"source":                     "target_http",
+			"upstream_response_received": false,
+			"upstream_status":            float64(502),
+		},
+		{
+			"version":                    float64(1),
+			"source":                     "target_http",
+			"upstream_response_received": true,
+		},
+		{
+			"version":                    float64(1),
+			"source":                     "transport_closed",
+			"upstream_response_received": true,
+		},
+		{
+			"version":                    float64(1),
+			"source":                     "dns",
+			"upstream_response_received": false,
+			"upstream_status":            float64(502),
+		},
+	}
+	for index, value := range invalid {
+		if err := validateAgainstSchema(spec, failureSchema, value, "$.tunnel_failure"); err == nil {
+			t.Fatalf("invalid tunnel failure %d unexpectedly matched the schema: %#v", index, value)
+		}
 	}
 }
 
@@ -362,6 +454,30 @@ func validateAgainstSchema(spec map[string]any, schema map[string]any, value any
 		}
 		return validateAgainstSchema(spec, resolved, value, path)
 	}
+	if variants, ok := schema["allOf"].([]any); ok {
+		for _, variant := range variants {
+			variantSchema, ok := variant.(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := validateAgainstSchema(spec, variantSchema, value, path); err != nil {
+				return err
+			}
+		}
+	}
+	if condition, ok := schema["if"].(map[string]any); ok {
+		if validateAgainstSchema(spec, condition, value, path) == nil {
+			if consequence, ok := schema["then"].(map[string]any); ok {
+				if err := validateAgainstSchema(spec, consequence, value, path); err != nil {
+					return err
+				}
+			}
+		} else if alternative, ok := schema["else"].(map[string]any); ok {
+			if err := validateAgainstSchema(spec, alternative, value, path); err != nil {
+				return err
+			}
+		}
+	}
 	if variants, ok := schema["anyOf"].([]any); ok {
 		return validateVariant(spec, variants, value, path, false)
 	}
@@ -386,6 +502,13 @@ func validateAgainstSchema(spec map[string]any, schema map[string]any, value any
 	}
 
 	schemaType, _ := schema["type"].(string)
+	if schemaType == "" {
+		if _, hasProperties := schema["properties"]; hasProperties {
+			schemaType = "object"
+		} else if _, hasRequired := schema["required"]; hasRequired {
+			schemaType = "object"
+		}
+	}
 	switch schemaType {
 	case "":
 		return nil
@@ -407,10 +530,22 @@ func validateAgainstSchema(spec map[string]any, schema map[string]any, value any
 				return fmt.Errorf("%s: string %q does not match pattern %q", path, stringValue, pattern)
 			}
 		}
+		if minimum, ok := schema["minLength"].(float64); ok && float64(len(stringValue)) < minimum {
+			return fmt.Errorf("%s: string length %d is below minimum %v", path, len(stringValue), minimum)
+		}
+		if maximum, ok := schema["maxLength"].(float64); ok && float64(len(stringValue)) > maximum {
+			return fmt.Errorf("%s: string length %d exceeds maximum %v", path, len(stringValue), maximum)
+		}
 	case "integer":
 		number, ok := value.(float64)
 		if !ok || math.Trunc(number) != number {
 			return fmt.Errorf("%s: expected integer, got %v", path, value)
+		}
+		if minimum, ok := schema["minimum"].(float64); ok && number < minimum {
+			return fmt.Errorf("%s: integer %v is below minimum %v", path, number, minimum)
+		}
+		if maximum, ok := schema["maximum"].(float64); ok && number > maximum {
+			return fmt.Errorf("%s: integer %v exceeds maximum %v", path, number, maximum)
 		}
 	case "number":
 		if _, ok := value.(float64); !ok {

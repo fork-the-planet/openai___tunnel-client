@@ -242,6 +242,74 @@ Supported `resp_type` values:
 | `notify_ack` | yes | Terminal acknowledgment for a JSON-RPC notification that has no result. |
 | `session_termination_response` | yes | Terminal acknowledgment after closing an MCP session. |
 
+### Structured MCP errors and synthesized tunnel failures
+
+When the target returns a valid JSON-RPC error, preserve its request `id` and
+exact `error.code`, `error.message`, and `error.data` values in `resp_json`.
+Preserve the actual target HTTP status in `resp_code` and the existing
+protocol-relevant response-header allowlist in `resp_headers`. This includes MCP
+capability error `-32003` and version error `-32004`; do not replace or decorate
+either with `-32603`.
+
+Only when no valid MCP error can be recovered may a client synthesize JSON-RPC
+`-32603`. A synthesized failure may carry bounded provenance at
+`error.data.tunnel_failure`:
+
+```json
+{
+  "request_id": "req_123",
+  "channel": "main",
+  "resp_json": {
+    "jsonrpc": "2.0",
+    "id": "rpc_123",
+    "error": {
+      "code": -32603,
+      "message": "Bad Gateway",
+      "data": {
+        "tunnel_failure": {
+          "version": 1,
+          "source": "transport_closed",
+          "upstream_response_received": false
+        }
+      }
+    }
+  },
+  "resp_headers": {
+    "Content-Type": ["application/json"]
+  },
+  "resp_code": 502,
+  "resp_type": "jsonrpc_response"
+}
+```
+
+The machine-readable schema is published as `x-tunnel-failure-schema` on the
+`resp_json` OpenAPI property. Its current known fields are:
+
+| Field | Required | Contract |
+| --- | --- | --- |
+| `version` | yes | Positive integer. Version `1` is current; readers must tolerate future positive versions. |
+| `source` | yes | Bounded string. Known values are listed below; readers must tolerate unknown values. |
+| `upstream_response_received` | yes | Whether an actual target HTTP response was received. |
+| `upstream_status` | no | Target HTTP error status from `400` through `599`; valid only for `source: target_http` with `upstream_response_received: true`. |
+
+Known version-1 `source` values are `target_http`, `dns`, `tls`, `connect`,
+`transport_closed`, `timeout`, `protocol`, and `client_internal`.
+`target_http` means an actual target HTTP error response was received and
+requires `upstream_status`. `transport_closed` means the target connection or
+pipe was already closed or became unusable before a target response, so
+`upstream_response_received` must be `false` and `upstream_status` must be
+omitted. A synthesized outer `resp_code` such as `502` is the tunnel response
+status; it is not evidence that the target returned that status.
+
+The provenance object is optional and additive. Existing clients may omit it,
+existing services continue accepting the nested value inside opaque
+`resp_json`, and contract-aware readers use only recognized safe fields.
+Unknown versions, sources, and fields must fall back to generic tunnel-failure
+behavior and must not be copied into logs or metrics. Never put raw target
+URLs, response bodies, arbitrary exception text, credentials, or tokens in
+provenance. This contract does not use capability negotiation or an additional
+MCP handshake.
+
 For a JSON-RPC request with an ID, a client may post zero or more
 `jsonrpc_notify` payloads while processing the command, followed by one
 terminal `jsonrpc_response`. Every POST for the command must reuse its

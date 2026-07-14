@@ -432,7 +432,7 @@
             "BearerAuth": []
           }
         ],
-        "description": "Post the result for one polled command. Echo the command request_id in the JSON body and its shard_token in the X-Tunnel-Shard-Token header."
+        "description": "Post the result for one polled command. Echo the command request_id in the JSON body and its shard_token in the X-Tunnel-Shard-Token header. Preserve recognized target JSON-RPC errors, including -32003 and -32004, exactly in resp_json. Only non-protocol failures may synthesize -32603 with optional error.data.tunnel_failure provenance."
       }
     }
   },
@@ -554,7 +554,137 @@
               }
             ],
             "title": "Resp Json",
-            "description": "Final JSON payload (omitted when acknowledging notifications)"
+            "description": "Final JSON payload (omitted when acknowledging notifications). Preserve recognized target JSON-RPC errors exactly. A synthesized -32603 failure may carry optional provenance at error.data.tunnel_failure; the nested schema is published in x-tunnel-failure-schema while this payload remains runtime-opaque.",
+            "x-tunnel-failure-schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": true,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "source": {
+                        "const": "target_http"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "upstream_response_received": {
+                        "const": true
+                      },
+                      "upstream_status": {
+                        "maximum": 599,
+                        "minimum": 400,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "upstream_status"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "upstream_status": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "upstream_status"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "source": {
+                        "const": "target_http"
+                      },
+                      "upstream_response_received": {
+                        "const": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "source": {
+                        "const": "transport_closed"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "upstream_response_received": {
+                        "const": false
+                      },
+                      "upstream_status": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ],
+              "description": "Bounded provenance for a synthesized non-protocol MCP failure.\n\nThe response payload remains opaque at the tunnel-service wire boundary. This\nmodel owns the published nested contract and gives readers an opt-in validator\nwithout making provenance mandatory for existing clients.",
+              "properties": {
+                "version": {
+                  "description": "Positive schema version; readers must tolerate future versions.",
+                  "minimum": 1,
+                  "title": "Version",
+                  "type": "integer",
+                  "x-current-version": 1
+                },
+                "source": {
+                  "description": "Bounded failure source. Readers use known values only and treat unknown values as an unclassified tunnel failure.",
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "title": "Source",
+                  "type": "string",
+                  "x-known-values": [
+                    "target_http",
+                    "dns",
+                    "tls",
+                    "connect",
+                    "transport_closed",
+                    "timeout",
+                    "protocol",
+                    "client_internal"
+                  ]
+                },
+                "upstream_response_received": {
+                  "description": "Whether the target returned an HTTP response before the failure.",
+                  "title": "Upstream Response Received",
+                  "type": "boolean"
+                },
+                "upstream_status": {
+                  "anyOf": [
+                    {
+                      "maximum": 599,
+                      "minimum": 400,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Target HTTP error status. Present only for source=target_http when an actual target response was received; omit it for synthesized gateway status.",
+                  "title": "Upstream Status"
+                }
+              },
+              "required": [
+                "version",
+                "source",
+                "upstream_response_received"
+              ],
+              "title": "TunnelFailureProvenance",
+              "type": "object"
+            }
           },
           "resp_headers": {
             "additionalProperties": {
