@@ -330,7 +330,17 @@ A successful POST returns:
 ## Errors, retries, and concurrency
 
 - Keep polling until the process is stopped; `204` is normal, not an error.
-- Retry transient network failures, `429`, and `5xx` with bounded backoff.
+- For polls, retry transient network failures, `429`, and `5xx` with
+  bounded exponential backoff and jitter.
+- For response POSTs, retry transient network failures, `408`, `429`,
+  `502`, `503`, and `504` with bounded exponential backoff and jitter.
+  Preserve the exact body, headers, correlation values, and caller deadline
+  across attempts; do not retry other `4xx` responses.
+- Retryable `429` and `503` responses may include the standard
+  `Retry-After` header in either delta-seconds form (for example, `5`) or
+  HTTP-date form. Treat a valid value as a minimum delay in addition to local
+  backoff and jitter. Ignore malformed, negative, and expired values, cap
+  excessive values, and never wait past cancellation or the command deadline.
 - Treat `401` and `403` as authentication or authorization failures that need
   operator action instead of a tight retry loop.
 - A response POST can return `404` when the request has already been fulfilled

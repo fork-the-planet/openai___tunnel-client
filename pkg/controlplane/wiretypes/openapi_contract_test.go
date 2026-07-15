@@ -56,6 +56,25 @@ func TestOpenAPIContractSurface(t *testing.T) {
 	if !hasRequiredHeader(response, "X-Tunnel-Shard-Token") {
 		t.Fatal("response operation must require X-Tunnel-Shard-Token")
 	}
+	for _, path := range []string{
+		"/v1/tunnels/{tunnel_id}/poll",
+		"/v1/tunnels/{tunnel_id}/response",
+	} {
+		op := operation(t, spec, path, map[string]string{
+			"/v1/tunnels/{tunnel_id}/poll":     "get",
+			"/v1/tunnels/{tunnel_id}/response": "post",
+		}[path])
+		responses := mustMap(t, op["responses"], path+".responses")
+		for _, statusCode := range []string{"429", "503"} {
+			retryableResponse := mustMap(t, responses[statusCode], path+"."+statusCode)
+			headers := mustMap(t, retryableResponse["headers"], path+"."+statusCode+".headers")
+			retryAfter := mustMap(t, headers["Retry-After"], path+"."+statusCode+".Retry-After")
+			schema := mustMap(t, retryAfter["schema"], path+"."+statusCode+".Retry-After.schema")
+			if got := mustString(t, schema["type"], path+"."+statusCode+".Retry-After.type"); got != "string" {
+				t.Fatalf("%s %s Retry-After type = %q, want string", path, statusCode, got)
+			}
+		}
+	}
 
 	components := mustMap(t, spec["components"], "components")
 	componentSchemas := mustMap(t, components["schemas"], "components.schemas")

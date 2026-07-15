@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jpillora/backoff"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
@@ -36,6 +37,7 @@ const (
 	metadataPathFormat           = "/v1/tunnels/%s"
 	maxControlPlaneErrorBodySize = 64 * 1024
 	tunnelIntegrationSocketEnv   = "TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH"
+	defaultResponseRetryAttempts = 3
 )
 
 var errMissingConfig = errors.New("controlplane client: config is required")
@@ -43,17 +45,20 @@ var errMissingConfig = errors.New("controlplane client: config is required")
 // TunnelServiceClient implements the Fetcher and Responder interfaces backed by
 // the control-plane HTTP API.
 type TunnelServiceClient struct {
-	client           *http.Client
-	pollEndpoint     *url.URL
-	responseEndpoint *url.URL
-	metadataEndpoint *url.URL
-	logger           *slog.Logger
-	tunnelID         types.TunnelID
-	apiKey           string
-	userAgent        string
-	pollTimeout      time.Duration
-	pollGuardrail    time.Duration
-	now              func() time.Time
+	client                *http.Client
+	pollEndpoint          *url.URL
+	responseEndpoint      *url.URL
+	metadataEndpoint      *url.URL
+	logger                *slog.Logger
+	tunnelID              types.TunnelID
+	apiKey                string
+	userAgent             string
+	pollTimeout           time.Duration
+	pollGuardrail         time.Duration
+	now                   func() time.Time
+	responseRetryAttempts int
+	newResponseBackoff    func() *backoff.Backoff
+	retrySleep            func(context.Context, time.Duration) bool
 }
 
 // NewTunnelServiceClient constructs an HTTP-backed client using the provided config.
@@ -98,16 +103,19 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 			Timeout:   pollDeadline,
 			Transport: transport,
 		},
-		pollEndpoint:     pollEndpoint,
-		responseEndpoint: responseEndpoint,
-		metadataEndpoint: metadataEndpoint,
-		logger:           logger,
-		tunnelID:         cfg.TunnelID,
-		apiKey:           cfg.APIKey,
-		userAgent:        version.UserAgent,
-		pollTimeout:      pollTimeout,
-		pollGuardrail:    pollGuardrail,
-		now:              time.Now,
+		pollEndpoint:          pollEndpoint,
+		responseEndpoint:      responseEndpoint,
+		metadataEndpoint:      metadataEndpoint,
+		logger:                logger,
+		tunnelID:              cfg.TunnelID,
+		apiKey:                cfg.APIKey,
+		userAgent:             version.UserAgent,
+		pollTimeout:           pollTimeout,
+		pollGuardrail:         pollGuardrail,
+		now:                   time.Now,
+		responseRetryAttempts: defaultResponseRetryAttempts,
+		newResponseBackoff:    newControlPlaneBackoff,
+		retrySleep:            sleepWithContext,
 	}
 	logger.InfoContext(ctx, "TunnelServiceClient created",
 		slog.String("tunnel_id", client.tunnelID.String()),
@@ -130,10 +138,12 @@ type TunnelMetadata struct {
 }
 
 type APIStatusError struct {
-	prefix     string
-	statusCode int
-	status     string
-	info       apierror.Info
+	prefix        string
+	statusCode    int
+	status        string
+	info          apierror.Info
+	retryAfter    time.Duration
+	hasRetryAfter bool
 }
 
 type MetadataStatusError = APIStatusError
@@ -183,12 +193,23 @@ func (e *APIStatusError) Mitigation() string {
 	return e.info.Mitigation
 }
 
-func newAPIStatusError(prefix string, resp *http.Response) *APIStatusError {
+func (e *APIStatusError) RetryAfter() (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	return e.retryAfter, e.hasRetryAfter
+}
+
+func newAPIStatusError(prefix string, resp *http.Response, now time.Time) *APIStatusError {
 	statusErr := &APIStatusError{
 		prefix:     prefix,
 		statusCode: resp.StatusCode,
 		status:     resp.Status,
 	}
+	statusErr.retryAfter, statusErr.hasRetryAfter = parseRetryAfter(
+		resp.Header.Get("Retry-After"),
+		now,
+	)
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneErrorBodySize))
 	_, _ = io.Copy(io.Discard, resp.Body)
@@ -220,7 +241,7 @@ func (c *TunnelServiceClient) FetchTunnelMetadata(ctx context.Context) (*TunnelM
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIStatusError("controlplane client: unexpected metadata status", resp)
+		return nil, newAPIStatusError("controlplane client: unexpected metadata status", resp, c.nowTime())
 	}
 
 	var metadata TunnelMetadata
@@ -335,32 +356,62 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 	}
 	req.Header.Set("X-Tunnel-Shard-Token", shardToken)
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("controlplane responder: post response: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
 	var tunnelServiceRequestID types.TunnelServiceRequestID
-	if id, ok := types.NewTunnelServiceRequestIDFromHeader(resp.Header); ok {
-		tunnelServiceRequestID = id
-		ctx = tunnelctx.ContextWithTunnelServiceRequestID(ctx, tunnelServiceRequestID)
-	}
-
 	ctx = tunnelctx.ContextWithRequestID(ctx, requestID.String())
 	logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
-	switch resp.StatusCode {
-	case http.StatusOK:
-		logger.DebugContext(ctx, "posted response to control-plane")
-		return tunnelServiceRequestID, nil
-	case http.StatusNotFound:
-		logger.WarnContext(ctx, "response already fulfilled or unknown request")
-		return tunnelServiceRequestID, nil
-	default:
-		return tunnelServiceRequestID, newAPIStatusError("controlplane responder: unexpected status", resp)
+
+	attempts := c.responseRetryAttempts
+	if attempts <= 0 {
+		attempts = defaultResponseRetryAttempts
 	}
+	responseBackoff := c.responseBackoff()
+	for attempt := 1; attempt <= attempts; attempt++ {
+		attemptReq, err := cloneRequestWithBody(req)
+		if err != nil {
+			return tunnelServiceRequestID, fmt.Errorf("controlplane responder: replay request body: %w", err)
+		}
+
+		resp, err := c.client.Do(attemptReq)
+		if err != nil {
+			if attempt == attempts {
+				return tunnelServiceRequestID, fmt.Errorf("controlplane responder: post response: %w", err)
+			}
+			if !c.waitForRetry(ctx, responseBackoff.Duration()) {
+				return tunnelServiceRequestID, retryWaitError(ctx)
+			}
+			continue
+		}
+
+		if id, ok := types.NewTunnelServiceRequestIDFromHeader(resp.Header); ok {
+			tunnelServiceRequestID = id
+			ctx = tunnelctx.ContextWithTunnelServiceRequestID(ctx, tunnelServiceRequestID)
+			logger = tclog.LoggerWithContextIdentifiers(ctx, c.logger)
+		}
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			_ = resp.Body.Close()
+			logger.DebugContext(ctx, "posted response to control-plane")
+			return tunnelServiceRequestID, nil
+		case http.StatusNotFound:
+			_ = resp.Body.Close()
+			logger.WarnContext(ctx, "response already fulfilled or unknown request")
+			return tunnelServiceRequestID, nil
+		default:
+			statusErr := newAPIStatusError("controlplane responder: unexpected status", resp, c.nowTime())
+			_ = resp.Body.Close()
+			if !isRetryableResponseStatus(resp.StatusCode) || attempt == attempts {
+				return tunnelServiceRequestID, statusErr
+			}
+			retryAfter, hasRetryAfter := statusErr.RetryAfter()
+			delay := retryDelay(responseBackoff.Duration(), retryAfter, hasRetryAfter)
+			if !c.waitForRetry(ctx, delay) {
+				return tunnelServiceRequestID, retryWaitError(ctx)
+			}
+		}
+	}
+
+	return tunnelServiceRequestID, errors.New("controlplane responder: exhausted response retries")
 }
 
 // Poll requests up to limit commands from the control plane.
@@ -406,8 +457,64 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 		cmds, err := c.decodeCommands(ctx, resp.Body, limit, receivedAt)
 		return cmds, tunnelServiceRequestID, err
 	default:
-		return nil, tunnelServiceRequestID, newAPIStatusError("controlplane client: unexpected status", resp)
+		return nil, tunnelServiceRequestID, newAPIStatusError("controlplane client: unexpected status", resp, c.nowTime())
 	}
+}
+
+func newControlPlaneBackoff() *backoff.Backoff {
+	return &backoff.Backoff{
+		Min:    defaultBackoffMin,
+		Max:    defaultBackoffMax,
+		Factor: 2,
+		Jitter: true,
+	}
+}
+
+func (c *TunnelServiceClient) responseBackoff() *backoff.Backoff {
+	if c.newResponseBackoff != nil {
+		return c.newResponseBackoff()
+	}
+	return newControlPlaneBackoff()
+}
+
+func (c *TunnelServiceClient) waitForRetry(ctx context.Context, delay time.Duration) bool {
+	if c.retrySleep != nil {
+		return c.retrySleep(ctx, delay)
+	}
+	return sleepWithContext(ctx, delay)
+}
+
+func cloneRequestWithBody(req *http.Request) (*http.Request, error) {
+	attemptReq := req.Clone(req.Context())
+	if req.GetBody == nil {
+		return attemptReq, nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	attemptReq.Body = body
+	return attemptReq, nil
+}
+
+func isRetryableResponseStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryWaitError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("controlplane responder: retry wait: %w", err)
+	}
+	return errors.New("controlplane responder: retry wait interrupted")
 }
 
 func (c *TunnelServiceClient) nowTime() time.Time {

@@ -1342,7 +1342,7 @@ func TestNewAPIStatusErrorDrainsOversizedErrorBody(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", maxControlPlaneErrorBodySize+17))),
 	}
 
-	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp, time.Now())
 
 	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
 	remainder, err := io.ReadAll(resp.Body)
@@ -1359,7 +1359,7 @@ func TestNewAPIStatusErrorTruncatesInvalidErrorBody(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", maxControlPlaneErrorBodySize+17))),
 	}
 
-	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp, time.Now())
 
 	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
 	assert.Empty(t, statusErr.Code())
@@ -1377,7 +1377,7 @@ func TestNewAPIStatusErrorHandlesBodyReadFailure(t *testing.T) {
 		Body:       errorReadCloser{err: errors.New("boom")},
 	}
 
-	statusErr := newAPIStatusError("controlplane client: unexpected status", resp)
+	statusErr := newAPIStatusError("controlplane client: unexpected status", resp, time.Now())
 
 	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode())
 	assert.Empty(t, statusErr.Code())

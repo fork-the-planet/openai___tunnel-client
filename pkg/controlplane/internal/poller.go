@@ -51,6 +51,7 @@ type poller struct {
 	pollGuardrail  time.Duration
 	metrics        *pollerMetrics
 	hadPollError   bool
+	retrySleep     func(context.Context, time.Duration) bool
 }
 
 // NewPoller builds a Poller with sensible defaults for retry and queue
@@ -96,6 +97,7 @@ func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter
 		queueFullDelay: defaultQueueFullDelay,
 		pollTimeout:    pollTimeout,
 		pollGuardrail:  pollDeadlineGuardrail,
+		retrySleep:     sleepWithContext,
 	}
 	if m, err := newPollerMetrics(meter, q); err != nil {
 		return nil, err
@@ -151,6 +153,11 @@ func (p *poller) Run(ctx context.Context) {
 			p.hadPollError = true
 			p.metrics.pollErrors.Add(ctx, 1, metric.WithAttributes(attribute.String(attributeKeyErrorKind, pollErrorKind(err))))
 			delay := p.backoff.Duration()
+			var statusErr *APIStatusError
+			if errors.As(err, &statusErr) {
+				retryAfter, hasRetryAfter := statusErr.RetryAfter()
+				delay = retryDelay(delay, retryAfter, hasRetryAfter)
+			}
 			requestIDValue := tunnelServiceRequestID.String()
 			if requestIDValue == "" {
 				requestIDValue = "missing_request_id"
@@ -160,8 +167,7 @@ func (p *poller) Run(ctx context.Context) {
 				slog.Int64("retry_in_ms", delay.Milliseconds()),
 				slog.String(tclog.FieldTunnelServiceRequestID, requestIDValue),
 			}
-			var statusErr *APIStatusError
-			if errors.As(err, &statusErr) {
+			if statusErr != nil {
 				attrs = append(attrs,
 					slog.Int("status_code", statusErr.StatusCode()),
 					slog.String("status", statusErr.Status()),
@@ -183,7 +189,7 @@ func (p *poller) Run(ctx context.Context) {
 			} else {
 				p.logger.WarnContext(ctx, "poll failed; backing off", attrs...)
 			}
-			if !p.sleep(ctx, delay) {
+			if !p.waitForRetry(ctx, delay) {
 				return
 			}
 			continue
@@ -310,19 +316,14 @@ func (p *poller) waitForQueue(ctx context.Context) bool {
 	}
 }
 
-func (p *poller) sleep(ctx context.Context, d time.Duration) bool {
+func (p *poller) waitForRetry(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		d = defaultBackoffMin
 	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
+	if p.retrySleep != nil {
+		return p.retrySleep(ctx, d)
 	}
+	return sleepWithContext(ctx, d)
 }
 
 func pollErrorKind(err error) string {
