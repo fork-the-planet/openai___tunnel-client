@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -413,52 +415,55 @@ func doctorOAuthMetadataCheck(serverURL *url.URL) doctorCheck {
 	if serverURL == nil {
 		return doctorCheck{ID: "oauth_metadata", Status: doctorStatusSkip, Summary: "no HTTP MCP target configured"}
 	}
-	urls := oauth.BuildResourceMetadataURLs(serverURL)
-	if len(urls) == 0 || urls[0] == nil {
+	client := &http.Client{Timeout: 2 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), oauth.DefaultDiscoveryTimeout)
+	defer cancel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	candidates, probe, err := oauth.BuildOAuthDiscoveryCandidates(ctx, client, serverURL, logger)
+	if err != nil {
+		return doctorOAuthMetadataFailure(err.Error())
+	}
+	if len(candidates) == 0 {
 		return doctorCheck{ID: "oauth_metadata", Status: doctorStatusSkip, Summary: "no OAuth metadata URLs derived"}
 	}
-	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(urls[0].String())
+	startedAt := time.Now()
+	resp, sourceURL, attempts, err := oauth.FetchOAuthMetadata(ctx, client, candidates, logger)
+	result := oauth.BuildDiscoveryResult(resp, sourceURL, startedAt, attempts)
 	if err != nil {
-		return doctorCheck{
-			ID:      "oauth_metadata",
-			Status:  doctorStatusFail,
-			Summary: err.Error(),
-			Why:     "HTTP MCP servers that rely on DCR/PRMD should expose the protected-resource metadata and authorization-server metadata contract or readiness can stay degraded.",
-			Evidence: []string{
-				urls[0].String(),
-				err.Error(),
-			},
-			Next: []string{
-				"verify the MCP server exposes GET /.well-known/oauth-protected-resource/mcp",
-				"verify authorization_servers[0] resolves to GET /.well-known/oauth-authorization-server",
-				"inspect /readyz and the logged oauth_discovery_urls after startup",
-			},
+		if oauth.IsOptionalDiscoveryFailure(result, probe, err) {
+			return doctorCheck{
+				ID:      "oauth_metadata",
+				Status:  doctorStatusPass,
+				Summary: "OAuth metadata not advertised; all candidates returned HTTP 404",
+			}
 		}
+		return doctorOAuthMetadataFailure(err.Error())
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return doctorCheck{
-			ID:      "oauth_metadata",
-			Status:  doctorStatusPass,
-			Summary: fmt.Sprintf("HTTP %d from %s", resp.StatusCode, urls[0].String()),
-		}
+	if resp == nil || sourceURL == nil {
+		return doctorOAuthMetadataFailure("OAuth metadata discovery returned no response")
 	}
+
+	return doctorCheck{
+		ID:      "oauth_metadata",
+		Status:  doctorStatusPass,
+		Summary: fmt.Sprintf("HTTP %d from %s", resp.ResponseCode(), sourceURL.String()),
+	}
+}
+
+func doctorOAuthMetadataFailure(summary string) doctorCheck {
 	return doctorCheck{
 		ID:      "oauth_metadata",
 		Status:  doctorStatusFail,
-		Summary: fmt.Sprintf("HTTP %d from %s", resp.StatusCode, urls[0].String()),
+		Summary: summary,
 		Why:     "HTTP MCP servers that rely on DCR/PRMD should expose the protected-resource metadata and authorization-server metadata contract or readiness can stay degraded.",
 		Evidence: []string{
-			urls[0].String(),
-			fmt.Sprintf("HTTP %d", resp.StatusCode),
+			summary,
 		},
 		Next: []string{
 			"verify the MCP server exposes GET /.well-known/oauth-protected-resource/mcp",
 			"verify authorization_servers[0] resolves to GET /.well-known/oauth-authorization-server",
-			"inspect /readyz and the embedded UI after startup",
+			"inspect /readyz and the logged oauth_discovery_urls after startup",
 		},
 	}
 }

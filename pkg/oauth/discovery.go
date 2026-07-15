@@ -138,7 +138,7 @@ func runOAuthMetadataDiscoveryPass(
 		if readErr != nil {
 			lastErr = fmt.Errorf("oauth discovery read %s: %w", candidate.URL.String(), readErr)
 			attempts[i].Error = lastErr.Error()
-			if resp.StatusCode >= 500 && i+1 < len(filtered) {
+			if (resp.StatusCode == http.StatusNotFound || resp.StatusCode >= 500) && i+1 < len(filtered) {
 				if logger != nil {
 					logger.DebugContext(ctx, "oauth discovery retrying after read failure", slog.String("url", candidate.URL.String()), slog.Int("status", resp.StatusCode))
 				}
@@ -165,7 +165,7 @@ func runOAuthMetadataDiscoveryPass(
 		if len(body) == 0 {
 			lastErr = fmt.Errorf("oauth discovery empty body from %s (status %d)", candidate.URL.String(), resp.StatusCode)
 			attempts[i].Error = lastErr.Error()
-			if resp.StatusCode >= 500 && i+1 < len(filtered) {
+			if (resp.StatusCode == http.StatusNotFound || resp.StatusCode >= 500) && i+1 < len(filtered) {
 				if logger != nil {
 					logger.DebugContext(ctx, "oauth discovery retrying after empty body", slog.String("url", candidate.URL.String()), slog.Int("status", resp.StatusCode))
 				}

@@ -205,39 +205,41 @@ func TestFetchOAuthMetadataFallsBackOn404OversizedBody(t *testing.T) {
 	require.Contains(t, attempts[0].Error, "exceeds")
 }
 
-func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {
+func TestFetchOAuthMetadataFallsBackOnEmpty404Or5xxBody(t *testing.T) {
 	t.Parallel()
 
-	var calls int
-	var expectedResource string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		switch calls {
-		case 1:
-			// 5xx with empty body should be retried if there are more candidates.
-			w.WriteHeader(http.StatusInternalServerError)
-		default:
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
-		}
-	}))
-	t.Cleanup(server.Close)
+	for _, fallbackStatus := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		t.Run(http.StatusText(fallbackStatus), func(t *testing.T) {
+			var calls int
+			var expectedResource string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					w.WriteHeader(fallbackStatus)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
+			}))
+			t.Cleanup(server.Close)
 
-	baseURL, err := url.Parse(server.URL + "/base")
-	require.NoError(t, err)
-	expectedResource = baseURL.String()
-	client := server.Client()
-	client.Timeout = 2 * time.Second
+			baseURL, err := url.Parse(server.URL + "/base")
+			require.NoError(t, err)
+			expectedResource = baseURL.String()
+			client := server.Client()
+			client.Timeout = 2 * time.Second
 
-	resp, _, _, fetchErr := FetchOAuthMetadata(
-		context.Background(),
-		client,
-		buildWellKnownCandidates(baseURL),
-		nil,
-	)
-	require.NoError(t, fetchErr)
-	require.Equal(t, http.StatusOK, resp.ResponseCode())
-	require.GreaterOrEqual(t, calls, 2)
+			resp, _, _, fetchErr := FetchOAuthMetadata(
+				context.Background(),
+				client,
+				buildWellKnownCandidates(baseURL),
+				nil,
+			)
+			require.NoError(t, fetchErr)
+			require.Equal(t, http.StatusOK, resp.ResponseCode())
+			require.GreaterOrEqual(t, calls, 2)
+		})
+	}
 }
 
 func TestFetchOAuthMetadataReadErrorIsReturned(t *testing.T) {

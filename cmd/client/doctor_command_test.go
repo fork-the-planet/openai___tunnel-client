@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,6 +56,134 @@ func TestDoctorSuccess(t *testing.T) {
 	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
 	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
 	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+}
+
+func TestDoctorOAuthMetadataCheckCandidates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                 string
+		pathStatus           int
+		rootStatus           int
+		pathBody             string
+		emptyErrorBodies     bool
+		advertiseMetadataURL bool
+		wantStatus           doctorStatus
+		wantSummaryPart      string
+		wantMetadataPaths    []string
+	}{
+		{
+			name:              "AllNotFoundIsOptional",
+			pathStatus:        http.StatusNotFound,
+			rootStatus:        http.StatusNotFound,
+			emptyErrorBodies:  true,
+			wantStatus:        doctorStatusPass,
+			wantSummaryPart:   "all candidates returned HTTP 404",
+			wantMetadataPaths: []string{"/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"},
+		},
+		{
+			name:              "RootCandidateSucceeds",
+			pathStatus:        http.StatusNotFound,
+			rootStatus:        http.StatusOK,
+			wantStatus:        doctorStatusPass,
+			wantSummaryPart:   "HTTP 200 from",
+			wantMetadataPaths: []string{"/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"},
+		},
+		{
+			name:              "UnexpectedRootStatusFails",
+			pathStatus:        http.StatusNotFound,
+			rootStatus:        http.StatusInternalServerError,
+			wantStatus:        doctorStatusFail,
+			wantSummaryPart:   "invalid metadata",
+			wantMetadataPaths: []string{"/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"},
+		},
+		{
+			name:              "ServerErrorFallsBackToRootCandidate",
+			pathStatus:        http.StatusInternalServerError,
+			rootStatus:        http.StatusOK,
+			wantStatus:        doctorStatusPass,
+			wantSummaryPart:   "HTTP 200 from",
+			wantMetadataPaths: []string{"/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"},
+		},
+		{
+			name:              "MalformedSuccessFails",
+			pathStatus:        http.StatusOK,
+			rootStatus:        http.StatusOK,
+			pathBody:          "not-json",
+			wantStatus:        doctorStatusFail,
+			wantSummaryPart:   "invalid metadata",
+			wantMetadataPaths: []string{"/.well-known/oauth-protected-resource/mcp"},
+		},
+		{
+			name:                 "AdvertisedMetadataNotFoundIsNotOptional",
+			pathStatus:           http.StatusNotFound,
+			rootStatus:           http.StatusNotFound,
+			advertiseMetadataURL: true,
+			wantStatus:           doctorStatusFail,
+			wantSummaryPart:      "oauth discovery",
+			wantMetadataPaths: []string{
+				"/advertised-oauth-metadata",
+				"/.well-known/oauth-protected-resource/mcp",
+				"/.well-known/oauth-protected-resource",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			requestedMetadataPaths := make([]string, 0, 3)
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/.well-known/") || r.URL.Path == "/advertised-oauth-metadata" {
+					mu.Lock()
+					requestedMetadataPaths = append(requestedMetadataPaths, r.URL.Path)
+					mu.Unlock()
+				}
+				switch r.URL.Path {
+				case "/mcp":
+					if tt.advertiseMetadataURL {
+						w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+server.URL+`/advertised-oauth-metadata"`)
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					w.WriteHeader(http.StatusOK)
+				case "/advertised-oauth-metadata":
+					http.NotFound(w, r)
+				case "/.well-known/oauth-protected-resource/mcp":
+					w.WriteHeader(tt.pathStatus)
+					if tt.pathBody != "" {
+						_, _ = w.Write([]byte(tt.pathBody))
+					} else if tt.pathStatus == http.StatusOK {
+						_, _ = w.Write([]byte(`{"resource":"` + server.URL + `/mcp"}`))
+					} else if !tt.emptyErrorBodies {
+						_, _ = w.Write([]byte(http.StatusText(tt.pathStatus)))
+					}
+				case "/.well-known/oauth-protected-resource":
+					w.WriteHeader(tt.rootStatus)
+					if tt.rootStatus == http.StatusOK {
+						_, _ = w.Write([]byte(`{"resource":"` + server.URL + `/mcp"}`))
+					} else if !tt.emptyErrorBodies {
+						_, _ = w.Write([]byte(http.StatusText(tt.rootStatus)))
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			serverURL, err := url.Parse(server.URL + "/mcp")
+			require.NoError(t, err)
+			check := doctorOAuthMetadataCheck(serverURL)
+
+			require.Equal(t, tt.wantStatus, check.Status)
+			require.Contains(t, check.Summary, tt.wantSummaryPart)
+			mu.Lock()
+			gotPaths := append([]string(nil), requestedMetadataPaths...)
+			mu.Unlock()
+			require.Equal(t, tt.wantMetadataPaths, gotPaths)
+		})
+	}
 }
 
 func TestDoctorFailureExplain(t *testing.T) {
