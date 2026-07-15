@@ -115,7 +115,7 @@ func TestNewSharedConnectionTransportReconnectsAfterForwardingWriteError(t *test
 	require.NotNil(t, conn)
 
 	req := &jsonrpc.Request{Method: "testMethod"}
-	_, _, err = conn.Write(context.Background(), nil, req)
+	_, err = conn.Write(context.Background(), nil, req)
 	require.ErrorIs(t, err, writeErr)
 
 	conn2, err := forwarding.Connect(context.Background())

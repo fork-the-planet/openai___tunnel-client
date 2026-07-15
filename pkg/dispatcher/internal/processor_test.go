@@ -66,6 +66,18 @@ func assertTerminalJSONRPCErrorResponse(t *testing.T, responder *recordingRespon
 	return resp
 }
 
+func requireTunnelFailure(t *testing.T, response *jsonrpc.Response, want tunnelFailure) {
+	t.Helper()
+	require.NotNil(t, response)
+	wireError, ok := response.Error.(*jsonrpc.Error)
+	require.True(t, ok, "expected structured JSON-RPC error")
+	require.Equal(t, int64(jsonrpc.CodeInternalError), wireError.Code)
+
+	var data tunnelFailureData
+	require.NoError(t, json.Unmarshal(wireError.Data, &data))
+	require.Equal(t, want, data.TunnelFailure)
+}
+
 func TestProcessorForwardResponses(t *testing.T) {
 	t.Parallel()
 
@@ -1244,7 +1256,13 @@ func TestProcessorReturnsErrorResponseOnWriteFailure(t *testing.T) {
 	rpcResp := decodeJSONRPCResponse(t, resp.response.Payload())
 	require.NotNil(t, rpcResp)
 	require.NotNil(t, rpcResp.Error)
-	require.Contains(t, rpcResp.Error.Error(), "unauthorized")
+	require.Equal(t, http.StatusText(http.StatusUnauthorized), rpcResp.Error.Error())
+	requireTunnelFailure(t, rpcResp, tunnelFailure{
+		Version:                  1,
+		Source:                   tunnelFailureSourceTargetHTTP,
+		UpstreamResponseReceived: true,
+		UpstreamStatus:           http.StatusUnauthorized,
+	})
 }
 
 func TestProcessorPropagatesControlPlaneCommandRequestID(t *testing.T) {
@@ -1500,8 +1518,8 @@ func TestProcessorConnectFailureReturnsTerminalErrorResponseAndRecordsLatency(t 
 	require.NotNil(t, rpcResp)
 	require.Equal(t, callID, rpcResp.ID)
 	require.NotNil(t, rpcResp.Error)
-	require.Contains(t, rpcResp.Error.Error(), "Bad Gateway")
-	require.Contains(t, rpcResp.Error.Error(), "connect failed")
+	require.Equal(t, "Bad Gateway", rpcResp.Error.Error())
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceClientInternal})
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
@@ -1814,15 +1832,17 @@ func TestNewProcessorValidationErrors(t *testing.T) {
 func TestProcessorReturnsBadGatewayOnWriteErrorWithoutStatusCode(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	responder := newRecordingResponder()
+	responder.tunnelServiceRequestID = types.TunnelServiceRequestID("req_ts_closed_pipe")
 
 	callID, err := jsonrpc.MakeID("no-status")
 	require.NoError(t, err)
 
 	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
 		statusCode: 0,
-		writeErr:   errors.New("write failed"),
+		writeErr:   io.ErrClosedPipe,
 	}}
 
 	meterProvider := newTestMeterProvider(t)
@@ -1849,9 +1869,23 @@ func TestProcessorReturnsBadGatewayOnWriteErrorWithoutStatusCode(t *testing.T) {
 
 	got := responder.waitForResponse(t)
 	require.Equal(t, http.StatusBadGateway, got.response.ResponseCode())
+	rpcResp := decodeJSONRPCResponse(t, got.response.Payload())
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceTransportClosed})
+	require.NotContains(t, string(got.response.Payload()), io.ErrClosedPipe.Error())
+
+	logs := logOutput.String()
+	require.Contains(t, logs, "request_id=no-status-request")
+	require.Contains(t, logs, "tunnel_request_id=req_ts_closed_pipe")
+	require.Contains(t, logs, "rpc_method=ping")
+	require.Contains(t, logs, "channel=main")
+	require.Contains(t, logs, "failure_source=transport_closed")
+	require.Contains(t, logs, "transport_error_kind=closed_pipe")
+	require.Contains(t, logs, "upstream_response_received=false")
+	require.Contains(t, logs, "tunnel_client_version=")
+	require.NotContains(t, logs, io.ErrClosedPipe.Error())
 }
 
-func TestProcessorLogsMCPUpstreamErrorDetails(t *testing.T) {
+func TestProcessorDoesNotLogMCPUpstreamTargetURL(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -1867,6 +1901,7 @@ func TestProcessorLogsMCPUpstreamErrorDetails(t *testing.T) {
 		headers: http.Header{
 			"Content-Type": []string{"application/json"},
 		},
+		writeErr: errors.New("private target failure at https://internal.example.com/mcp?token=secret"),
 	}}
 
 	mcpConfig := newTestMCPConfig(t, time.Second)
@@ -1896,17 +1931,131 @@ func TestProcessorLogsMCPUpstreamErrorDetails(t *testing.T) {
 	require.NoError(t, processor.Process(context.Background(), cmd))
 	got := responder.waitForResponse(t)
 	require.Equal(t, http.StatusMethodNotAllowed, got.response.ResponseCode())
+	rpcResp := decodeJSONRPCResponse(t, got.response.Payload())
+	requireTunnelFailure(t, rpcResp, tunnelFailure{
+		Version:                  1,
+		Source:                   tunnelFailureSourceTargetHTTP,
+		UpstreamResponseReceived: true,
+		UpstreamStatus:           http.StatusMethodNotAllowed,
+	})
+	require.NotContains(t, string(got.response.Payload()), "private target failure")
+	require.NotContains(t, string(got.response.Payload()), "internal.example.com")
+	require.NotContains(t, string(got.response.Payload()), "secret")
+	require.Contains(t, string(got.response.Payload()), `"upstream_status":405`)
 
 	logOutput := buf.String()
 	require.Contains(t, logOutput, "dispatcher received MCP upstream error; posted error response to control plane")
 	require.Contains(t, logOutput, "status_code=405")
 	require.Contains(t, logOutput, "request_id=upstream-status-request")
 	require.Contains(t, logOutput, "rpc_method=initialize")
-	require.Contains(t, logOutput, "mcp_server_host=internal.example.com")
-	require.Contains(t, logOutput, "mcp_server_path=/mcp")
-	require.Contains(t, logOutput, "mcp_server_query_redacted=true")
 	require.Contains(t, logOutput, "tunnel_request_id=req_ts_post")
+	require.Contains(t, logOutput, "failure_source=target_http")
+	require.Contains(t, logOutput, "transport_error_kind=http_status")
+	require.Contains(t, logOutput, "upstream_response_received=true")
+	require.Contains(t, logOutput, "upstream_status=405")
+	require.Contains(t, logOutput, "tunnel_client_version=")
+	require.NotContains(t, logOutput, "internal.example.com")
+	require.NotContains(t, logOutput, "/mcp")
 	require.NotContains(t, logOutput, "secret")
+}
+
+func TestProcessorPreservesRecognizedNonSuccessMCPError(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		requestID  string
+		statusCode int
+		code       int64
+		payload    string
+	}{
+		{
+			name:       "capability_error",
+			requestID:  "capability",
+			statusCode: http.StatusBadRequest,
+			code:       -32003,
+			payload:    `{"jsonrpc":"2.0","id":"capability","error":{"code":-32003,"message":"private_target_detail","data":{"required":"secret-token"}}}`,
+		},
+		{
+			name:       "version_error",
+			requestID:  "version",
+			statusCode: http.StatusNotFound,
+			code:       -32004,
+			payload:    `{"jsonrpc":"2.0","id":"version","error":{"code":-32004,"message":"private_target_detail","data":{"supported":["2025-06-18"]}}}`,
+		},
+		{
+			name:       "other_target_error",
+			requestID:  "other",
+			statusCode: http.StatusMethodNotAllowed,
+			code:       -32042,
+			payload:    `{"jsonrpc":"2.0","id":"other","error":{"code":-32042,"message":"private_target_detail","data":{"opaque":true}}}`,
+		},
+		{
+			name:       "server_error",
+			requestID:  "server",
+			statusCode: http.StatusInternalServerError,
+			code:       -32099,
+			payload:    `{"jsonrpc":"2.0","id":"server","error":{"code":-32099,"message":"private_target_detail","data":{"opaque":true}}}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			id, err := jsonrpc.MakeID(tc.requestID)
+			require.NoError(t, err)
+			responseHeaders := http.Header{
+				"Content-Type":         {"application/problem+json"},
+				"Mcp-Protocol-Version": {"2025-06-18"},
+				"WWW-Authenticate":     {`Bearer resource_metadata="https://example.invalid/.well-known/oauth-protected-resource"`},
+			}
+			conn := &stubForwardingConnection{
+				statusCode:      tc.statusCode,
+				responseHeaders: responseHeaders,
+				preservedError:  mcpclient.NewPreservedMCPError([]byte(tc.payload), tc.code),
+			}
+			var logOutput bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			responder := newRecordingResponder()
+			processor, err := NewProcessor(processorParams{
+				Logger:          logger,
+				ChannelBindings: newTestChannelBindings(&stubForwardingTransport{conn: conn}),
+				TunnelResponder: responder,
+				MCPConfig:       newTestMCPConfig(t, time.Second),
+				OAuthHTTPClient: &http.Client{},
+				ControlPlaneCfg: newTestControlPlaneConfig(t),
+				MeterProvider:   newTestMeterProvider(t),
+			})
+			require.NoError(t, err)
+
+			cmd := &fakePolledCommand{
+				id:         types.RequestID("preserved-" + tc.requestID),
+				message:    &jsonrpc.Request{ID: id, Method: "initialize"},
+				enqueuedAt: time.Now(),
+				polledAt:   time.Now(),
+				shardToken: "shard-preserved",
+			}
+			require.NoError(t, processor.Process(context.Background(), cmd))
+
+			got := responder.waitForResponse(t)
+			require.Equal(t, cmd.id, got.requestID)
+			require.Equal(t, tc.statusCode, got.response.ResponseCode())
+			require.Equal(t, []byte(tc.payload), []byte(got.response.Payload()))
+			require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
+			require.Equal(t, responseHeaders.Get("Mcp-Protocol-Version"), got.response.Headers().Get("Mcp-Protocol-Version"))
+			require.Equal(t, responseHeaders.Get("WWW-Authenticate"), got.response.Headers().Get("WWW-Authenticate"))
+			require.NotContains(t, string(got.response.Payload()), "tunnel_failure")
+
+			logs := logOutput.String()
+			require.Contains(t, logs, "dispatcher delivered preserved MCP error response to control plane")
+			require.Contains(t, logs, fmt.Sprintf("rpc_error_code=%d", tc.code))
+			require.NotContains(t, logs, "private_target_detail")
+			require.NotContains(t, logs, "secret-token")
+			require.NotContains(t, logs, tc.payload)
+		})
+	}
 }
 
 func TestProcessorLogsJSONRPCErrorResponseCorrelation(t *testing.T) {
@@ -1975,7 +2124,8 @@ func TestProcessorLogsJSONRPCErrorResponseCorrelation(t *testing.T) {
 	require.Contains(t, logOutput, "rpc_response_id=tools-list-rpc")
 	require.Contains(t, logOutput, "has_error=true")
 	require.Contains(t, logOutput, "rpc_error_code=-32601")
-	require.Contains(t, logOutput, "rpc_error_message=method-not-found")
+	require.NotContains(t, logOutput, "rpc_error_message")
+	require.NotContains(t, logOutput, "method-not-found")
 	require.NotContains(t, logOutput, "access_token")
 	require.NotContains(t, logOutput, "secret-token")
 }
@@ -2049,7 +2199,8 @@ func TestProcessorForwardResponsesStopsOnEOF(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", io.EOF.Error())
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceTransportClosed})
 }
 
 func TestProcessorForwardResponsesStopsOnNilMessage(t *testing.T) {
@@ -2089,7 +2240,8 @@ func TestProcessorForwardResponsesStopsOnNilMessage(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "received nil message from MCP server without error")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceProtocol})
 }
 
 func TestProcessorForwardResponsesStopsOnConnectionClosed(t *testing.T) {
@@ -2127,7 +2279,8 @@ func TestProcessorForwardResponsesStopsOnConnectionClosed(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", mcp.ErrConnectionClosed.Error())
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceTransportClosed})
 }
 
 func TestProcessorForwardResponsesStopsOnEncodeError(t *testing.T) {
@@ -2168,7 +2321,8 @@ func TestProcessorForwardResponsesStopsOnEncodeError(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "invalid character")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceProtocol})
 }
 
 func TestProcessorForwardResponsesStopsOnReadError(t *testing.T) {
@@ -2206,7 +2360,8 @@ func TestProcessorForwardResponsesStopsOnReadError(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "read failed")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceClientInternal})
 }
 
 func TestProcessorForwardResponsesPostFailureStopsForwarding(t *testing.T) {
@@ -2416,7 +2571,8 @@ func TestProcessorForwardResponsesPostsTerminalErrorOnNonResponseMessage(t *test
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "received non-response message from MCP server")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceProtocol})
 }
 
 func TestProcessorForwardResponsesPostsTerminalErrorOnInvalidID(t *testing.T) {
@@ -2456,7 +2612,8 @@ func TestProcessorForwardResponsesPostsTerminalErrorOnInvalidID(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "received response without valid ID from MCP server")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceProtocol})
 }
 
 func TestProcessorForwardResponsesPostsTerminalErrorOnIDMismatch(t *testing.T) {
@@ -2498,7 +2655,8 @@ func TestProcessorForwardResponsesPostsTerminalErrorOnIDMismatch(t *testing.T) {
 	}
 
 	require.NoError(t, processor.Process(context.Background(), cmd))
-	assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway", "received response with mismatched ID from MCP server")
+	rpcResp := assertTerminalJSONRPCErrorResponse(t, responder, cmd, http.StatusBadGateway, "Bad Gateway")
+	requireTunnelFailure(t, rpcResp, tunnelFailure{Version: 1, Source: tunnelFailureSourceProtocol})
 }
 
 func TestProcessorForwardResponsesStopsWhenConnectionTTLReached(t *testing.T) {
@@ -3273,9 +3431,12 @@ type deadlineObservingConnection struct {
 	response      jsonrpc.Message
 }
 
-func (c *deadlineObservingConnection) Write(ctx context.Context, _ http.Header, _ jsonrpc.Message) (int, http.Header, error) {
+func (c *deadlineObservingConnection) Write(ctx context.Context, _ http.Header, _ jsonrpc.Message) (mcpclient.ForwardingWriteResult, error) {
 	c.writeDeadline, _ = ctx.Deadline()
-	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+	return mcpclient.ForwardingWriteResult{
+		StatusCode:      http.StatusOK,
+		ResponseHeaders: http.Header{"Content-Type": {"application/json"}},
+	}, nil
 }
 
 func (c *deadlineObservingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
@@ -3310,8 +3471,11 @@ func newResponseThenTrackCloseConnection(response jsonrpc.Message) *responseThen
 	return &responseThenTrackCloseConnection{response: response}
 }
 
-func (c *responseThenTrackCloseConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
-	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+func (c *responseThenTrackCloseConnection) Write(context.Context, http.Header, jsonrpc.Message) (mcpclient.ForwardingWriteResult, error) {
+	return mcpclient.ForwardingWriteResult{
+		StatusCode:      http.StatusOK,
+		ResponseHeaders: http.Header{"Content-Type": {"application/json"}},
+	}, nil
 }
 
 func (c *responseThenTrackCloseConnection) Read(context.Context) (jsonrpc.Message, error) {
@@ -3350,8 +3514,11 @@ func newDeadlineBlockingConnection() *deadlineBlockingConnection {
 	}
 }
 
-func (c *deadlineBlockingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
-	return http.StatusOK, http.Header{"Content-Type": {"application/json"}}, nil
+func (c *deadlineBlockingConnection) Write(context.Context, http.Header, jsonrpc.Message) (mcpclient.ForwardingWriteResult, error) {
+	return mcpclient.ForwardingWriteResult{
+		StatusCode:      http.StatusOK,
+		ResponseHeaders: http.Header{"Content-Type": {"application/json"}},
+	}, nil
 }
 
 func (c *deadlineBlockingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
@@ -3434,12 +3601,13 @@ type stubForwardingConnection struct {
 	responseHeaders    http.Header
 	response           jsonrpc.Message
 	statusCode         int
+	preservedError     *mcpclient.PreservedMCPError
 	writeErr           error
 	writeHeaders       http.Header
 	mutateWriteHeaders func(http.Header)
 }
 
-func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header, _ jsonrpc.Message) (int, http.Header, error) {
+func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header, _ jsonrpc.Message) (mcpclient.ForwardingWriteResult, error) {
 	if headers == nil {
 		c.writeHeaders = nil
 	} else {
@@ -3448,7 +3616,11 @@ func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header,
 			c.mutateWriteHeaders(headers)
 		}
 	}
-	return c.statusCode, c.responseHeaders, c.writeErr
+	return mcpclient.ForwardingWriteResult{
+		StatusCode:      c.statusCode,
+		ResponseHeaders: c.responseHeaders,
+		PreservedError:  c.preservedError,
+	}, c.writeErr
 }
 
 func (c *stubForwardingConnection) Read(context.Context) (jsonrpc.Message, error) {
@@ -3491,17 +3663,22 @@ type readStep struct {
 }
 
 type scriptedForwardingConnection struct {
-	statusCode int
-	headers    http.Header
-	writeErr   error
+	statusCode     int
+	headers        http.Header
+	preservedError *mcpclient.PreservedMCPError
+	writeErr       error
 
 	mu        sync.Mutex
 	closed    bool
 	readSteps []readStep
 }
 
-func (c *scriptedForwardingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
-	return c.statusCode, c.headers, c.writeErr
+func (c *scriptedForwardingConnection) Write(context.Context, http.Header, jsonrpc.Message) (mcpclient.ForwardingWriteResult, error) {
+	return mcpclient.ForwardingWriteResult{
+		StatusCode:      c.statusCode,
+		ResponseHeaders: c.headers,
+		PreservedError:  c.preservedError,
+	}, c.writeErr
 }
 
 func (c *scriptedForwardingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {

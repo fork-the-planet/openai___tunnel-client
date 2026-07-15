@@ -416,13 +416,14 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		logger.ErrorContext(ctx, "failed to connect to MCP transport", slog.String("error", err.Error()))
+		failure := classifyTunnelFailure(0, err)
+		logger.WarnContext(ctx, "failed to connect to MCP transport", tunnelFailureLogAttrs(failure, classifyTransportErrorKind(0, err))...)
 		if isNotification {
-			return fmt.Errorf("connect: %w", err)
+			return fmt.Errorf("connect failed: %s", failure.Source)
 		}
 
 		status := normalizeTransportStatusCode(0, err)
-		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
+		encodedError, encodeErr := buildTunnelFailureJSONRPCErrorResponse(req, status, failure)
 		if encodeErr != nil {
 			logger.ErrorContext(ctx, "failed to encode MCP error response", slog.String("error", encodeErr.Error()))
 			return fmt.Errorf("encode error response: %w", encodeErr)
@@ -447,9 +448,8 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 			slog.Int("status_code", status),
 			slog.String("channel", channel.String()),
 			slog.String("rpc_method", req.Method),
-			slog.String("error", err.Error()),
 		}
-		attrs = append(attrs, mcpServerURLAttrs(p.mcpServerURL)...)
+		attrs = append(attrs, tunnelFailureLogAttrs(failure, classifyTransportErrorKind(0, err))...)
 		if tsRequestID != "" {
 			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
 		}
@@ -464,17 +464,47 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	}
 
 	headers := ensureDefaultAcceptHeader(cmd.Headers())
-	statusCode, respHeader, err := conn.Write(ctx, headers, req)
+	writeResult, err := conn.Write(ctx, headers, req)
 	if ctx.Err() != nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			logger.WarnContext(ctx, "failed to close MCP connection after context cancellation", slog.String("error", closeErr.Error()))
 		}
 		return ctx.Err()
 	}
-	statusCode = normalizeTransportStatusCode(statusCode, err)
+	statusCode := normalizeTransportStatusCode(writeResult.StatusCode, err)
+	respHeader := writeResult.ResponseHeaders
+	if preserved := writeResult.PreservedError; preserved != nil {
+		encodedError := preserved.Payload()
+		respHeader = jsonRPCResponseHeaders(ctx, logger, respHeader)
+		tunnelResponse := types.NewTunnelResponse(channel, encodedError, statusCode, respHeader)
+		tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, requestID, tunnelResponse)
+		if postErr != nil {
+			attrs := []any{slog.String("error", postErr.Error())}
+			if tsRequestID != "" {
+				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+			}
+			logger.ErrorContext(ctx, "failed to post preserved MCP error response to control plane", attrs...)
+			return postErr
+		}
+
+		p.metrics.recordCommandLatencies(ctx, p.tunnelID, statusCode, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+		attrs := []any{
+			slog.Int("status_code", statusCode),
+			slog.String("channel", channel.String()),
+			slog.String("rpc_method", req.Method),
+			slog.Int64("rpc_error_code", preserved.Code()),
+			jsonRPCIDAttr("rpc_response_id", req.ID),
+		}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.DebugContext(ctx, "dispatcher delivered preserved MCP error response to control plane", attrs...)
+		return nil
+	}
 	if err != nil || statusCode >= http.StatusBadRequest {
 		status := statusCode
-		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
+		failure := classifyTunnelFailure(writeResult.StatusCode, err)
+		encodedError, encodeErr := buildTunnelFailureJSONRPCErrorResponse(req, status, failure)
 		if encodeErr != nil {
 			logger.ErrorContext(ctx, "failed to encode MCP error response", slog.String("error", encodeErr.Error()))
 			return fmt.Errorf("encode error response: %w", encodeErr)
@@ -505,10 +535,7 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 			slog.String("channel", channel.String()),
 			slog.String("rpc_method", req.Method),
 		}
-		attrs = append(attrs, mcpServerURLAttrs(p.mcpServerURL)...)
-		if err != nil {
-			attrs = append(attrs, slog.String("error", err.Error()))
-		}
+		attrs = append(attrs, tunnelFailureLogAttrs(failure, classifyTransportErrorKind(writeResult.StatusCode, err))...)
 		if respHeader != nil {
 			attrs = append(attrs, slog.String("response_content_type", respHeader.Get("Content-Type")))
 		}
@@ -722,7 +749,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			return
 		}
 		if err := conn.Close(); err != nil {
-			logger.WarnContext(ctx, "failed to close MCP connection after early response forwarding exit", slog.String("error", err.Error()))
+			logger.WarnContext(ctx, "failed to close MCP connection after early response forwarding exit", tunnelFailureLogAttrs(classifyTunnelFailure(0, err), classifyTransportErrorKind(0, err))...)
 		}
 	}()
 
@@ -733,7 +760,8 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		}
 
 		statusCode := http.StatusBadGateway
-		encodedError, err := buildJSONRPCErrorResponse(req, statusCode, cause)
+		failure := classifyTunnelFailure(0, cause)
+		encodedError, err := buildTunnelFailureJSONRPCErrorResponse(req, statusCode, failure)
 		if err != nil {
 			logger.ErrorContext(ctx, "failed to encode terminal error response for control plane", slog.String("error", err.Error()))
 			return
@@ -763,8 +791,8 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 
 		attrs := []any{
 			slog.Int("status_code", statusCode),
-			slog.String("error", cause.Error()),
 		}
+		attrs = append(attrs, tunnelFailureLogAttrs(failure, classifyTransportErrorKind(0, cause))...)
 		if tsRequestID != "" {
 			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
 		}
@@ -776,24 +804,24 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		if readErr != nil {
 			switch {
 			case errors.Is(readErr, mcp.ErrConnectionClosed) || errors.Is(readErr, io.EOF):
-				logger.DebugContext(ctx, "MCP connection closed while reading response", slog.String("error", readErr.Error()))
+				logger.DebugContext(ctx, "MCP connection closed while reading response", tunnelFailureLogAttrs(classifyTunnelFailure(0, readErr), classifyTransportErrorKind(0, readErr))...)
 				postTerminalErrorResponse(readErr)
 			case errors.Is(readErr, context.DeadlineExceeded), errors.Is(readErr, context.Canceled):
 				if errors.Is(ttlCtx.Err(), context.DeadlineExceeded) {
 					logger.InfoContext(ctx, "MCP connection TTL reached; stopping response forwarding")
 				} else {
-					logger.DebugContext(ctx, "MCP connection context canceled while reading response", slog.String("error", readErr.Error()))
+					logger.DebugContext(ctx, "MCP connection context canceled while reading response")
 				}
 			default:
-				logger.ErrorContext(ctx, "failed to read response from MCP server", slog.String("error", readErr.Error()))
+				logger.ErrorContext(ctx, "failed to read response from MCP server", tunnelFailureLogAttrs(classifyTunnelFailure(0, readErr), classifyTransportErrorKind(0, readErr))...)
 				postTerminalErrorResponse(readErr)
 			}
 			return
 		}
 		if msg == nil {
 			// Defensive: a nil message without an error would otherwise spin forever.
-			err := errors.New("received nil message from MCP server without error")
-			logger.ErrorContext(ctx, err.Error())
+			err := newProtocolFailureError(errors.New("received nil message from MCP server without error"))
+			logger.ErrorContext(ctx, "received nil message from MCP server without error")
 			postTerminalErrorResponse(err)
 			return
 		}
@@ -807,7 +835,7 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 
 		response, ok := msg.(*jsonrpc.Response)
 		if !ok {
-			err := fmt.Errorf("received non-response message from MCP server: %T", msg)
+			err := newProtocolFailureError(fmt.Errorf("received non-response message from MCP server: %T", msg))
 			logger.ErrorContext(
 				ctx,
 				"received non-response message from MCP server",
@@ -824,8 +852,8 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			if err == nil {
 				err = errors.New("encoded response from MCP server was empty")
 			}
-			logger.ErrorContext(ctx, "failed to encode response from MCP server", slog.String("error", err.Error()))
-			postTerminalErrorResponse(err)
+			logger.ErrorContext(ctx, "failed to encode response from MCP server")
+			postTerminalErrorResponse(newProtocolFailureError(err))
 			return
 		}
 
@@ -834,14 +862,14 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		// Notifications MUST NOT include an ID.
 		// streamableClientConn.processStream has similar heuristics comparing req/resp IDs and breaking out
 		if !response.ID.IsValid() {
-			err := errors.New("received response without valid ID from MCP server")
-			logger.ErrorContext(ctx, err.Error())
+			err := newProtocolFailureError(errors.New("received response without valid ID from MCP server"))
+			logger.ErrorContext(ctx, "received response without valid ID from MCP server")
 			postTerminalErrorResponse(err)
 			return
 		}
 		if response.ID != req.ID {
-			err := errors.New("received response with mismatched ID from MCP server")
-			logger.ErrorContext(ctx, err.Error(), attrsToArgs(jsonRPCResponseCorrelationAttrs(req, response))...)
+			err := newProtocolFailureError(errors.New("received response with mismatched ID from MCP server"))
+			logger.ErrorContext(ctx, "received response with mismatched ID from MCP server", attrsToArgs(jsonRPCResponseCorrelationAttrs(req, response))...)
 			postTerminalErrorResponse(err)
 			return
 		}
@@ -905,11 +933,11 @@ func jsonRPCResponseHeaders(ctx context.Context, logger *slog.Logger, responseHe
 	}
 
 	if contentType == "" || !isSSEContentType(contentType) {
-		originalValue := contentType
-		if originalValue == "" {
-			originalValue = "<empty>"
+		originalKind := "non_sse"
+		if contentType == "" {
+			originalKind = "missing"
 		}
-		logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", originalValue), slog.String("new", "application/json"))
+		logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original_kind", originalKind), slog.String("new", "application/json"))
 		headers.Set("Content-Type", "application/json")
 	}
 
@@ -925,8 +953,11 @@ func (p *mcpProcessor) forwardNotification(ctx context.Context, logger *slog.Log
 
 	encodedNotification, err := jsonrpc.EncodeMessage(notifyMsg)
 	if err != nil || len(encodedNotification) == 0 {
-		logger.ErrorContext(ctx, "failed to encode notification from MCP server", slog.String("error", err.Error()))
-		return err
+		if err == nil {
+			err = errors.New("encoded notification from MCP server was empty")
+		}
+		logger.ErrorContext(ctx, "failed to encode notification from MCP server")
+		return newProtocolFailureError(err)
 	}
 
 	notificationHeaders := responseHeaders
@@ -1008,16 +1039,9 @@ func jsonRPCResponseCorrelationAttrs(req *jsonrpc.Request, response *jsonrpc.Res
 		attrs = append(attrs, jsonRPCIDAttr("rpc_response_id", response.ID))
 	}
 	if response.Error != nil {
-		errorMessage := response.Error.Error()
 		var rpcErr *jsonrpc.Error
 		if errors.As(response.Error, &rpcErr) {
 			attrs = append(attrs, slog.Int64("rpc_error_code", rpcErr.Code))
-			if rpcErr.Message != "" {
-				errorMessage = rpcErr.Message
-			}
-		}
-		if errorMessage != "" {
-			attrs = append(attrs, slog.String("rpc_error_message", errorMessage))
 		}
 	}
 	return attrs
@@ -1096,21 +1120,6 @@ func normalizeTransportStatusCode(statusCode int, err error) int {
 		return http.StatusBadGateway
 	}
 	return http.StatusOK
-}
-
-func mcpServerURLAttrs(u *url.URL) []any {
-	if u == nil {
-		return nil
-	}
-	attrs := []any{
-		slog.String("mcp_server_scheme", u.Scheme),
-		slog.String("mcp_server_host", u.Host),
-		slog.String("mcp_server_path", u.EscapedPath()),
-	}
-	if u.RawQuery != "" {
-		attrs = append(attrs, slog.Bool("mcp_server_query_redacted", true))
-	}
-	return attrs
 }
 
 func requestKindAttributes(req *jsonrpc.Request) []attribute.KeyValue {

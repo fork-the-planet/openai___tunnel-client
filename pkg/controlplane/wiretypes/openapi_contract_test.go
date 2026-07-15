@@ -335,6 +335,45 @@ func TestGoResponsePayloadsMatchOpenAPI(t *testing.T) {
 	}
 }
 
+func TestSynthesizedFailureResponseMatchesTunnelServiceOpenAPI(t *testing.T) {
+	spec, _ := readOpenAPISpec(t)
+	response := operation(t, spec, "/v1/tunnels/{tunnel_id}/response", "post")
+	requestContent := requestBodyContent(t, response)
+	responseSchema := mustMap(t, requestContent["schema"], "response.requestBody.schema")
+
+	payload := TunnelResponsePayload{
+		RequestID: "cmd-target-http-failure",
+		Channel:   "main",
+		JSONResponse: json.RawMessage(`{
+			"jsonrpc":"2.0",
+			"id":"rpc-target-http-failure",
+			"error":{
+				"code":-32603,
+				"message":"Service Unavailable",
+				"data":{
+					"tunnel_failure":{
+						"version":1,
+						"source":"target_http",
+						"upstream_response_received":true,
+						"upstream_status":503
+					}
+				}
+			}
+		}`),
+		ResponseCode: http.StatusServiceUnavailable,
+		ResponseType: ResponsePayloadJSONRPC,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal synthesized failure response: %v", err)
+	}
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("decode synthesized failure response: %v", err)
+	}
+	requireValidAgainstSchema(t, spec, responseSchema, value, "synthesized tunnel failure response")
+}
+
 func TestGoDiscriminatorsCoverPublishedOpenAPI(t *testing.T) {
 	spec, _ := readOpenAPISpec(t)
 	schemas := schemas(t, spec)

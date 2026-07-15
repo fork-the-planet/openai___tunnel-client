@@ -95,22 +95,22 @@ func (c *serializedForwardingConnection) Write(
 	ctx context.Context,
 	header http.Header,
 	msg jsonrpc.Message,
-) (int, http.Header, error) {
+) (ForwardingWriteResult, error) {
 	if c.base == nil {
 		c.release()
-		return 0, nil, nil
+		return ForwardingWriteResult{}, nil
 	}
 
 	expectResponse, expectedID := expectedResponseID(msg)
 	if err := c.acquire(ctx, expectResponse, expectedID); err != nil {
-		return 0, nil, err
+		return ForwardingWriteResult{}, err
 	}
 
-	statusCode, respHeaders, err := c.base.Write(ctx, header, msg)
-	if err != nil || !expectResponse || statusCode >= http.StatusBadRequest {
+	result, err := c.base.Write(ctx, header, msg)
+	if err != nil || !expectResponse || result.PreservedError != nil || result.StatusCode >= http.StatusBadRequest {
 		c.release()
 	}
-	return statusCode, respHeaders, err
+	return result, err
 }
 
 func (c *serializedForwardingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {

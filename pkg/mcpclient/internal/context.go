@@ -12,10 +12,14 @@ type ctxKey struct{}
 // HeaderCarrier stores per-request headers that should be forwarded to the MCP
 // server as well as the response headers returned by the transport.
 type HeaderCarrier struct {
-	request    http.Header
-	mu         sync.Mutex
-	response   http.Header
-	statusCode int
+	request              http.Header
+	mu                   sync.Mutex
+	response             http.Header
+	statusCode           int
+	responseBody         []byte
+	responseBodyCaptured bool
+	responseBodyTooLarge bool
+	responseBodyReadErr  error
 }
 
 // ContextWithHeaders returns a context that carries the provided headers so the
@@ -88,6 +92,32 @@ func (c *HeaderCarrier) ResponseStatusAndHeaders() (int, http.Header) {
 		clone = c.response.Clone()
 	}
 	return c.statusCode, clone
+}
+
+// StoreResponseBodyCapture records a bounded copy of a non-success response
+// body before the MCP SDK consumes it. The original body remains available to
+// the SDK through the forwarding RoundTripper.
+func (c *HeaderCarrier) StoreResponseBodyCapture(body []byte, tooLarge bool, readErr error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.responseBody = append(c.responseBody[:0], body...)
+	c.responseBodyCaptured = true
+	c.responseBodyTooLarge = tooLarge
+	c.responseBodyReadErr = readErr
+}
+
+// ResponseBodyCapture returns the bounded non-success response body capture.
+// The body is defensively copied so callers cannot mutate carrier state.
+func (c *HeaderCarrier) ResponseBodyCapture() (body []byte, tooLarge bool, readErr error, captured bool) {
+	if c == nil {
+		return nil, false, nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.responseBody...), c.responseBodyTooLarge, c.responseBodyReadErr, c.responseBodyCaptured
 }
 
 // RequestHeaders returns the headers that will be forwarded with the request.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/require"
 
 	"github.com/openai/tunnel-client/pkg/mcpclient/internal"
 )
@@ -50,14 +52,14 @@ func TestForwardingConnectionPropagatesHeaders(t *testing.T) {
 
 	requestHeaders := http.Header{"X-Forward": {"value"}}
 
-	statusCode, gotWriteHeaders, err := conn.Write(context.Background(), requestHeaders, req)
+	result, err := conn.Write(context.Background(), requestHeaders, req)
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
-	if statusCode != wantStatus {
-		t.Fatalf("unexpected status code: got %d, want %d", statusCode, wantStatus)
+	if result.StatusCode != wantStatus {
+		t.Fatalf("unexpected status code: got %d, want %d", result.StatusCode, wantStatus)
 	}
-	if diff := cmp.Diff(respHeaders, gotWriteHeaders, sortStrings); diff != "" {
+	if diff := cmp.Diff(respHeaders, result.ResponseHeaders, sortStrings); diff != "" {
 		t.Fatalf("write headers mismatch (-want +got):\n%s", diff)
 	}
 
@@ -93,19 +95,221 @@ func TestForwardingConnectionWriteErrorClosesBase(t *testing.T) {
 	conn := &forwardingConnection{base: fake}
 	req := &jsonrpc.Request{ID: mustMakeID(t, "call-write-error"), Method: "testMethod"}
 
-	status, headers, err := conn.Write(context.Background(), nil, req)
+	result, err := conn.Write(context.Background(), nil, req)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Write returned error %v, want %v", err, wantErr)
 	}
-	if status != 0 {
-		t.Fatalf("unexpected status code: got %d want 0", status)
+	if result.StatusCode != 0 {
+		t.Fatalf("unexpected status code: got %d want 0", result.StatusCode)
 	}
-	if headers != nil {
-		t.Fatalf("expected nil headers, got %v", headers)
+	if result.ResponseHeaders != nil {
+		t.Fatalf("expected nil headers, got %v", result.ResponseHeaders)
 	}
 	if fake.closeCalls != 1 {
 		t.Fatalf("expected Close to be called once, got %d", fake.closeCalls)
 	}
+}
+
+func TestForwardingConnectionPreservesRecognizedNonSuccessMCPError(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		statusCode int
+		code       int64
+		payload    string
+	}{
+		{
+			name:       "capability_error",
+			statusCode: http.StatusBadRequest,
+			code:       -32003,
+			payload:    `{"jsonrpc":"2.0","id":"capability","error":{"code":-32003,"message":"capability unavailable","data":{"capability":"sampling","required":true}},"future":"preserved"}`,
+		},
+		{
+			name:       "version_error",
+			statusCode: http.StatusNotFound,
+			code:       -32004,
+			payload:    `{"jsonrpc":"2.0","id":"version","error":{"code":-32004,"message":"unsupported protocol version","data":{"supported":["2025-06-18"]}}}`,
+		},
+		{
+			name:       "other_target_error",
+			statusCode: http.StatusInternalServerError,
+			code:       -32042,
+			payload:    `{"jsonrpc":"2.0","id":"other","error":{"code":-32042,"message":"target-owned","data":{"nested":{"safe":"opaque"}}}}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := mustMakeID(t, tc.name[:len(tc.name)-len("_error")])
+			if tc.name == "other_target_error" {
+				id = mustMakeID(t, "other")
+			}
+			wantHeaders := http.Header{
+				"Content-Type":         {"application/json"},
+				"Mcp-Protocol-Version": {"2025-06-18"},
+			}
+			writeErr := errors.New("SDK rejected non-success response")
+			fake := &fakeConnection{
+				writeFunc: func(ctx context.Context, _ jsonrpc.Message) error {
+					carrier := internal.CarrierFromContext(ctx)
+					require.NotNil(t, carrier)
+					carrier.StoreResponse(tc.statusCode, wantHeaders)
+					carrier.StoreResponseBodyCapture([]byte(tc.payload), false, nil)
+					return writeErr
+				},
+			}
+
+			result, err := (&forwardingConnection{base: fake}).Write(
+				context.Background(),
+				http.Header{"Authorization": {"Bearer redacted"}},
+				&jsonrpc.Request{ID: id, Method: "initialize"},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.statusCode, result.StatusCode)
+			require.Equal(t, wantHeaders, result.ResponseHeaders)
+			require.NotNil(t, result.PreservedError)
+			require.Equal(t, tc.code, result.PreservedError.Code())
+			require.Equal(t, []byte(tc.payload), result.PreservedError.Payload())
+			require.NotContains(t, string(result.PreservedError.Payload()), "tunnel_failure")
+			require.Equal(t, 1, fake.closeCalls, "existing connection lifecycle must still close after SDK rejection")
+
+			mutated := result.PreservedError.Payload()
+			mutated[0] = 'x'
+			require.Equal(t, []byte(tc.payload), result.PreservedError.Payload(), "payload accessor must be defensive")
+		})
+	}
+}
+
+func TestForwardingConnectionPreservesHTTPMCPErrorEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	const payload = `{"jsonrpc":"2.0","id":"http-error","error":{"code":-32004,"message":"unsupported version","data":{"supported":["2025-06-18"]}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		require.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Mcp-Protocol-Version", "2025-06-18")
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_request"`)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(server.Close)
+
+	httpClient := &http.Client{Transport: internal.NewForwardingRoundTripper(http.DefaultTransport)}
+	transport := NewForwardingTransport(&mcp.StreamableClientTransport{
+		Endpoint:   server.URL,
+		HTTPClient: httpClient,
+	})
+	conn, err := transport.Connect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	result, err := conn.Write(
+		context.Background(),
+		http.Header{"Accept": {"application/json, text/event-stream"}},
+		&jsonrpc.Request{ID: mustMakeID(t, "http-error"), Method: "initialize"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusMethodNotAllowed, result.StatusCode)
+	require.Equal(t, "2025-06-18", result.ResponseHeaders.Get("Mcp-Protocol-Version"))
+	require.Equal(t, `Bearer error="invalid_request"`, result.ResponseHeaders.Get("WWW-Authenticate"))
+	require.NotNil(t, result.PreservedError)
+	require.EqualValues(t, -32004, result.PreservedError.Code())
+	require.Equal(t, payload, string(result.PreservedError.Payload()))
+}
+
+func TestForwardingConnectionReturnsTypedNonProtocolResponse(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("response body read failed")
+	testCases := []struct {
+		name        string
+		body        []byte
+		captured    bool
+		tooLarge    bool
+		readErr     error
+		requestID   string
+		wantKind    NonProtocolResponseKind
+		wantWrapped error
+	}{
+		{name: "missing_capture", requestID: "request", wantKind: NonProtocolResponseBodyMissing},
+		{name: "empty_body", captured: true, requestID: "request", wantKind: NonProtocolResponseBodyMissing},
+		{name: "unreadable_body", body: []byte(`{`), captured: true, readErr: readErr, requestID: "request", wantKind: NonProtocolResponseBodyUnreadable, wantWrapped: readErr},
+		{name: "oversized_body", body: []byte(`{"jsonrpc":"2.0"}`), captured: true, tooLarge: true, requestID: "request", wantKind: NonProtocolResponseBodyTooLarge},
+		{name: "malformed_json", body: []byte(`{"jsonrpc":`), captured: true, requestID: "request", wantKind: NonProtocolResponseMalformedJSON},
+		{name: "non_json", body: []byte(`bad gateway`), captured: true, requestID: "request", wantKind: NonProtocolResponseMalformedJSON},
+		{name: "success_response", body: []byte(`{"jsonrpc":"2.0","id":"request","result":{"ok":true}}`), captured: true, requestID: "request", wantKind: NonProtocolResponseInvalidMCPError},
+		{name: "error_and_result", body: []byte(`{"jsonrpc":"2.0","id":"request","result":null,"error":{"code":-32003,"message":"invalid"}}`), captured: true, requestID: "request", wantKind: NonProtocolResponseInvalidMCPError},
+		{name: "missing_error_message", body: []byte(`{"jsonrpc":"2.0","id":"request","error":{"code":-32003}}`), captured: true, requestID: "request", wantKind: NonProtocolResponseInvalidMCPError},
+		{name: "mismatched_id", body: []byte(`{"jsonrpc":"2.0","id":"different","error":{"code":-32003,"message":"invalid"}}`), captured: true, requestID: "request", wantKind: NonProtocolResponseInvalidMCPError},
+		{name: "notification_has_no_response", body: []byte(`{"jsonrpc":"2.0","id":"request","error":{"code":-32003,"message":"invalid"}}`), captured: true, wantKind: NonProtocolResponseInvalidMCPError},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeConnection{
+				writeFunc: func(ctx context.Context, _ jsonrpc.Message) error {
+					carrier := internal.CarrierFromContext(ctx)
+					require.NotNil(t, carrier)
+					carrier.StoreResponse(http.StatusBadGateway, http.Header{"Content-Type": {"application/json"}})
+					if tc.captured {
+						carrier.StoreResponseBodyCapture(tc.body, tc.tooLarge, tc.readErr)
+					}
+					return errors.New("SDK rejected non-success response")
+				},
+			}
+			req := &jsonrpc.Request{Method: "initialize"}
+			if tc.requestID != "" {
+				req.ID = mustMakeID(t, tc.requestID)
+			}
+
+			result, err := (&forwardingConnection{base: fake}).Write(context.Background(), nil, req)
+			require.Error(t, err)
+			require.Equal(t, http.StatusBadGateway, result.StatusCode)
+			require.Nil(t, result.PreservedError)
+			var responseErr *NonProtocolResponseError
+			require.ErrorAs(t, err, &responseErr)
+			require.Equal(t, tc.wantKind, responseErr.Kind())
+			if tc.wantWrapped != nil {
+				require.ErrorIs(t, err, tc.wantWrapped)
+			}
+			if len(tc.body) > 0 {
+				require.NotContains(t, err.Error(), string(tc.body), "typed error must not include the response body")
+			}
+			require.Equal(t, 1, fake.closeCalls)
+		})
+	}
+}
+
+func TestForwardingConnectionPreservesTypedLocalTransportError(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeConnection{
+		writeFunc: func(context.Context, jsonrpc.Message) error {
+			return io.ErrClosedPipe
+		},
+	}
+	result, err := (&forwardingConnection{base: fake}).Write(
+		context.Background(),
+		nil,
+		&jsonrpc.Request{ID: mustMakeID(t, "closed-pipe"), Method: "initialize"},
+	)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Zero(t, result.StatusCode)
+	require.Nil(t, result.PreservedError)
+	var responseErr *NonProtocolResponseError
+	require.False(t, errors.As(err, &responseErr), "local transport errors must not be relabeled as target responses")
+	require.Equal(t, 1, fake.closeCalls)
 }
 
 func TestForwardingConnectionReadErrorClosesBase(t *testing.T) {
@@ -340,15 +544,15 @@ func TestForwardingConnectionWriteNilBaseReturnsZeroes(t *testing.T) {
 	req := &jsonrpc.Request{ID: callID, Method: "noop"}
 
 	conn := &forwardingConnection{base: nil}
-	status, headers, err := conn.Write(context.Background(), http.Header{"X-Test": {"true"}}, req)
+	result, err := conn.Write(context.Background(), http.Header{"X-Test": {"true"}}, req)
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
-	if status != 0 {
-		t.Fatalf("unexpected status code: got %d want 0", status)
+	if result.StatusCode != 0 {
+		t.Fatalf("unexpected status code: got %d want 0", result.StatusCode)
 	}
-	if headers != nil {
-		t.Fatalf("expected nil headers, got %v", headers)
+	if result.ResponseHeaders != nil {
+		t.Fatalf("expected nil headers, got %v", result.ResponseHeaders)
 	}
 }
 
@@ -373,7 +577,7 @@ func TestForwardingConnectionWriteNilContextReturnsError(t *testing.T) {
 
 	conn := &forwardingConnection{base: &fakeConnection{}}
 	//lint:ignore SA1012 exercising nil-context guard in ContextWithHeaders
-	_, _, err := conn.Write(nil, nil, req)
+	_, err := conn.Write(nil, nil, req)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}

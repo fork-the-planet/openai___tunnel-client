@@ -34,7 +34,7 @@ func TestSerializedForwardingTransportHoldsLifecycleLockUntilMatchingResponse(t 
 	idA, err := jsonrpc.MakeID("a")
 	require.NoError(t, err)
 	reqA := &jsonrpc.Request{ID: idA, Method: "tools/call"}
-	_, _, err = connA.Write(context.Background(), nil, reqA)
+	_, err = connA.Write(context.Background(), nil, reqA)
 	require.NoError(t, err)
 	requireLifecycleLockHeld(t, serializedTransport)
 
@@ -55,7 +55,7 @@ func TestSerializedForwardingTransportHoldsLifecycleLockUntilMatchingResponse(t 
 	idB, err := jsonrpc.MakeID("b")
 	require.NoError(t, err)
 	reqB := &jsonrpc.Request{ID: idB, Method: "tools/call"}
-	_, _, err = connA.Write(context.Background(), nil, reqB)
+	_, err = connA.Write(context.Background(), nil, reqB)
 	require.NoError(t, err)
 	requireLifecycleLockHeld(t, serializedTransport)
 
@@ -79,18 +79,18 @@ func TestSerializedForwardingTransportReleasesAfterUpstreamErrorStatus(t *testin
 	idA, err := jsonrpc.MakeID("a")
 	require.NoError(t, err)
 	reqA := &jsonrpc.Request{ID: idA, Method: "tools/call"}
-	status, _, err := connA.Write(context.Background(), nil, reqA)
+	result, err := connA.Write(context.Background(), nil, reqA)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusBadGateway, status)
+	require.Equal(t, http.StatusBadGateway, result.StatusCode)
 
 	connB, err := transport.Connect(context.Background())
 	require.NoError(t, err)
 	idB, err := jsonrpc.MakeID("b")
 	require.NoError(t, err)
 	reqB := &jsonrpc.Request{ID: idB, Method: "tools/call"}
-	status, _, err = connB.Write(context.Background(), nil, reqB)
+	result, err = connB.Write(context.Background(), nil, reqB)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, http.StatusOK, result.StatusCode)
 
 	require.NoError(t, connB.Close())
 }
@@ -182,6 +182,37 @@ func TestSerializedForwardingTransportClosesAndReleasesWhenContextExpiresDuringB
 	require.NotNil(t, next)
 	require.EqualValues(t, 2, baseTransport.connectCalls.Load())
 	require.NoError(t, next.Close())
+}
+
+func TestSerializedForwardingTransportReleasesAfterPreservedMCPError(t *testing.T) {
+	t.Parallel()
+
+	baseConn := newStubSerializedForwardingConnection()
+	baseConn.writeResults <- stubWriteResult{
+		statusCode:     http.StatusFound,
+		preservedError: NewPreservedMCPError([]byte(`{"jsonrpc":"2.0","id":"a","error":{"code":-32003,"message":"capability"}}`), -32003),
+	}
+	baseConn.enqueueWriteResult(http.StatusOK, nil, nil)
+
+	transport := NewSerializedForwardingTransport(&stubSerializedForwardingTransport{conn: baseConn})
+	serializedTransport := transport.(*serializedForwardingTransport)
+	connA, err := transport.Connect(context.Background())
+	require.NoError(t, err)
+
+	idA, err := jsonrpc.MakeID("a")
+	require.NoError(t, err)
+	result, err := connA.Write(context.Background(), nil, &jsonrpc.Request{ID: idA, Method: "initialize"})
+	require.NoError(t, err)
+	require.NotNil(t, result.PreservedError)
+	requireLifecycleLockReleased(t, serializedTransport)
+
+	connB, err := transport.Connect(context.Background())
+	require.NoError(t, err)
+	idB, err := jsonrpc.MakeID("b")
+	require.NoError(t, err)
+	_, err = connB.Write(context.Background(), nil, &jsonrpc.Request{ID: idB, Method: "ping"})
+	require.NoError(t, err)
+	require.NoError(t, connB.Close())
 }
 
 func requireLifecycleLockHeld(t *testing.T, transport *serializedForwardingTransport) {
@@ -277,9 +308,10 @@ type stubSerializedForwardingConnection struct {
 }
 
 type stubWriteResult struct {
-	statusCode int
-	headers    http.Header
-	err        error
+	statusCode     int
+	headers        http.Header
+	preservedError *PreservedMCPError
+	err            error
 }
 
 type stubReadResult struct {
@@ -314,12 +346,16 @@ func (s *stubSerializedForwardingConnection) Write(
 	context.Context,
 	http.Header,
 	jsonrpc.Message,
-) (int, http.Header, error) {
+) (ForwardingWriteResult, error) {
 	select {
 	case result := <-s.writeResults:
-		return result.statusCode, result.headers, result.err
+		return ForwardingWriteResult{
+			StatusCode:      result.statusCode,
+			ResponseHeaders: result.headers,
+			PreservedError:  result.preservedError,
+		}, result.err
 	default:
-		return http.StatusOK, nil, nil
+		return ForwardingWriteResult{StatusCode: http.StatusOK}, nil
 	}
 }
 
