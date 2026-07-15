@@ -93,7 +93,7 @@ func TestTransformJSONBodyNormalizesFormatting(t *testing.T) {
 	require.JSONEq(t, `{"url":"harpoon://api"}`, string(updated))
 }
 
-func TestTransformJSONBodyUsesOAuthFieldContextForDuplicateURLs(t *testing.T) {
+func TestTransformJSONBodyPreservesResourceAndUsesOAuthFieldContextForDuplicateURLs(t *testing.T) {
 	rewriter := newURLRewriter([]Target{
 		{
 			Label:   "oauth-prmd-resource-0",
@@ -135,11 +135,24 @@ func TestTransformJSONBodyUsesOAuthFieldContextForDuplicateURLs(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(updated, &payload))
-	require.Equal(t, "harpoon://oauth-prmd-resource-0", payload["resource"])
+	require.Equal(t, "https://mcp.example.test", payload["resource"])
 	require.Equal(t, "harpoon://oauth-issuer-0", payload["issuer"])
 	require.Equal(t, "harpoon://oauth-token-endpoint-0", payload["token_endpoint"])
 	require.Equal(t, "harpoon://oauth-registration-endpoint-0", payload["registration_endpoint"])
 	require.Equal(t, []any{"harpoon://oauth-prmd-auth-server-0"}, payload["authorization_servers"])
+}
+
+func TestTransformJSONBodyRewritesNonPRMDResourceField(t *testing.T) {
+	rewriter := newURLRewriter([]Target{
+		{Label: "generic-resource", BaseURL: mustParseURL(t, "https://api.example.test/resource")},
+	})
+
+	updated, changed := transformJSONBody(
+		[]byte(`{"resource":"https://api.example.test/resource"}`),
+		rewriter,
+	)
+	require.True(t, changed)
+	require.JSONEq(t, `{"resource":"harpoon://generic-resource"}`, string(updated))
 }
 
 func TestTransformHeadersRewritesLocations(t *testing.T) {

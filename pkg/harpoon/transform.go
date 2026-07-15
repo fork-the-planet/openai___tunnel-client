@@ -50,7 +50,6 @@ var preferredOAuthTagByJSONKey = map[string]string{
 	"issuer":                 "issuer",
 	"jwks_uri":               "jwks-uri",
 	"registration_endpoint":  "registration-endpoint",
-	"resource":               "resource",
 	"revocation_endpoint":    "revocation-endpoint",
 	"token_endpoint":         "token-endpoint",
 }
@@ -78,6 +77,16 @@ func (r *urlRewriter) rewriteURLStringWithHint(raw string, jsonKey string) (stri
 	candidates := r.targetsByURL[key]
 	if len(candidates) == 0 {
 		return raw, false
+	}
+	// RFC 9728 requires protected-resource metadata's resource value to remain
+	// identical to the resource identifier from which the metadata URL was derived.
+	// Keep generic, non-PRMD JSON fields named resource eligible for rewriting.
+	if jsonKey == "resource" {
+		for _, candidate := range candidates {
+			if hasAllTags(candidate.Tags, []string{"protected-resource-metadata", "resource"}) {
+				return raw, false
+			}
+		}
 	}
 	if target, ok := preferredTargetForJSONKey(candidates, jsonKey); ok {
 		return "harpoon://" + target.Label, true

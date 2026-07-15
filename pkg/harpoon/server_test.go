@@ -405,12 +405,13 @@ func TestCallTargetSelectsTransportPerRedirectedTarget(t *testing.T) {
 	})
 }
 
-func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
+func TestCallTargetRewritesEndpointsAndPreservesResourceIdentifier(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/meta":
 			_, _ = w.Write([]byte(`{
+				"resource":"` + server.URL + `/mcp",
 				"authorization_endpoint":"` + server.URL + `/authorize",
 				"registration_endpoint":"` + server.URL + `/register",
 				"token_endpoint":"` + server.URL + `/token"
@@ -426,6 +427,11 @@ func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
 		{
 			Label:   "metadata",
 			BaseURL: mustParseURL(t, server.URL+"/meta"),
+		},
+		{
+			Label:   "oauth-prmd-resource-0",
+			BaseURL: mustParseURL(t, server.URL+"/mcp"),
+			Tags:    []string{"protected-resource-metadata", "resource"},
 		},
 		{
 			Label:   "token",
@@ -455,6 +461,7 @@ func TestCallTargetKeepsURLsWithoutRegisteredTargets(t *testing.T) {
 	decodedBody := decodeBody(t, resp.BodyBase64)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(decodedBody), &payload))
+	require.Equal(t, server.URL+"/mcp", payload["resource"])
 	require.Equal(t, server.URL+"/authorize", payload["authorization_endpoint"])
 	require.Equal(t, "harpoon://oauth-registration-endpoint-0", payload["registration_endpoint"])
 	require.Equal(t, "harpoon://token", payload["token_endpoint"])
