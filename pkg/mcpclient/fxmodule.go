@@ -160,8 +160,9 @@ func probeMcpServer(p runnerParams) error {
 					ctx,
 					defaultProbeTimeout,
 					func(probeCtx context.Context) (probeSession, error) {
-						probeCtx = headerscope.WithMCPDiscovery(probeCtx)
-						return p.Client.Connect(probeCtx, p.Transport, nil)
+						return connectStartupProbe(probeCtx, func(probeCtx context.Context) (probeSession, error) {
+							return p.Client.Connect(probeCtx, p.Transport, nil)
+						})
 					},
 					logger,
 					p.ProbeState,
@@ -176,6 +177,21 @@ func probeMcpServer(p runnerParams) error {
 	})
 
 	return nil
+}
+
+func connectStartupProbe(ctx context.Context, connect func(context.Context) (probeSession, error)) (probeSession, error) {
+	probeCtx := headerscope.WithMCPDiscovery(ctx)
+	probeCtx, carrier, err := internal.ContextWithHeaders(probeCtx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := connect(probeCtx)
+	if err == nil {
+		return session, nil
+	}
+	statusCode, _ := carrier.ResponseStatusAndHeaders()
+	return session, NewProbeHTTPStatusError(statusCode, err)
 }
 
 func runStartupProbe(

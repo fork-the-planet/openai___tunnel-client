@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -74,9 +75,19 @@ func TestProbeStateWaitUntilDoneReturnsContextError(t *testing.T) {
 func TestIsAuthRequiredProbeError(t *testing.T) {
 	t.Parallel()
 
-	require.True(t, IsAuthRequiredProbeError(errors.New(`calling "initialize": Unauthorized`)))
-	require.True(t, IsAuthRequiredProbeError(errors.New("received 401 from upstream")))
+	require.True(t, IsAuthRequiredProbeError(NewProbeHTTPStatusError(
+		http.StatusUnauthorized,
+		errors.New("received:401, unathenticated"),
+	)))
+	require.False(t, IsAuthRequiredProbeError(NewProbeHTTPStatusError(
+		http.StatusForbidden,
+		errors.New("received:401, unathenticated"),
+	)))
+	require.False(t, IsAuthRequiredProbeError(errors.New(`calling "initialize": Unauthorized`)))
+	require.False(t, IsAuthRequiredProbeError(errors.New("received 401 from upstream")))
 	require.False(t, IsAuthRequiredProbeError(errors.New("dial tcp 127.0.0.1:1: connection refused")))
+	require.False(t, IsAuthRequiredProbeError(errors.New("dial tcp 127.0.0.1:401: connection refused")))
+	require.False(t, IsAuthRequiredProbeError(errors.New("dial tcp 127.0.0.1:4010: connection refused")))
 }
 
 func TestIsTimeoutProbeError(t *testing.T) {

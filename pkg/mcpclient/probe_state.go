@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -96,13 +96,41 @@ func (p *ProbeState) WaitUntilDone(ctx context.Context) error {
 // IsAuthRequiredProbeError reports whether a probe error indicates that the target MCP server
 // is reachable but requires OAuth or other request authentication before initialize succeeds.
 func IsAuthRequiredProbeError(err error) bool {
-	if err == nil {
-		return false
+	var statusErr *ProbeHTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusUnauthorized
+}
+
+// ProbeHTTPStatusError preserves the HTTP response status observed while the
+// startup probe failed, without relying on the SDK's formatted error text.
+type ProbeHTTPStatusError struct {
+	StatusCode int
+	Cause      error
+}
+
+func (e *ProbeHTTPStatusError) Error() string {
+	if e == nil || e.Cause == nil {
+		return ""
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unauthorized") ||
-		strings.Contains(msg, "401") ||
-		strings.Contains(msg, "www-authenticate")
+	return e.Cause.Error()
+}
+
+func (e *ProbeHTTPStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// NewProbeHTTPStatusError attaches the observed HTTP status to a failed
+// startup probe. It returns cause unchanged when no response status exists.
+func NewProbeHTTPStatusError(statusCode int, cause error) error {
+	if cause == nil || statusCode == 0 {
+		return cause
+	}
+	return &ProbeHTTPStatusError{
+		StatusCode: statusCode,
+		Cause:      cause,
+	}
 }
 
 // ProbeTimeoutError reports that the startup probe did not complete before the deadline.

@@ -347,6 +347,36 @@ func TestRunStartupProbeMarksFailure(t *testing.T) {
 	}
 }
 
+func TestConnectStartupProbeCarriesHTTPStatus(t *testing.T) {
+	t.Parallel()
+
+	const probeMessage = "received:401, unathenticated"
+	session, err := connectStartupProbe(
+		context.Background(),
+		func(ctx context.Context) (probeSession, error) {
+			if !headerscope.IsMCPDiscovery(ctx) {
+				t.Fatal("expected probe context to be marked for discovery")
+			}
+			carrier := internal.CarrierFromContext(ctx)
+			if carrier == nil {
+				t.Fatal("expected probe context to carry HTTP response metadata")
+			}
+			carrier.StoreResponse(http.StatusUnauthorized, nil)
+			return nil, errors.New(probeMessage)
+		},
+	)
+
+	if session != nil {
+		t.Fatalf("expected nil probe session, got %T", session)
+	}
+	if err == nil || err.Error() != probeMessage {
+		t.Fatalf("expected probe error %q, got %v", probeMessage, err)
+	}
+	if !IsAuthRequiredProbeError(err) {
+		t.Fatalf("expected HTTP %d probe error to require auth", http.StatusUnauthorized)
+	}
+}
+
 func TestRunStartupProbeMarksFailureWhenConnectHangs(t *testing.T) {
 	t.Parallel()
 

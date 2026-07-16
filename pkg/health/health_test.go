@@ -415,7 +415,10 @@ func TestReadinessHandler(t *testing.T) {
 		oauthState.Set(nil, nil, nil, nil)
 
 		probeState := mcpclient.NewProbeState()
-		probeState.Set(errors.New(`calling "initialize": Unauthorized`))
+		probeState.Set(mcpclient.NewProbeHTTPStatusError(
+			http.StatusUnauthorized,
+			errors.New("received:401, unathenticated"),
+		))
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rec := httptest.NewRecorder()

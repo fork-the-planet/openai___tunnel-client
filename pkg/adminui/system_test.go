@@ -3,6 +3,7 @@ package adminui
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -74,7 +75,10 @@ func TestBuildSystemProxySnapshot(t *testing.T) {
 
 func TestBuildSystemIncludesMainChannelProbeStatus(t *testing.T) {
 	probeState := mcpclient.NewProbeState()
-	probeState.Set(errors.New(`calling "initialize": Unauthorized`))
+	probeState.Set(mcpclient.NewProbeHTTPStatusError(
+		http.StatusUnauthorized,
+		errors.New("received:401, unathenticated"),
+	))
 
 	system := buildSystem(routeParams{MCPProbeState: probeState})
 	if system.MainChannelProbeStatus != "auth-required" {
