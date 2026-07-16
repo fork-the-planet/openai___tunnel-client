@@ -34,6 +34,19 @@ func TestProbeStateWaitTimeout(t *testing.T) {
 	require.NoError(t, gotErr)
 }
 
+func TestProbeStateWaitReturnsCompletedResultWithoutArmingTimer(t *testing.T) {
+	t.Parallel()
+
+	state := NewProbeState()
+	wantErr := errors.New("probe completed")
+	state.Set(wantErr)
+
+	checkedAt, gotErr, ok := state.Wait(0)
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now(), checkedAt, time.Second)
+	require.EqualError(t, gotErr, wantErr.Error())
+}
+
 func TestProbeStateWaitUntilDone(t *testing.T) {
 	t.Parallel()
 

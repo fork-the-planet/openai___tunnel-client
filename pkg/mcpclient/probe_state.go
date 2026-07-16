@@ -55,6 +55,16 @@ func (p *ProbeState) Wait(timeout time.Duration) (time.Time, error, bool) {
 	if p == nil {
 		return time.Time{}, nil, false
 	}
+	select {
+	case <-p.done:
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.checkedAt, p.err, true
+	default:
+	}
+	if timeout <= 0 {
+		return time.Time{}, nil, false
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
